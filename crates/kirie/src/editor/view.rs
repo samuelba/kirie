@@ -21,14 +21,18 @@ impl Editor {
     pub fn view(&self) -> Element<'_, Message> {
         let palette = self.palette;
         let body = row![self.rail(), self.center(), self.inspector()];
-        let window = container(column![self.header(), body.height(Length::Fill)])
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(move |_| container::Style {
-                background: Some(Background::Color(palette.background)),
-                text_color: Some(palette.text),
-                ..container::Style::default()
-            });
+        let window = container(column![
+            self.header(),
+            body.height(Length::Fill),
+            self.status_bar()
+        ])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(move |_| container::Style {
+            background: Some(Background::Color(palette.background)),
+            text_color: Some(palette.text),
+            ..container::Style::default()
+        });
         match self.closing_dialog() {
             Some(dialog) => stack![window, dialog].into(),
             None => window.into(),
@@ -265,15 +269,6 @@ impl Editor {
             .paint_sections()
             .push(rule::horizontal(1))
             .push(section(palette, "View", zoom.into()));
-        if let Some((image, _)) = &self.image {
-            content = content.push(section(
-                palette,
-                "Image",
-                text(format!("{} × {} px", image.width(), image.height()))
-                    .size(13)
-                    .into(),
-            ));
-        }
         if self.picked.is_some() {
             content = content.push(icon_button(
                 Icon::Delete,
@@ -287,6 +282,45 @@ impl Editor {
             .width(INSPECTOR)
             .height(Length::Fill)
             .padding(Padding::new(space::L))
+            .style(panel(palette))
+            .into()
+    }
+
+    /// The tool, where the pointer is on the image, the zoom and the image's size.
+    fn status_bar(&self) -> Element<'_, Message> {
+        let palette = self.palette;
+        let muted = |words: String| text(words).size(12).color(palette.muted);
+        let tool = row![
+            svg(controls::tool_icon(self.tool).handle())
+                .width(14)
+                .height(14)
+                .style(move |_, _| svg::Style {
+                    color: Some(palette.muted),
+                }),
+            muted(self.tool.name().to_owned()),
+        ]
+        .spacing(space::XS)
+        .align_y(Alignment::Center);
+        let mut bar = row![tool, Space::new().width(Length::Fill)]
+            .spacing(space::L)
+            .align_y(Alignment::Center);
+        if let Some((image, _)) = &self.image {
+            if let Some((x, y)) = self.hover.map(super::pixel) {
+                bar = bar.push(muted(format!("{x}, {y} px")));
+            }
+            let zoom = self.viewport.scale(self.image_size(), self.canvas) * 100.0;
+            let fitted = if self.viewport.is_fitted() {
+                " (fit)"
+            } else {
+                ""
+            };
+            bar = bar
+                .push(muted(format!("{zoom:.0}%{fitted}")))
+                .push(muted(format!("{} × {} px", image.width(), image.height())));
+        }
+        container(bar)
+            .padding([space::XS, space::L])
+            .width(Length::Fill)
             .style(panel(palette))
             .into()
     }

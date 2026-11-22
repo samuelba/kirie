@@ -80,6 +80,12 @@ pub fn load(path: &Path) -> Result<Loaded, String> {
     Ok(Loaded::image(image, Some(path.to_path_buf())))
 }
 
+/// The image pixel `at` falls in.
+#[allow(clippy::cast_possible_truncation)]
+fn pixel(at: kurbo::Point) -> (i64, i64) {
+    (at.x.floor() as i64, at.y.floor() as i64)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Pointer {
     Pressed(kurbo::Point),
@@ -99,6 +105,10 @@ pub enum Message {
     },
     ZoomFit,
     ZoomActual,
+    /// The image point under the pointer, if it is over the canvas.
+    Hover(Option<kurbo::Point>),
+    /// The canvas has a new size.
+    Canvas(Size),
     Modifiers(keyboard::Modifiers),
     PickTool(Tool),
     PickStyle(StyleId),
@@ -158,6 +168,10 @@ pub struct Editor {
     /// An image to open once the question about unsaved changes is answered.
     then_open: Option<Box<Loaded>>,
     viewport: Viewport,
+    /// The canvas's size, for the zoom level when the image is fitted.
+    canvas: Size,
+    /// The image point under the pointer.
+    hover: Option<kurbo::Point>,
     tool: Tool,
     paint: Paint,
     swatches: Swatches,
@@ -199,6 +213,8 @@ impl Editor {
             closing: Closing::No,
             then_open: None,
             viewport: Viewport::fitted(),
+            canvas: Size::ZERO,
+            hover: None,
             tool: Tool::Arrow,
             paint: Paint {
                 color: swatches.first(StyleId::default()),
@@ -282,6 +298,8 @@ impl Editor {
             }
             Message::ZoomFit => self.viewport = Viewport::fitted(),
             Message::ZoomActual => self.viewport = Viewport::actual_size(),
+            Message::Hover(at) => self.hover = at,
+            Message::Canvas(size) => self.canvas = size,
             Message::Modifiers(modifiers) => self.modifiers = modifiers,
             Message::PickTool(tool) => {
                 self.commit_text();
@@ -622,6 +640,7 @@ impl Editor {
                 }
             }
             Pointer::Moved(at) => {
+                self.hover = Some(at);
                 if let Some(draft) = self.draft.take() {
                     self.draft = Some(draft.drag(at, self.modifiers.shift()));
                 }

@@ -6,7 +6,7 @@ use iced::widget::canvas::{self, Action, Event, Frame, Geometry};
 use iced::{Color, Point, Rectangle, Renderer, Size, Theme, Vector};
 use kirie_annotate::{Draft, Shape, Tool};
 
-use super::{Editor, MARK_REACH, Message, Pointer};
+use super::{Editor, MARK_REACH, Message, Pointer, pixel};
 use crate::paint::{ImageSource, Marks, Painter, draw_grips};
 
 /// Mouse wheel steps per doubling of the zoom.
@@ -101,6 +101,12 @@ impl canvas::Program<Message> for Board<'_> {
                     scale(self.editor, canvas),
                 ))
             }
+            Event::Mouse(mouse::Event::CursorMoved { .. } | mouse::Event::CursorLeft) => {
+                let hover = local.map(to_image);
+                (hover.map(pixel) != self.editor.hover.map(pixel))
+                    .then(|| Action::publish(Message::Hover(hover)))
+            }
+            _ if canvas != self.editor.canvas => Some(Action::publish(Message::Canvas(canvas))),
             _ => None,
         }
     }
