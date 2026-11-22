@@ -5,7 +5,7 @@ mod ink;
 mod sketch;
 mod spotlight;
 
-use kurbo::{BezPath, Point, Rect, Vec2};
+use kurbo::{BezPath, Point, Rect, Shape as _, Vec2};
 use serde::{Deserialize, Serialize};
 
 use crate::document::Document;
@@ -170,6 +170,10 @@ pub fn primitives(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Ve
                 color,
                 width,
             },
+            Primitive::Cover { path, color } => Primitive::Cover {
+                path: turn * path,
+                color,
+            },
             other => other,
         })
         .collect()
@@ -212,11 +216,37 @@ fn unturned(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Vec<Prim
                 &context,
             )]
         }
-        kind => match shape.style.unwrap_or(style) {
-            StyleId::Clean => clean::primitives(kind, &context),
-            StyleId::Sketch => sketch::primitives(kind, &context),
-            StyleId::Ink => ink::primitives(kind, &context),
-        },
+        Kind::Redact { rect } => {
+            let style = shape.style.unwrap_or(style);
+            let cover = Primitive::Cover {
+                path: rect.abs().inflate(COVER_REACH, COVER_REACH).to_path(0.1),
+                color: redact_color(style),
+            };
+            std::iter::once(cover)
+                .chain(styled(&shape.kind, style, &context))
+                .collect()
+        }
+        kind => styled(kind, shape.style.unwrap_or(style), &context),
+    }
+}
+
+/// How far past a redaction its cover reaches, in pixels: enough to take in every pixel the
+/// redaction touches, turned or not.
+const COVER_REACH: f64 = 0.75;
+
+fn styled(kind: &Kind, style: StyleId, context: &Context) -> Vec<Primitive> {
+    match style {
+        StyleId::Clean => clean::primitives(kind, context),
+        StyleId::Sketch => sketch::primitives(kind, context),
+        StyleId::Ink => ink::primitives(kind, context),
+    }
+}
+
+fn redact_color(style: StyleId) -> Rgba {
+    match style {
+        StyleId::Clean => clean::REDACT,
+        StyleId::Sketch => sketch::REDACT,
+        StyleId::Ink => ink::REDACT,
     }
 }
 
@@ -413,8 +443,6 @@ impl Rng {
 
 #[cfg(test)]
 mod tests {
-    use kurbo::Shape as _;
-
     use super::*;
     use crate::document::Op;
     use crate::shape::{Paint, ShapeId, Weight};

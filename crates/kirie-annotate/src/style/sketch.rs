@@ -7,6 +7,9 @@ use super::{Context, Rng, arrow_wings, ellipse_points, smooth};
 use crate::primitive::{Align, FillRule, Font, Primitive};
 use crate::shape::{Kind, Rgba};
 
+/// What redactions are filled with.
+pub(super) const REDACT: Rgba = Rgba::rgb(0x1e, 0x1e, 0x1e);
+
 /// The hatching angle, as in rough.js.
 const HACHURE_ANGLE: f64 = -41.0;
 
@@ -97,7 +100,7 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
             path.close_path();
             vec![Primitive::Fill {
                 path,
-                color: Rgba::rgb(0x1e, 0x1e, 0x1e),
+                color: REDACT,
                 rule: FillRule::NonZero,
             }]
         }

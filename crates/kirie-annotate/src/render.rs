@@ -83,6 +83,7 @@ pub fn draw(pixmap: &mut Pixmap, primitive: &Primitive, typesetter: &mut Typeset
             }
             fill(pixmap, &outline, *color, FillRule::NonZero);
         }
+        Primitive::Cover { path, color } => cover(pixmap, path, *color),
         Primitive::Effect { rect, effect } => {
             let Some(region) = Region::clamp(*rect, pixmap.width(), pixmap.height()) else {
                 return;
@@ -105,6 +106,22 @@ fn paint(color: Rgba) -> Paint<'static> {
     paint.set_color_rgba8(color.r, color.g, color.b, color.a);
     paint.anti_alias = true;
     paint
+}
+
+/// Fills every pixel whose center is inside `path` with `color`, fully opaque.
+fn cover(pixmap: &mut Pixmap, path: &BezPath, color: Rgba) {
+    let Some(path) = to_skia(path) else {
+        return;
+    };
+    let mut paint = paint(color.with_alpha(0xff));
+    paint.anti_alias = false;
+    pixmap.fill_path(
+        &path,
+        &paint,
+        SkiaFillRule::Winding,
+        Transform::identity(),
+        None,
+    );
 }
 
 fn fill(pixmap: &mut Pixmap, path: &BezPath, color: Rgba, rule: FillRule) {
@@ -238,6 +255,41 @@ mod tests {
         let out = render(&document, &white(40, 40), &mut Typesetter::new()).unwrap();
         assert!(out.get_pixel(20, 20)[0] < 40);
         assert_eq!(out.get_pixel(2, 2), &Pixel([255, 255, 255, 255]));
+    }
+
+    #[test]
+    fn a_redaction_leaves_no_trace_in_any_pixel_it_touches() {
+        let rect = Rect::new(10.3, 10.7, 29.6, 29.2);
+        for style in crate::style::StyleId::ALL {
+            for rotation in [0.0, 0.3] {
+                let redacted = add(
+                    &Document::new(40, 40, 1.0).apply(Op::SetStyle {
+                        style,
+                        recolor: Vec::new(),
+                    }),
+                    Kind::Redact { rect },
+                );
+                let id = redacted.shapes().next().unwrap().id;
+                let document = redacted.apply(Op::Reshape {
+                    id,
+                    kind: Kind::Redact { rect },
+                    rotation,
+                });
+                let out = render(&document, &white(40, 40), &mut Typesetter::new()).unwrap();
+                let turn = document.shape(id).unwrap().turn();
+                let touched = |x: u32, y: u32| {
+                    let middle =
+                        turn.inverse() * Point::new(f64::from(x) + 0.5, f64::from(y) + 0.5);
+                    rect.inflate(0.5, 0.5).contains(middle)
+                };
+                let colors: std::collections::HashSet<_> = (0..40)
+                    .flat_map(|y| (0..40).map(move |x| (x, y)))
+                    .filter(|&(x, y)| touched(x, y))
+                    .map(|(x, y)| *out.get_pixel(x, y))
+                    .collect();
+                assert_eq!(colors.len(), 1, "{style:?} turned {rotation}: {colors:?}");
+            }
+        }
     }
 
     #[test]

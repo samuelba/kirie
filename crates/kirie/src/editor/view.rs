@@ -93,7 +93,7 @@ impl Editor {
                 .push(divider(palette))
                 .push(icon_button(
                     Icon::Project,
-                    "Save editable project (Ctrl+Shift+S)",
+                    "Save editable project, with the original under the marks (Ctrl+Shift+S)",
                     palette,
                     false,
                     Some(Message::SaveProject),

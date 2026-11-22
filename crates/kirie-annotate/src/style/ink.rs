@@ -6,6 +6,9 @@ use super::{Context, Rng, arrow_wings, ellipse_points, text_on, thin_out};
 use crate::primitive::{Align, FillRule, Font, Primitive};
 use crate::shape::{Kind, Rgba};
 
+/// What redactions are filled with.
+pub(super) const REDACT: Rgba = Rgba::rgb(0x1f, 0x1d, 0x1a);
+
 /// How the brush presses along a stroke: light at the start, full in the middle, lifting off.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Taper {
@@ -105,7 +108,7 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
         }
         Kind::Redact { rect } => vec![Primitive::Fill {
             path: RoundedRect::from_rect(rect.abs(), 1.0 * context.unit).to_path(0.1),
-            color: Rgba::rgb(0x1f, 0x1d, 0x1a),
+            color: REDACT,
             rule: FillRule::NonZero,
         }],
         Kind::Text { .. } | Kind::Blur { .. } | Kind::Pixelate { .. } | Kind::Spotlight { .. } => {

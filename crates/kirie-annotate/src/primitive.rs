@@ -113,4 +113,10 @@ pub enum Primitive {
         rect: Rect,
         effect: Effect,
     },
+    /// An opaque fill with hard edges over every pixel the path reaches: what must stay hidden,
+    /// with no soft edge or corner letting any of it through.
+    Cover {
+        path: BezPath,
+        color: Rgba,
+    },
 }

@@ -65,6 +65,12 @@ Hold **Shift** while drawing to snap lines to 45° and boxes to squares.
 screenshot from its header. Zoom with Ctrl+scroll, pan with the scroll wheel or the middle
 button. **Save project** (Ctrl+Shift+S) keeps a `.kirie` file whose marks you can change later.
 
+Saved and copied images hold only the finished picture. Redact covers every pixel it touches
+with solid color. Blur and pixelate scramble each block a little, so guesses of what was there
+never match exactly, but they keep a trace of light and dark: use Redact for passwords, keys and
+anything else that must stay secret. A `.kirie` project keeps the original screenshot, under
+every mark, so that the marks stay editable; share the saved image, not the project.
+
 ### Styles
 
 - **Clean**: crisp lines with a soft shadow.

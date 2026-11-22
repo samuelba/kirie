@@ -7,6 +7,9 @@ use super::{Context, arrow_wings, smooth, text_on};
 use crate::primitive::{Align, FillRule, Font, Primitive};
 use crate::shape::{Kind, Rgba};
 
+/// What redactions are filled with.
+pub(super) const REDACT: Rgba = Rgba::rgb(0x16, 0x18, 0x1d);
+
 const SHADOW: Rgba = Rgba {
     r: 0,
     g: 0,
@@ -55,7 +58,7 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
         Kind::Counter { at, number } => counter(*at, *number, context),
         Kind::Redact { rect } => vec![Primitive::Fill {
             path: RoundedRect::from_rect(rect.abs(), 2.0 * context.unit).to_path(0.1),
-            color: Rgba::rgb(0x16, 0x18, 0x1d),
+            color: REDACT,
             rule: FillRule::NonZero,
         }],
         Kind::Text { .. } | Kind::Blur { .. } | Kind::Pixelate { .. } | Kind::Spotlight { .. } => {
