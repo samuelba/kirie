@@ -15,6 +15,8 @@ pub const OBJECT_PATH: &str = "/dev/samuelba/Kirie";
 pub enum Request {
     Open(PathBuf),
     Present,
+    /// A capture the editor hid for has ended without handing it anything.
+    Resume,
 }
 
 #[derive(Debug)]
@@ -45,6 +47,11 @@ impl Service {
     fn present(&self) -> fdo::Result<()> {
         self.send(Request::Present)
     }
+
+    /// Shows the editor window again if it hid for a capture.
+    fn resume(&self) -> fdo::Result<()> {
+        self.send(Request::Resume)
+    }
 }
 
 #[proxy(
@@ -55,6 +62,7 @@ impl Service {
 trait Kirie {
     fn open(&self, path: &str) -> zbus::Result<()>;
     fn present(&self) -> zbus::Result<()>;
+    fn resume(&self) -> zbus::Result<()>;
 }
 
 /// Hands `path` (or nothing, to just raise the window) to a running editor. True when one took
@@ -77,6 +85,17 @@ pub async fn hand_over(path: Option<&Path>) -> bool {
         .await
         .inspect_err(|error| tracing::debug!(%error, "no editor to hand over to"))
         .unwrap_or(false)
+}
+
+/// Tells a running editor that hid for a capture that the capture ended without an image.
+pub async fn resume() {
+    let attempt = async {
+        let connection = zbus::Connection::session().await?;
+        KirieProxy::new(&connection).await?.resume().await
+    };
+    if let Err(error) = attempt.await {
+        tracing::debug!(%error, "no editor to resume");
+    }
 }
 
 /// Owns the editor's bus name for as long as the stream is polled and yields what other Kirie
@@ -116,10 +135,12 @@ mod tests {
         assert!(service.open("relative.png").is_err());
         assert!(service.open("/abs/shot.png").is_ok());
         assert!(service.present().is_ok());
+        assert!(service.resume().is_ok());
         assert_eq!(
             receiver.try_recv().ok(),
             Some(Request::Open(PathBuf::from("/abs/shot.png")))
         );
         assert_eq!(receiver.try_recv().ok(), Some(Request::Present));
+        assert_eq!(receiver.try_recv().ok(), Some(Request::Resume));
     }
 }

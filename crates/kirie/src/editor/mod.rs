@@ -147,7 +147,27 @@ pub enum Message {
     SystemScheme(Scheme),
     /// Hides the window and opens the overlay; the capture comes back over D-Bus.
     Capture,
+    /// The window's size and state, taken just before it closes for a capture.
+    Hide(Placement),
+    /// Window `id`, placed so, is to be opened anew to come to the front.
+    Remap(window::Id, Placement),
     CaptureEnded(Result<(), String>),
+}
+
+/// How big the window is, to open it again the same way.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Placement {
+    size: Size,
+    maximized: bool,
+}
+
+impl Default for Placement {
+    fn default() -> Self {
+        Self {
+            size: Size::new(1280.0, 840.0),
+            maximized: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -158,6 +178,9 @@ struct Toast {
 }
 
 pub struct Editor {
+    /// The window, unless it is closed while a screenshot is taken.
+    window: Option<window::Id>,
+    placement: Placement,
     palette: Palette,
     image: Option<(RgbaImage, image::Handle)>,
     path: Option<PathBuf>,
@@ -204,7 +227,11 @@ impl std::fmt::Debug for Editor {
 impl Editor {
     pub fn boot(loaded: Option<Loaded>) -> (Self, Task<Message>) {
         let swatches = Swatches::load();
+        let placement = Placement::default();
+        let (id, opened) = window::open(settings(placement));
         let mut editor = Self {
+            window: Some(id),
+            placement,
             palette: Palette::DARK,
             image: None,
             path: None,
@@ -237,7 +264,7 @@ impl Editor {
         if let Some(loaded) = loaded {
             editor.open(loaded);
         }
-        (editor, take_drops())
+        (editor, opened.then(take_drops))
     }
 
     fn open(&mut self, mut loaded: Loaded) {
@@ -276,7 +303,7 @@ impl Editor {
         })
     }
 
-    pub fn title(&self) -> String {
+    pub fn title(&self, _: window::Id) -> String {
         match self.path.as_deref().and_then(Path::file_name) {
             Some(name) => format!("{} — Kirie", name.to_string_lossy()),
             None => "Kirie".to_owned(),
@@ -360,22 +387,11 @@ impl Editor {
             | Message::CloseRequested
             | Message::Close(_) => return self.finish(message),
             Message::Opened(Ok(loaded)) => return self.replace(loaded),
-            Message::Ipc(crate::ipc::Request::Open(path)) => {
-                return Task::perform(load_async(path), Message::Opened);
-            }
-            Message::Ipc(crate::ipc::Request::Present) => return present(),
-            Message::Capture => {
-                return window::oldest()
-                    .then(|id| id.map_or_else(Task::none, |id| window::minimize(id, true)))
-                    .chain(Task::perform(capture(), Message::CaptureEnded));
-            }
-            Message::CaptureEnded(result) => {
-                let shown = present();
-                return match result {
-                    Ok(()) => shown,
-                    Err(error) => shown.chain(self.toast(Err(error))),
-                };
-            }
+            Message::Ipc(_)
+            | Message::Capture
+            | Message::Remap(..)
+            | Message::Hide(_)
+            | Message::CaptureEnded(_) => return self.windowing(message),
             Message::Opened(Err(error)) => return self.toast(Err(error)),
             Message::ToastExpired(id) => {
                 if self.toast.as_ref().is_some_and(|toast| toast.id == id) {
@@ -384,6 +400,34 @@ impl Editor {
             }
         }
         Task::none()
+    }
+
+    /// Taking a screenshot from the editor, and bringing its window to the front.
+    fn windowing(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Ipc(crate::ipc::Request::Open(path)) => self
+                .raise()
+                .chain(Task::perform(load_async(path), Message::Opened)),
+            Message::Ipc(crate::ipc::Request::Present) => self.raise(),
+            Message::Ipc(crate::ipc::Request::Resume) if self.window.is_none() => self.raise(),
+            Message::Capture => self
+                .window
+                .map_or_else(Task::none, |id| placement(id).map(Message::Hide)),
+            Message::Remap(id, placement) if self.window == Some(id) => {
+                self.placement = placement;
+                self.reopen(Some(id))
+            }
+            Message::Hide(placement) => {
+                let Some(id) = self.window.take() else {
+                    return Task::none();
+                };
+                self.placement = placement;
+                window::close(id).chain(Task::perform(capture(), Message::CaptureEnded))
+            }
+            Message::CaptureEnded(Err(error)) => self.raise().chain(self.toast(Err(error))),
+            // The overlay asks for the window back when it is done, through `Resume` or `Open`.
+            _ => Task::none(),
+        }
     }
 
     /// What became of an export, and closing the window.
@@ -749,7 +793,7 @@ impl Editor {
         ])
     }
 
-    pub fn theme(&self) -> iced::Theme {
+    pub fn theme(&self, _: window::Id) -> iced::Theme {
         match self.palette.scheme {
             Scheme::Dark => iced::Theme::Dark,
             Scheme::Light => iced::Theme::Light,
@@ -763,24 +807,52 @@ async fn load_async(path: PathBuf) -> Result<Loaded, String> {
         .map_err(|error| error.to_string())?
 }
 
-/// Opens what is dropped on the editor's window, once it is open.
-fn take_drops() -> Task<Message> {
-    window::oldest()
-        .then(|id| id.map_or_else(Task::none, |id| window::run(id, crate::drops::display)))
-        .then(|display| {
-            display.map_or_else(Task::none, |display| {
-                Task::run(crate::drops::drops(display), Message::Dropped)
-            })
-        })
-}
-
-/// Raises and focuses the editor window.
-fn present() -> Task<Message> {
-    window::oldest().then(|id| {
-        id.map_or_else(Task::none, |id| {
-            Task::batch([window::minimize(id, false), window::gain_focus(id)])
+/// Opens what is dropped on the editor's windows, from when window `id` is open.
+fn take_drops(id: window::Id) -> Task<Message> {
+    window::run(id, crate::drops::display).then(|display| {
+        display.map_or_else(Task::none, |display| {
+            Task::run(crate::drops::drops(display), Message::Dropped)
         })
     })
+}
+
+impl Editor {
+    /// Brings the window to the front. On Wayland a window cannot raise itself, but
+    /// compositors put a newly mapped one in front, so the window is opened anew.
+    fn raise(&mut self) -> Task<Message> {
+        match self.window {
+            Some(id) => placement(id).map(move |placement| Message::Remap(id, placement)),
+            None => self.reopen(None),
+        }
+    }
+
+    /// Opens the window as it was placed, closing `old` first.
+    fn reopen(&mut self, old: Option<window::Id>) -> Task<Message> {
+        let closed = old.map_or_else(Task::none, window::close);
+        let (id, opened) = window::open(settings(self.placement));
+        self.window = Some(id);
+        closed.chain(opened.discard())
+    }
+}
+
+/// The size and state of window `id`.
+fn placement(id: window::Id) -> Task<Placement> {
+    window::is_maximized(id)
+        .then(move |maximized| window::size(id).map(move |size| Placement { size, maximized }))
+}
+
+fn settings(placement: Placement) -> window::Settings {
+    window::Settings {
+        size: placement.size,
+        maximized: placement.maximized,
+        min_size: Some(Size::new(760.0, 520.0)),
+        exit_on_close_request: false,
+        platform_specific: window::settings::PlatformSpecific {
+            application_id: crate::APP_ID.to_owned(),
+            ..window::settings::PlatformSpecific::default()
+        },
+        ..window::Settings::default()
+    }
 }
 
 /// Runs the overlay in its own process, after the window has had time to hide.
@@ -863,7 +935,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
 /// Opens the editor window, with `loaded` in it if given.
 pub fn run(loaded: Option<Loaded>) -> iced::Result {
     let loaded = std::sync::Mutex::new(loaded);
-    iced::application(
+    iced::daemon(
         move || Editor::boot(loaded.lock().ok().and_then(|mut loaded| loaded.take())),
         Editor::update,
         Editor::view,
@@ -872,15 +944,5 @@ pub fn run(loaded: Option<Loaded>) -> iced::Result {
     .title(Editor::title)
     .theme(Editor::theme)
     .subscription(Editor::subscription)
-    .window(window::Settings {
-        size: Size::new(1280.0, 840.0),
-        min_size: Some(Size::new(760.0, 520.0)),
-        exit_on_close_request: false,
-        platform_specific: window::settings::PlatformSpecific {
-            application_id: crate::APP_ID.to_owned(),
-            ..window::settings::PlatformSpecific::default()
-        },
-        ..window::Settings::default()
-    })
     .run()
 }

@@ -18,7 +18,7 @@ const APP_ICON: &[u8] =
 const INSPECTOR: f32 = 248.0;
 
 impl Editor {
-    pub fn view(&self) -> Element<'_, Message> {
+    pub fn view(&self, _: iced::window::Id) -> Element<'_, Message> {
         let palette = self.palette;
         let body = row![self.rail(), self.center(), self.inspector()];
         let window = container(column![
