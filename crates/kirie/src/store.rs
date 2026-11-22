@@ -5,8 +5,12 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-/// `~/.local/state/kirie/<name>`: what Kirie remembers from one run to the next.
+/// `~/.local/state/kirie/<name>`: what Kirie remembers from one run to the next. Tests get
+/// none, so they never read or change what the user's Kirie remembers.
 pub fn state_path(name: &str) -> Option<PathBuf> {
+    if cfg!(test) {
+        return None;
+    }
     let dirs = directories::BaseDirs::new()?;
     let state = dirs
         .state_dir()

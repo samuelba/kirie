@@ -21,6 +21,7 @@ use kirie_annotate::{
 use kirie_capture::{Frame, geometry};
 use kirie_ui::Palette;
 
+use crate::drawing::Drawing;
 use crate::picker::{self, Picker, Target};
 use crate::selection::{self, Release, Selection};
 use crate::swatches::Swatches;
@@ -263,12 +264,13 @@ impl Overlay {
                 })
                 .collect(),
         };
+        let drawing = Drawing::load();
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let document = Document::new(
+        let document = drawing.styled(Document::new(
             (desktop.x + desktop.width).max(1.0) as u32,
             (desktop.y + desktop.height).max(1.0) as u32,
             1.0,
-        );
+        ));
         let windows = windows
             .into_iter()
             .map(|window| (area(window.rect), window.title))
@@ -288,10 +290,7 @@ impl Overlay {
             modifiers: keyboard::Modifiers::default(),
             palette: Palette::DARK,
             tool: None,
-            paint: Paint {
-                color: swatches.first(document.style),
-                ..Paint::default()
-            },
+            paint: drawing.paint_for(None, &swatches),
             swatches,
             picker: None,
             history: History::new(document),
@@ -528,8 +527,18 @@ impl Overlay {
         }
     }
 
-    /// Changes to the style, colors, weight, fill and text look.
+    /// Changes to the style, colors, weight, fill and text look, kept for the next time.
     fn restyle(&mut self, message: Message) {
+        let settled = settled(&message);
+        self.change_style(message);
+        if settled {
+            Drawing::load()
+                .with_marks(self.paint, self.document())
+                .save();
+        }
+    }
+
+    fn change_style(&mut self, message: Message) {
         match message {
             Message::PickStyle(style) => {
                 let before = self.style();
@@ -956,6 +965,16 @@ impl Overlay {
     pub fn theme(&self, _: window::Id) -> iced::Theme {
         iced::Theme::Dark
     }
+}
+
+/// Whether a change is not one step of a slider drag, whose last step follows.
+fn settled(message: &Message) -> bool {
+    !matches!(
+        message,
+        Message::Weight(crate::controls::WeightEvent::Slide(_))
+            | Message::Brightness(crate::controls::BrightnessEvent::Slide(_))
+            | Message::Look(crate::controls::TextEvent::Size(_))
+    )
 }
 
 fn window_settings() -> window::Settings {

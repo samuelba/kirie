@@ -3,6 +3,7 @@ mod clipboard;
 mod controls;
 mod cursor;
 mod dialog;
+mod drawing;
 mod drops;
 mod editor;
 mod extension;

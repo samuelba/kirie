@@ -24,6 +24,7 @@ use kirie_ui::{Palette, Scheme};
 use self::closing::{Answer, Closing};
 use self::viewport::Viewport;
 use crate::controls;
+use crate::drawing::Drawing;
 use crate::picker::{self, Picker, Target};
 use crate::selection::{Release, Selection};
 use crate::swatches::Swatches;
@@ -40,6 +41,8 @@ pub struct Loaded {
     pub image: RgbaImage,
     pub document: Document,
     pub path: Option<PathBuf>,
+    /// A new document, not a project: it takes the drawing options last used.
+    pub fresh: bool,
 }
 
 impl Loaded {
@@ -49,6 +52,7 @@ impl Loaded {
             image,
             document,
             path,
+            fresh: true,
         }
     }
 }
@@ -76,6 +80,7 @@ pub fn load(path: &Path) -> Result<Loaded, String> {
             image: project.image,
             document: project.document,
             path: Some(path.to_path_buf()),
+            fresh: false,
         });
     }
     let image = ::image::open(path)
@@ -247,6 +252,8 @@ impl std::fmt::Debug for Editor {
 impl Editor {
     pub fn boot(loaded: Option<Loaded>) -> (Self, Task<Message>) {
         let swatches = Swatches::load();
+        let drawing = Drawing::load();
+        let blank = drawing.styled(Document::new(1, 1, 1.0));
         let placement = Placement::default();
         let (id, opened) = window::open(settings(placement));
         let mut editor = Self {
@@ -255,8 +262,8 @@ impl Editor {
             palette: Palette::DARK,
             image: None,
             path: None,
-            history: History::new(Document::new(1, 1, 1.0)),
-            kept: Document::new(1, 1, 1.0),
+            history: History::new(blank.clone()),
+            kept: blank,
             closing: Closing::No,
             then_open: None,
             viewport: Viewport::fitted(),
@@ -264,10 +271,7 @@ impl Editor {
             canvas: Size::ZERO,
             hover: None,
             tool: Tool::Arrow,
-            paint: Paint {
-                color: swatches.first(StyleId::default()),
-                ..Paint::default()
-            },
+            paint: drawing.paint_for(Some(Tool::Arrow), &swatches),
             swatches,
             picker: None,
             draft: None,
@@ -289,18 +293,27 @@ impl Editor {
     }
 
     fn open(&mut self, mut loaded: Loaded) {
-        if let Some(path) = loaded.path.take_if(|path| crate::save::is_handoff(path)) {
-            let _ = std::fs::remove_file(path);
-        }
+        let handoff = loaded
+            .path
+            .take_if(|path| crate::save::is_handoff(path))
+            .map(std::fs::remove_file)
+            .is_some();
         let handle = image::Handle::from_rgba(
             loaded.image.width(),
             loaded.image.height(),
             loaded.image.as_raw().clone(),
         );
-        let before = self.document().style;
-        self.kept = loaded.document.clone();
-        self.history = History::new(loaded.document);
-        self.follow_style(before);
+        // The overlay may have changed the options since, in a process of its own.
+        let drawing = Drawing::load();
+        let document = match (loaded.fresh, handoff) {
+            (true, _) => drawing.framed(drawing.styled(loaded.document)),
+            (false, true) => drawing.framed(loaded.document),
+            (false, false) => loaded.document,
+        };
+        self.paint = drawing.paint_for(Some(self.tool), &self.swatches);
+        self.kept = document.clone();
+        self.history = History::new(document);
+        self.follow_style(drawing.style);
         self.image = Some((loaded.image, handle));
         self.path = loaded.path;
         self.viewport = Viewport::fitted();
@@ -547,8 +560,17 @@ impl Editor {
         }
     }
 
-    /// Changes to the style, colors, weight, fill and text look.
+    /// Changes to the style, colors, weight, fill, text look and frame, kept for the next time.
     fn restyle(&mut self, message: Message) -> Task<Message> {
+        let settled = settled(&message);
+        let task = self.change_style(message);
+        if settled {
+            self.remember_drawing();
+        }
+        task
+    }
+
+    fn change_style(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::PickStyle(style) => {
                 let before = self.document().style;
@@ -606,6 +628,16 @@ impl Editor {
             _ => {}
         }
         Task::none()
+    }
+
+    /// Keeps the drawing options for the next image, and the next session.
+    fn remember_drawing(&self) {
+        let drawing = Drawing::load().with_marks(self.paint, self.document());
+        if self.image.is_some() {
+            drawing.with_frame(self.document()).save();
+        } else {
+            drawing.save();
+        }
     }
 
     fn edit_color(&mut self, event: picker::Event) -> Task<Message> {
@@ -1051,6 +1083,17 @@ async fn capture() -> Result<(), String> {
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// Whether a change is not one step of a slider drag, whose last step follows.
+fn settled(message: &Message) -> bool {
+    !matches!(
+        message,
+        Message::Weight(controls::WeightEvent::Slide(_))
+            | Message::Brightness(controls::BrightnessEvent::Slide(_))
+            | Message::Look(controls::TextEvent::Size(_))
+            | Message::Frame(frame::Event::Margin(_))
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

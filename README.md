@@ -64,6 +64,9 @@ Hold **Shift** while drawing to snap lines to 45° and boxes to squares.
 Taking the same region again and again? Press the pin in the toolbar: the next screenshot starts
 with that region selected, so Enter takes it at once. Moving or resizing the selection unpins it.
 
+Kirie keeps the style, color, weight, text look, shadow, spotlight brightness and frame you last
+used for the next screenshot, in `~/.local/state/kirie/drawing.ron`.
+
 `kirie` opens the editor. Paste an image with Ctrl+V, open one with `kirie edit FILE`, or take a
 screenshot from its header. Zoom with Ctrl+scroll, pan with the scroll wheel or the middle
 button. Press C, or the crop button under the tools, to keep only part of the image: drag the
