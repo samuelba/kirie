@@ -18,15 +18,53 @@ pub fn screenshots_dir() -> PathBuf {
 
 /// `Kirie_2026-11-22_10-30-15.png`, with a counter when that name is taken.
 pub fn file_name(dir: &Path, now: &jiff::Zoned, taken: impl Fn(&Path) -> bool) -> PathBuf {
+    named(dir, now, "png", taken)
+}
+
+fn named(dir: &Path, now: &jiff::Zoned, extension: &str, taken: impl Fn(&Path) -> bool) -> PathBuf {
     let stem = format!("Kirie_{}", now.strftime("%Y-%m-%d_%H-%M-%S"));
-    let first = dir.join(format!("{stem}.png"));
+    let first = dir.join(format!("{stem}.{extension}"));
     if !taken(&first) {
         return first;
     }
     (2..u32::MAX)
-        .map(|n| dir.join(format!("{stem}_{n}.png")))
+        .map(|n| dir.join(format!("{stem}_{n}.{extension}")))
         .find(|path| !taken(path))
         .unwrap_or(first)
+}
+
+/// A path for messages, with the home folder shown as `~`.
+pub fn pretty(path: &Path) -> String {
+    let home = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf());
+    match home
+        .as_deref()
+        .and_then(|home| path.strip_prefix(home).ok())
+    {
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
+/// Writes an editable `.kirie` project into the screenshots folder.
+pub async fn save_project(project: kirie_annotate::project::Project) -> Result<PathBuf, String> {
+    tokio::task::spawn_blocking(move || {
+        let dir = screenshots_dir();
+        std::fs::create_dir_all(&dir)
+            .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
+        let path = named(
+            &dir,
+            &jiff::Zoned::now(),
+            kirie_annotate::project::EXTENSION,
+            Path::exists,
+        );
+        let file = std::fs::File::create(&path)
+            .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+        kirie_annotate::project::save(&project, std::io::BufWriter::new(file))
+            .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+        Ok(path)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// Writes `image` as a PNG into the screenshots folder.
@@ -65,6 +103,15 @@ mod tests {
             !path.ends_with("Kirie_2026-11-22_12-00-05_3.png")
         });
         assert_eq!(path, Path::new("/shots/Kirie_2026-11-22_12-00-05_3.png"));
+    }
+
+    #[test]
+    fn paths_under_home_are_shortened() {
+        if let Some(dirs) = directories::BaseDirs::new() {
+            let path = dirs.home_dir().join("Pictures/a.png");
+            assert_eq!(pretty(&path), "~/Pictures/a.png");
+        }
+        assert_eq!(pretty(Path::new("/tmp/a.png")), "/tmp/a.png");
     }
 
     #[test]

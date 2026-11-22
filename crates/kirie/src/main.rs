@@ -1,5 +1,6 @@
 mod clipboard;
 mod controls;
+mod editor;
 mod overlay;
 mod paint;
 mod save;
@@ -77,8 +78,13 @@ fn main() -> anyhow::Result<()> {
         }) => capture_region(cursor),
         Some(Command::Debug(Debug::Globals)) => print_globals(),
         Some(Command::ServeClipboard) => clipboard::serve(),
-        None | Some(Command::Capture { .. } | Command::Edit { .. }) => {
-            anyhow::bail!("not implemented yet")
+        None => editor::run(None).map_err(anyhow::Error::from),
+        Some(Command::Edit { path }) => {
+            let loaded = editor::load(&path).map_err(anyhow::Error::msg)?;
+            editor::run(Some(loaded)).map_err(anyhow::Error::from)
+        }
+        Some(Command::Capture { .. }) => {
+            anyhow::bail!("this capture mode is not implemented yet")
         }
     }
 }

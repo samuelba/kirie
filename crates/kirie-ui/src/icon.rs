@@ -43,6 +43,16 @@ icons! {
     Close => "x",
     Done => "check",
     Fill => "paint-bucket",
+    Light => "sun",
+    Dark => "moon",
+    Open => "folder-open",
+    Capture => "camera",
+    ZoomIn => "zoom-in",
+    ZoomOut => "zoom-out",
+    Fit => "scan",
+    Project => "file-archive",
+    Delete => "trash",
+    Image => "image",
 }
 
 impl Icon {

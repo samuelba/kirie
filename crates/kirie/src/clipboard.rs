@@ -41,6 +41,29 @@ pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, String> {
     Ok(png)
 }
 
+/// The image on the clipboard, if there is one.
+pub async fn paste() -> Result<RgbaImage, String> {
+    tokio::task::spawn_blocking(|| {
+        use std::io::Read as _;
+        use wl_clipboard_rs::paste::{ClipboardType, MimeType, Seat, get_contents};
+
+        let (mut pipe, _) = get_contents(
+            ClipboardType::Regular,
+            Seat::Unspecified,
+            MimeType::Specific("image/png"),
+        )
+        .map_err(|error| format!("there is no image on the clipboard ({error})"))?;
+        let mut png = Vec::new();
+        pipe.read_to_end(&mut png)
+            .map_err(|error| format!("cannot read the clipboard: {error}"))?;
+        image::load_from_memory_with_format(&png, image::ImageFormat::Png)
+            .map(|image| image.to_rgba8())
+            .map_err(|error| format!("the clipboard image cannot be read: {error}"))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// Offers PNG bytes from stdin on the clipboard until something else is copied.
 pub fn serve() -> anyhow::Result<()> {
     use std::io::Read as _;
