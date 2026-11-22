@@ -232,12 +232,15 @@ impl Overlay {
                 ))
                 .push(controls::text_layout(paint.text, palette, Message::Look));
         } else if self.spotlighting() {
-            properties = properties.push(controls::spotlight_brightness(
-                self.document().spotlight_brightness,
-                palette,
-                96.0,
-                Message::Brightness,
-            ));
+            properties = properties
+                .push(controls::spot_shapes(paint, palette, Message::Spot))
+                .push(divider(palette))
+                .push(controls::spotlight_brightness(
+                    self.document().spotlight_brightness,
+                    palette,
+                    96.0,
+                    Message::Brightness,
+                ));
         } else {
             properties = properties
                 .push({

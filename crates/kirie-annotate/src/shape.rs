@@ -155,6 +155,14 @@ impl Default for TextLook {
     }
 }
 
+/// The outline a spotlight lights.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum SpotShape {
+    #[default]
+    Rectangle,
+    Ellipse,
+}
+
 /// The paint a mark was made with.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(from = "StoredPaint")]
@@ -164,6 +172,7 @@ pub struct Paint {
     /// Closed shapes are filled with a translucent tint of the color.
     pub filled: bool,
     pub text: TextLook,
+    pub spot: SpotShape,
 }
 
 impl Default for Paint {
@@ -173,6 +182,7 @@ impl Default for Paint {
             weight: Weight::MEDIUM,
             filled: false,
             text: TextLook::default(),
+            spot: SpotShape::default(),
         }
     }
 }
@@ -185,6 +195,8 @@ struct StoredPaint {
     filled: bool,
     #[serde(default, deserialize_with = "present")]
     text: Option<TextLook>,
+    #[serde(default)]
+    spot: SpotShape,
 }
 
 fn present<'de, D: serde::Deserializer<'de>>(from: D) -> Result<Option<TextLook>, D::Error> {
@@ -201,6 +213,7 @@ impl From<StoredPaint> for Paint {
                 size: stored.weight.legacy_text_size(),
                 ..TextLook::default()
             }),
+            spot: stored.spot,
         }
     }
 }
@@ -279,7 +292,13 @@ impl Shape {
 
     /// How far `point` is from the mark, taking its turn into account.
     pub fn distance(&self, point: Point) -> f64 {
-        self.kind.distance(self.turn().inverse() * point)
+        let point = self.turn().inverse() * point;
+        match self.kind {
+            Kind::Spotlight { rect } if self.paint.spot == SpotShape::Ellipse => {
+                Kind::Ellipse { rect }.distance(point)
+            }
+            _ => self.kind.distance(point),
+        }
     }
 }
 
@@ -461,8 +480,32 @@ mod tests {
         let paint: Paint = ron::from_str(old).unwrap();
         assert!((paint.text.size - 32.0).abs() < f64::EPSILON);
         assert!(paint.text.outlined && paint.text.font.is_none());
-        let saved = ron::to_string(&Paint::default()).unwrap();
-        assert_eq!(ron::from_str::<Paint>(&saved).unwrap(), Paint::default());
+        assert_eq!(paint.spot, SpotShape::Rectangle);
+        let oval = Paint {
+            spot: SpotShape::Ellipse,
+            ..Paint::default()
+        };
+        let saved = ron::to_string(&oval).unwrap();
+        assert_eq!(ron::from_str::<Paint>(&saved).unwrap(), oval);
+    }
+
+    #[test]
+    fn oval_spotlights_are_hit_inside_the_ellipse() {
+        let spotlight = |spot| Shape {
+            id: ShapeId(1),
+            kind: Kind::Spotlight {
+                rect: Rect::new(0.0, 0.0, 20.0, 20.0),
+            },
+            paint: Paint {
+                spot,
+                ..Paint::default()
+            },
+            style: None,
+            rotation: 0.0,
+        };
+        let corner = Point::new(1.0, 1.0);
+        assert!(spotlight(SpotShape::Rectangle).distance(corner) < 1e-9);
+        assert!(spotlight(SpotShape::Ellipse).distance(corner) > 1.0);
     }
 
     #[test]

@@ -110,6 +110,7 @@ pub enum Message {
     Weight(crate::controls::WeightEvent),
     ToggleFill,
     Brightness(controls::BrightnessEvent),
+    Spot(kirie_annotate::SpotShape),
     Look(controls::TextEvent),
     ToggleScheme,
     TextEdit(iced::widget::text_editor::Action),
@@ -298,6 +299,7 @@ impl Editor {
             | Message::Weight(_)
             | Message::ToggleFill
             | Message::Brightness(_)
+            | Message::Spot(_)
             | Message::Look(_) => return self.restyle(message),
             Message::SystemScheme(scheme) => self.follow(Some(scheme)),
             Message::ToggleScheme => self.follow(None),
@@ -422,6 +424,7 @@ impl Editor {
                 self.repaint_gradually(|paint| paint.weight = Weight::new(width), true);
             }
             Message::ToggleFill => self.repaint(|paint| paint.filled = !paint.filled),
+            Message::Spot(spot) => self.repaint(|paint| paint.spot = spot),
             Message::Look(event) => {
                 self.repaint_gradually(
                     |paint| paint.text = event.apply(paint.text),

@@ -155,6 +155,7 @@ fn main() {
                     size: 16.0,
                     ..kirie_annotate::TextLook::default()
                 },
+                ..Paint::default()
             },
         });
         image = render(&document, &image, &mut typesetter).expect("renders");

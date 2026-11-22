@@ -4,7 +4,7 @@
 use iced::Element;
 use iced::widget::{Row, container, mouse_area, row, svg, text};
 use kirie_annotate::{
-    Align, Document, Font, HIGHLIGHT, Paint, Rgba, StyleId, TextLook, Tool, Weight,
+    Align, Document, Font, HIGHLIGHT, Paint, Rgba, SpotShape, StyleId, TextLook, Tool, Weight,
 };
 use kirie_ui::icon::Icon;
 use kirie_ui::widget::{icon_button, pill, swatch, swatch_button, value_slider};
@@ -167,6 +167,30 @@ pub fn weights<'a, Message: Clone + 'a>(
     .align_y(iced::Alignment::Center)
     .into();
     (presets, slider)
+}
+
+/// Whether spotlights light a rectangle or an ellipse.
+pub fn spot_shapes<'a, Message: Clone + 'a>(
+    paint: Paint,
+    palette: Palette,
+    on_pick: impl Fn(SpotShape) -> Message,
+) -> Element<'a, Message> {
+    row([
+        (SpotShape::Rectangle, Icon::Rectangle, "Light a rectangle"),
+        (SpotShape::Ellipse, Icon::Ellipse, "Light an ellipse"),
+    ]
+    .into_iter()
+    .map(|(spot, icon, label)| {
+        icon_button(
+            icon,
+            label,
+            palette,
+            paint.spot == spot,
+            Some(on_pick(spot)),
+        )
+    }))
+    .spacing(2)
+    .into()
 }
 
 /// A change to how bright spotlights leave the rest of the image.

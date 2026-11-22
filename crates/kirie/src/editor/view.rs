@@ -336,16 +336,22 @@ impl Editor {
             ));
         }
         if self.spotlighting() {
-            return content.push(section(
-                palette,
-                "Brightness around spotlights",
-                controls::spotlight_brightness(
-                    self.document().spotlight_brightness,
+            return content
+                .push(section(
                     palette,
-                    126.0,
-                    Message::Brightness,
-                ),
-            ));
+                    "Spotlight",
+                    controls::spot_shapes(paint, palette, Message::Spot),
+                ))
+                .push(section(
+                    palette,
+                    "Brightness around spotlights",
+                    controls::spotlight_brightness(
+                        self.document().spotlight_brightness,
+                        palette,
+                        126.0,
+                        Message::Brightness,
+                    ),
+                ));
         }
         let fill = row![
             icon_button(

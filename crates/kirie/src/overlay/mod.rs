@@ -71,6 +71,7 @@ pub enum Message {
     Weight(crate::controls::WeightEvent),
     ToggleFill,
     Brightness(crate::controls::BrightnessEvent),
+    Spot(kirie_annotate::SpotShape),
     Look(crate::controls::TextEvent),
     TextEdit(iced::widget::text_editor::Action),
     TextDone,
@@ -410,6 +411,7 @@ impl Overlay {
             | Message::Weight(_)
             | Message::ToggleFill
             | Message::Brightness(_)
+            | Message::Spot(_)
             | Message::Look(_) => {
                 self.restyle(message);
                 Task::none()
@@ -535,6 +537,7 @@ impl Overlay {
             Message::ToggleFill => {
                 self.repaint(|paint| paint.filled = !paint.filled);
             }
+            Message::Spot(spot) => self.repaint(|paint| paint.spot = spot),
             Message::Look(event) => {
                 self.repaint_gradually(
                     |paint| paint.text = event.apply(paint.text),

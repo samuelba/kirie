@@ -3,13 +3,14 @@
 mod clean;
 mod ink;
 mod sketch;
+mod spotlight;
 
-use kurbo::{BezPath, Point, Rect, Shape as _, Vec2};
+use kurbo::{BezPath, Point, Rect, Vec2};
 use serde::{Deserialize, Serialize};
 
 use crate::document::Document;
 use crate::primitive::{Effect, FillRule, Font, Primitive};
-use crate::shape::{Kind, Rgba, Shape};
+use crate::shape::{Kind, Rgba, Shape, SpotShape};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum StyleId {
@@ -60,7 +61,7 @@ pub struct Stage {
     shadow: bool,
     /// The opacity of the shade spotlights put over the rest.
     dim: f64,
-    holes: Vec<Rect>,
+    holes: Vec<spotlight::Hole>,
     lowest: Option<crate::shape::ShapeId>,
 }
 
@@ -92,7 +93,10 @@ impl Stage {
         for shape in shapes {
             if let Kind::Spotlight { rect } = shape.kind {
                 stage.lowest.get_or_insert(shape.id);
-                stage.holes.push(rect.abs());
+                stage.holes.push(spotlight::Hole {
+                    rect: rect.abs(),
+                    oval: shape.paint.spot == SpotShape::Ellipse,
+                });
             }
         }
         stage
@@ -166,7 +170,7 @@ fn unturned(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Vec<Prim
             effect: Effect::Pixelate { cell: 12.0 * unit },
         }],
         Kind::Spotlight { .. } if stage.lowest == Some(shape.id) => {
-            vec![spotlight(
+            vec![spotlight::shade(
                 stage.visible,
                 &stage.holes,
                 6.0 * unit,
@@ -272,121 +276,6 @@ fn chaikin(points: &[Point], rounds: usize) -> Vec<Point> {
         points = next;
     }
     points
-}
-
-/// The dimmed part of `visible`: everything outside the holes, whose corners are rounded by
-/// `radius`, shaded `dim` dark. A fill rule cannot cut out overlapping holes, so the dimmed part
-/// is built from pieces that never overlap: grid cells outside every hole, and the rounded-off
-/// corners.
-fn spotlight(visible: Rect, holes: &[Rect], radius: f64, dim: f64) -> Primitive {
-    let inside: Vec<Rect> = holes
-        .iter()
-        .map(|hole| hole.intersect(visible))
-        .filter(|hole| hole.area() > 0.0)
-        .collect();
-    let grid = |edges: fn(&Rect) -> [f64; 2]| {
-        let mut lines: Vec<f64> = std::iter::once(&visible)
-            .chain(&inside)
-            .flat_map(edges)
-            .collect();
-        lines.sort_by(f64::total_cmp);
-        lines.dedup();
-        lines
-    };
-    let xs = grid(|rect| [rect.x0, rect.x1]);
-    let ys = grid(|rect| [rect.y0, rect.y1]);
-    let mut path = BezPath::new();
-    for row in ys.windows(2) {
-        let mut start = None;
-        for column in xs.windows(2) {
-            let middle = Point::new(
-                f64::midpoint(column[0], column[1]),
-                f64::midpoint(row[0], row[1]),
-            );
-            let covered = inside.iter().any(|hole| hole.contains(middle));
-            match (covered, start) {
-                (false, None) => start = Some(column[0]),
-                (true, Some(x0)) => {
-                    path.extend(Rect::new(x0, row[0], column[0], row[1]).path_elements(0.1));
-                    start = None;
-                }
-                _ => {}
-            }
-        }
-        if let (Some(x0), Some(&x1)) = (start, xs.last()) {
-            path.extend(Rect::new(x0, row[0], x1, row[1]).path_elements(0.1));
-        }
-    }
-    for (index, hole) in holes.iter().enumerate() {
-        let others = || {
-            holes
-                .iter()
-                .enumerate()
-                .filter(move |(other, _)| *other != index)
-        };
-        for corner in rounded_corners(*hole, radius) {
-            let square = corner.square();
-            let shown = square.intersect(visible).area() >= square.area() - 1e-9;
-            let hidden = others().any(|(_, other)| other.intersect(square).area() > 0.0);
-            if shown && !hidden {
-                path.extend(corner.path());
-            }
-        }
-    }
-    Primitive::Fill {
-        path,
-        color: Rgba::rgb(0, 0, 0).with_alpha(opacity(dim)),
-        rule: FillRule::NonZero,
-    }
-}
-
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn opacity(share: f64) -> u8 {
-    (share.clamp(0.0, 1.0) * 255.0).round() as u8
-}
-
-/// The bit of a box's corner that rounding cuts away.
-#[derive(Debug, Clone, Copy)]
-struct Corner {
-    at: Point,
-    /// Into the box from `at`, `radius` long on each axis.
-    reach: Vec2,
-}
-
-impl Corner {
-    fn square(self) -> Rect {
-        Rect::from_points(self.at, self.at + self.reach)
-    }
-
-    fn path(self) -> BezPath {
-        // A quarter circle as a cubic Bézier: control points sit this far along the tangents.
-        const KAPPA: f64 = 0.552_284_75;
-        let along = Point::new(self.at.x + self.reach.x, self.at.y);
-        let down = Point::new(self.at.x, self.at.y + self.reach.y);
-        let mut path = BezPath::new();
-        path.move_to(self.at);
-        path.line_to(along);
-        path.curve_to(
-            along - Vec2::new(self.reach.x * KAPPA, 0.0),
-            down - Vec2::new(0.0, self.reach.y * KAPPA),
-            down,
-        );
-        path.close_path();
-        path
-    }
-}
-
-fn rounded_corners(rect: Rect, radius: f64) -> impl Iterator<Item = Corner> {
-    let radius = radius.min(rect.width() / 2.0).min(rect.height() / 2.0);
-    [
-        (Point::new(rect.x0, rect.y0), Vec2::new(radius, radius)),
-        (Point::new(rect.x1, rect.y0), Vec2::new(-radius, radius)),
-        (Point::new(rect.x1, rect.y1), Vec2::new(-radius, -radius)),
-        (Point::new(rect.x0, rect.y1), Vec2::new(radius, -radius)),
-    ]
-    .into_iter()
-    .filter(move |_| radius > 0.0)
-    .map(|(at, reach)| Corner { at, reach })
 }
 
 /// A dark or light outline color that sets `color` apart from any background.
@@ -500,6 +389,8 @@ impl Rng {
 
 #[cfg(test)]
 mod tests {
+    use kurbo::Shape as _;
+
     use super::*;
     use crate::document::Op;
     use crate::shape::{Paint, ShapeId, Weight};
@@ -642,24 +533,6 @@ mod tests {
         };
         assert_eq!(shade(Document::SPOTLIGHT_BRIGHTNESS), 0x8c);
         assert!(shade(0.8) < shade(0.2));
-    }
-
-    #[test]
-    fn a_spotlight_past_the_edge_dims_only_what_is_shown() {
-        let visible = Rect::new(0.0, 0.0, 100.0, 100.0);
-        let Primitive::Fill { path, .. } =
-            spotlight(visible, &[Rect::new(-20.0, 30.0, 50.0, 70.0)], 6.0, 0.5)
-        else {
-            panic!()
-        };
-        assert_eq!(
-            path.winding(Point::new(0.5, 30.5)),
-            0,
-            "no rounding at the edge"
-        );
-        assert_eq!(path.winding(Point::new(49.5, 30.5)).abs(), 1);
-        assert_eq!(path.winding(Point::new(-10.0, 10.0)), 0, "nothing outside");
-        assert!(path.bounding_box().x0 >= 0.0);
     }
 
     #[test]
