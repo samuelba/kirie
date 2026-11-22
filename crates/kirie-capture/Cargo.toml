@@ -1,0 +1,22 @@
+[package]
+name = "kirie-capture"
+description = "Screen capture backends for Kirie"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+image.workspace = true
+rustix = { version = "1", features = ["fs"] }
+thiserror.workspace = true
+tracing.workspace = true
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+
+[lints]
+workspace = true
