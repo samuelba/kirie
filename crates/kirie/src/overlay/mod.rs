@@ -2,7 +2,6 @@
 //! region, marks it up, and copies or saves it.
 
 mod canvas;
-mod selection;
 mod view;
 
 use std::cell::RefCell;
@@ -22,8 +21,8 @@ use kirie_annotate::{
 use kirie_capture::{Frame, geometry};
 use kirie_ui::Palette;
 
-use self::selection::{Release, Selection};
 use crate::picker::{self, Picker, Target};
+use crate::selection::{self, Release, Selection};
 use crate::swatches::Swatches;
 use crate::typing::{self, Typing};
 

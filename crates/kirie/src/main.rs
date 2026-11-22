@@ -12,6 +12,7 @@ mod overlay;
 mod paint;
 mod picker;
 mod save;
+mod selection;
 mod shortcuts;
 mod swatches;
 mod typing;

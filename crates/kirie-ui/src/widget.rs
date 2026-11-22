@@ -8,7 +8,8 @@ use crate::icon::Icon;
 use crate::{Palette, radius, space};
 
 const ICON: f32 = 18.0;
-const CONTROL: f32 = 34.0;
+/// The side of a square control.
+pub const CONTROL: f32 = 34.0;
 
 /// The panel of a floating toolbar.
 pub fn floating(palette: Palette) -> impl Fn(&iced::Theme) -> container::Style {

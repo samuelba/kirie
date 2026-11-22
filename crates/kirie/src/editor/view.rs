@@ -4,7 +4,7 @@ use iced::widget::{Space, column, container, row, rule, stack, svg, text};
 use iced::{Alignment, Background, Border, Element, Length, Padding};
 use kirie_annotate::{StyleId, Tool};
 use kirie_ui::icon::Icon;
-use kirie_ui::widget::{divider, floating, icon_button, primary_button};
+use kirie_ui::widget::{divider, floating, icon_button, primary_button, secondary_button};
 use kirie_ui::{Palette, Scheme, space};
 
 use super::canvas::{Backdrop, Board};
@@ -136,15 +136,27 @@ impl Editor {
                 controls::tool_icon(tool),
                 tool.label(),
                 palette,
-                self.tool == tool,
+                self.tool == tool && self.cropping.is_none(),
                 Some(Message::PickTool(tool)),
             )
         });
-        container(column(tools).spacing(2))
-            .padding(space::S)
-            .height(Length::Fill)
-            .style(panel(palette))
-            .into()
+        let crop = icon_button(
+            Icon::Crop,
+            "Crop (C)",
+            palette,
+            self.cropping.is_some(),
+            self.image.is_some().then_some(Message::Crop),
+        );
+        container(
+            column(tools)
+                .push(container(rule::horizontal(1)).width(kirie_ui::widget::CONTROL))
+                .push(crop)
+                .spacing(2),
+        )
+        .padding(space::S)
+        .height(Length::Fill)
+        .style(panel(palette))
+        .into()
     }
 
     fn center(&self) -> Element<'_, Message> {
@@ -162,6 +174,9 @@ impl Editor {
             stack![self.empty()]
         };
         let mut floating_bits = column![].spacing(space::S).align_x(Alignment::Center);
+        if self.cropping.is_some() {
+            floating_bits = floating_bits.push(self.crop_bar());
+        }
         if let Some(typing) = &self.typing {
             floating_bits = floating_bits.push(
                 container(
@@ -211,6 +226,29 @@ impl Editor {
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
+    }
+
+    /// What cropping is about, and the buttons that end it.
+    fn crop_bar(&self) -> Element<'_, Message> {
+        let palette = self.palette;
+        container(
+            row![
+                column![
+                    text("Drag the frame to keep a part").size(12),
+                    text("Enter to crop, Esc to cancel")
+                        .size(12)
+                        .color(palette.muted),
+                ],
+                secondary_button("Whole image", palette, Message::CropReset),
+                secondary_button("Cancel", palette, Message::CropCancel),
+                primary_button(Icon::Crop, "Crop", palette, Message::CropDone),
+            ]
+            .spacing(space::M)
+            .align_y(Alignment::Center),
+        )
+        .padding(space::S)
+        .style(floating(palette))
+        .into()
     }
 
     fn empty(&self) -> Element<'_, Message> {
@@ -291,13 +329,24 @@ impl Editor {
         let palette = self.palette;
         let muted = |words: String| text(words).size(12).color(palette.muted);
         let tool = row![
-            svg(controls::tool_icon(self.tool).handle())
-                .width(14)
-                .height(14)
-                .style(move |_, _| svg::Style {
-                    color: Some(palette.muted),
-                }),
-            muted(self.tool.name().to_owned()),
+            svg(if self.cropping.is_some() {
+                Icon::Crop.handle()
+            } else {
+                controls::tool_icon(self.tool).handle()
+            })
+            .width(14)
+            .height(14)
+            .style(move |_, _| svg::Style {
+                color: Some(palette.muted),
+            }),
+            muted(
+                if self.cropping.is_some() {
+                    "Crop"
+                } else {
+                    self.tool.name()
+                }
+                .to_owned()
+            ),
         ]
         .spacing(space::XS)
         .align_y(Alignment::Center);
@@ -308,15 +357,32 @@ impl Editor {
             if let Some((x, y)) = self.hover.map(super::pixel) {
                 bar = bar.push(muted(format!("{x}, {y} px")));
             }
-            let zoom = self.viewport.scale(self.image_size(), self.canvas) * 100.0;
+            let zoom = self.viewport.scale(self.content(), self.canvas) * 100.0;
             let fitted = if self.viewport.is_fitted() {
                 " (fit)"
             } else {
                 ""
             };
+            #[allow(clippy::cast_possible_truncation)]
+            let kept = self
+                .crop()
+                .map(|crop| (crop.width.round() as i64, crop.height.round() as i64))
+                .or_else(|| {
+                    self.document()
+                        .crop
+                        .map(|crop| (crop.width() as i64, crop.height() as i64))
+                });
+            let size = match kept {
+                Some((width, height)) => format!(
+                    "{width} × {height} of {} × {} px",
+                    image.width(),
+                    image.height()
+                ),
+                None => format!("{} × {} px", image.width(), image.height()),
+            };
             bar = bar
                 .push(muted(format!("{zoom:.0}%{fitted}")))
-                .push(muted(format!("{} × {} px", image.width(), image.height())));
+                .push(muted(size));
         }
         container(bar)
             .padding([space::XS, space::L])

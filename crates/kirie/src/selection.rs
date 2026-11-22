@@ -1,5 +1,6 @@
-//! The region being picked, in desktop (logical) coordinates across every screen: drawn by
-//! dragging, then moved by its inside or resized by its edges and corners.
+//! A region being picked, drawn by dragging, then moved by its inside or resized by its edges
+//! and corners: in the overlay, in desktop (logical) coordinates across every screen; in the
+//! editor, the part of the image to keep.
 
 use iced::{Point, Rectangle, Size, Vector};
 
@@ -191,6 +192,23 @@ impl Selection {
             Some(rect) if self.drag.is_none() => Self::selected(clamp_rect(rect + by, bounds)),
             _ => self,
         }
+    }
+}
+
+/// The pointer that shows what a press on `hit` would do.
+pub fn interaction(hit: Option<Hit>) -> iced::mouse::Interaction {
+    use iced::mouse::Interaction;
+    match hit {
+        Some(Hit::Inside) => Interaction::Grab,
+        Some(Hit::Handle(Handle::North | Handle::South)) => Interaction::ResizingVertically,
+        Some(Hit::Handle(Handle::East | Handle::West)) => Interaction::ResizingHorizontally,
+        Some(Hit::Handle(Handle::NorthEast | Handle::SouthWest)) => {
+            Interaction::ResizingDiagonallyUp
+        }
+        Some(Hit::Handle(Handle::NorthWest | Handle::SouthEast)) => {
+            Interaction::ResizingDiagonallyDown
+        }
+        None => Interaction::Crosshair,
     }
 }
 

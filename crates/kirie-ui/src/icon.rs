@@ -60,6 +60,7 @@ icons! {
     TextOutline => "type-outline",
     Shadow => "shadow",
     Grip => "grip-vertical",
+    Crop => "crop",
 }
 
 impl Icon {
