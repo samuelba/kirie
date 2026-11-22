@@ -1,8 +1,13 @@
+mod overlay;
+mod save;
+
 use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use kirie_capture::{Cursor, geometry};
+
+pub const APP_ID: &str = "dev.samuelba.Kirie";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -59,6 +64,11 @@ fn main() -> anyhow::Result<()> {
             output: Some(path),
             cursor,
         }) => capture_to_file(&path, cursor),
+        Some(Command::Capture {
+            mode: Mode::Region,
+            output: None,
+            cursor,
+        }) => capture_region(cursor),
         Some(Command::Debug(Debug::Globals)) => print_globals(),
         None | Some(Command::Capture { .. } | Command::Edit { .. }) => {
             anyhow::bail!("not implemented yet")
@@ -67,7 +77,11 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn capture_to_file(path: &std::path::Path, cursor: bool) -> anyhow::Result<()> {
-    let cursor = if cursor { Cursor::Shown } else { Cursor::Hidden };
+    let cursor = if cursor {
+        Cursor::Shown
+    } else {
+        Cursor::Hidden
+    };
     let (protocol, frames) = kirie_capture::wayland::capture(cursor)?;
     for frame in &frames {
         tracing::info!(
@@ -91,6 +105,23 @@ fn capture_to_file(path: &std::path::Path, cursor: bool) -> anyhow::Result<()> {
         path.display()
     );
     Ok(())
+}
+
+fn capture_region(cursor: bool) -> anyhow::Result<()> {
+    let cursor = if cursor {
+        Cursor::Shown
+    } else {
+        Cursor::Hidden
+    };
+    let (_, frames) = kirie_capture::wayland::capture(cursor)?;
+    match overlay::run(frames).map_err(anyhow::Error::msg)? {
+        overlay::Outcome::Saved(path) => {
+            println!("{}", path.display());
+            Ok(())
+        }
+        overlay::Outcome::Cancelled => Ok(()),
+        overlay::Outcome::Failed(error) => anyhow::bail!(error),
+    }
 }
 
 fn print_globals() -> anyhow::Result<()> {
