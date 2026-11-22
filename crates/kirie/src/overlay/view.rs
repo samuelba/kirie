@@ -1,8 +1,8 @@
 //! What each screen's surface shows: the frozen image, the marks, and the floating toolbar
-//! next to the selection.
+//! next to the selection, or wherever it was dragged by its grip.
 
-use iced::widget::{Space, column, container, image, pin, row, stack};
-use iced::{Element, Length, Point, Rectangle, window};
+use iced::widget::{Space, column, container, image, mouse_area, pin, row, stack, svg};
+use iced::{Element, Length, Point, Rectangle, Size, mouse, window};
 use kirie_annotate::Tool;
 use kirie_ui::icon::Icon;
 use kirie_ui::space;
@@ -70,36 +70,20 @@ impl Overlay {
         layers.into()
     }
 
-    /// Where the toolbar goes on this screen, if on this one: under the selection, else above
-    /// it, else inside its bottom edge; always kept on screen.
+    /// Where the toolbar goes on this screen, if on this one.
     fn toolbar_position(&self, screen: Rectangle) -> Option<Point> {
+        let (at, home) = self.toolbar_place()?;
+        (home == screen).then(|| Point::new(at.x - home.x, at.y - home.y))
+    }
+
+    /// Where the toolbar goes, in desktop coordinates, and the screen it is on.
+    pub(super) fn toolbar_place(&self) -> Option<(Point, Rectangle)> {
         let selection = self.selection.rect()?;
         if self.selection.dragging() {
             return None;
         }
-        let toolbar = self.toolbar_size();
-        let below = selection.y + selection.height + GAP;
-        let above = selection.y - GAP - toolbar.height;
-        let anchor = Point::new(selection.center_x(), selection.y + selection.height);
-        let areas = || self.screens.iter().map(|screen| screen.area);
-        let home = areas()
-            .find(|area| area.contains(anchor))
-            .or_else(|| areas().find(|area| area.intersects(&selection)))?;
-        if home != screen {
-            return None;
-        }
-        let y = if below + toolbar.height <= home.y + home.height {
-            below
-        } else if above >= home.y {
-            above
-        } else {
-            selection.y + selection.height - toolbar.height - GAP
-        };
-        let x = (selection.center_x() - toolbar.width / 2.0).clamp(
-            home.x + GAP,
-            (home.x + home.width - toolbar.width - GAP).max(home.x + GAP),
-        );
-        Some(Point::new(x - home.x, y.max(home.y) - home.y))
+        let screens: Vec<Rectangle> = self.screens.iter().map(|screen| screen.area).collect();
+        place_toolbar(selection, &screens, self.toolbar_size(), self.toolbar_at)
     }
 
     fn toolbar_size(&self) -> iced::Size {
@@ -177,7 +161,25 @@ impl Overlay {
                     .padding([space::XS, 0.0]),
             );
         }
-        container(panel.push(properties).push(main))
+        let grip = mouse_area(
+            container(
+                svg(Icon::Grip.handle())
+                    .width(16)
+                    .height(16)
+                    .style(move |_, _| svg::Style {
+                        color: Some(palette.muted),
+                    }),
+            )
+            .center_y(Length::Fill),
+        )
+        .on_move(Message::GripHover)
+        .on_press(Message::ToolbarGrab)
+        .interaction(if self.toolbar_drag.is_some() {
+            mouse::Interaction::Grabbing
+        } else {
+            mouse::Interaction::Grab
+        });
+        container(row![grip, panel.push(properties).push(main)].spacing(space::XS))
             .padding(space::S)
             .style(floating(palette))
             .into()
@@ -245,5 +247,107 @@ impl Overlay {
                 ));
         }
         properties.into()
+    }
+}
+
+/// Where a toolbar of `size` goes, in desktop coordinates, and the screen it is on: where it
+/// was `moved` to, else under the selection, else above it, else inside its bottom edge;
+/// always kept on its screen.
+fn place_toolbar(
+    selection: Rectangle,
+    screens: &[Rectangle],
+    size: Size,
+    moved: Option<Point>,
+) -> Option<(Point, Rectangle)> {
+    let on_screen = |at: Point, home: Rectangle| {
+        let x = at.x.clamp(
+            home.x + GAP,
+            (home.x + home.width - size.width - GAP).max(home.x + GAP),
+        );
+        let y = at.y.clamp(
+            home.y + GAP,
+            (home.y + home.height - size.height - GAP).max(home.y + GAP),
+        );
+        (Point::new(x, y), home)
+    };
+    if let Some(at) = moved {
+        let middle = Point::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+        let home = screens
+            .iter()
+            .find(|area| area.contains(middle))
+            .or_else(|| screens.iter().find(|area| area.contains(at)))
+            .or_else(|| screens.first())?;
+        return Some(on_screen(at, *home));
+    }
+    let below = selection.y + selection.height + GAP;
+    let above = selection.y - GAP - size.height;
+    let anchor = Point::new(selection.center_x(), selection.y + selection.height);
+    let home = *screens
+        .iter()
+        .find(|area| area.contains(anchor))
+        .or_else(|| screens.iter().find(|area| area.intersects(&selection)))?;
+    let y = if below + size.height <= home.y + home.height {
+        below
+    } else if above >= home.y {
+        above
+    } else {
+        selection.y + selection.height - size.height - GAP
+    };
+    let x = (selection.center_x() - size.width / 2.0).clamp(
+        home.x + GAP,
+        (home.x + home.width - size.width - GAP).max(home.x + GAP),
+    );
+    Some((Point::new(x, y.max(home.y)), home))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SIZE: Size = Size::new(400.0, 90.0);
+
+    fn screens() -> [Rectangle; 2] {
+        [
+            Rectangle::new(Point::ORIGIN, Size::new(1920.0, 1080.0)),
+            Rectangle::new(Point::new(1920.0, 0.0), Size::new(1920.0, 1080.0)),
+        ]
+    }
+
+    #[test]
+    fn the_toolbar_sits_under_the_selection_or_inside_it() {
+        let selection = Rectangle::new(Point::new(100.0, 100.0), Size::new(600.0, 300.0));
+        let (at, home) = place_toolbar(selection, &screens(), SIZE, None).unwrap();
+        assert_eq!(home, screens()[0]);
+        assert!((at.y - (400.0 + GAP)).abs() < f32::EPSILON);
+        let whole = screens()[0];
+        let (inside, _) = place_toolbar(whole, &screens(), SIZE, None).unwrap();
+        assert!(inside.y + SIZE.height <= whole.height - GAP + f32::EPSILON);
+    }
+
+    #[test]
+    fn a_moved_toolbar_stays_put_on_its_screen() {
+        let selection = screens()[0];
+        let moved = Point::new(2500.0, 30.0);
+        let (at, home) = place_toolbar(selection, &screens(), SIZE, Some(moved)).unwrap();
+        assert_eq!(home, screens()[1]);
+        assert_eq!(at, moved);
+        let (kept, home) = place_toolbar(
+            selection,
+            &screens(),
+            SIZE,
+            Some(Point::new(3800.0, 1050.0)),
+        )
+        .unwrap();
+        assert_eq!(home, screens()[1]);
+        assert!(kept.x + SIZE.width <= 3840.0 - GAP && kept.y + SIZE.height <= 1080.0 - GAP);
+        let (lost, home) = place_toolbar(
+            selection,
+            &screens(),
+            SIZE,
+            Some(Point::new(-900.0, -900.0)),
+        )
+        .unwrap();
+        assert_eq!(home, screens()[0]);
+        assert_eq!(lost, Point::new(GAP, GAP));
     }
 }

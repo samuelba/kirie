@@ -59,6 +59,7 @@ icons! {
     AlignRight => "text-align-end",
     TextOutline => "type-outline",
     Shadow => "shadow",
+    Grip => "grip-vertical",
 }
 
 impl Icon {

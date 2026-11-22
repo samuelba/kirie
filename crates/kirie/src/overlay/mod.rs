@@ -84,6 +84,12 @@ pub enum Message {
     Nudge(Vector),
     Finished(Result<Outcome, String>),
     Resized(window::Id, Size),
+    /// The pointer over the toolbar's grip, in the grip's coordinates.
+    GripHover(Point),
+    ToolbarGrab,
+    /// The pointer while the toolbar is dragged, in the coordinates of a surface.
+    ToolbarMoved(window::Id, Point),
+    ToolbarDropped,
     Layer(LayerShellCustomActionWithId),
 }
 
@@ -147,6 +153,12 @@ pub struct Overlay {
     /// A slider is being dragged; its moves undo as one step.
     sliding: bool,
     typing: Option<Typing>,
+    /// Where the toolbar was dragged to, in desktop coordinates.
+    toolbar_at: Option<Point>,
+    /// While the toolbar is dragged: where it is held, from its top left.
+    toolbar_drag: Option<Vector>,
+    /// The pointer over the grip, from the grip's top left.
+    grip_at: Point,
     /// The last press, to tell a double click.
     last_click: Option<iced::advanced::mouse::Click>,
     busy: bool,
@@ -280,6 +292,9 @@ impl Overlay {
             picked: None,
             sliding: false,
             typing: None,
+            toolbar_at: None,
+            toolbar_drag: None,
+            grip_at: Point::ORIGIN,
             last_click: None,
             busy: false,
             primary,
@@ -357,7 +372,20 @@ impl Overlay {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Pointer(pointer) if self.toolbar_drag.is_some() => {
+                if let Pointer::Released(_) = pointer {
+                    self.drag_toolbar(&Message::ToolbarDropped);
+                }
+                Task::none()
+            }
             Message::Pointer(pointer) => self.pointer(pointer),
+            Message::GripHover(_)
+            | Message::ToolbarGrab
+            | Message::ToolbarMoved(..)
+            | Message::ToolbarDropped => {
+                self.drag_toolbar(&message);
+                Task::none()
+            }
             Message::Modifiers(modifiers) => {
                 self.modifiers = modifiers;
                 Task::none()
@@ -426,6 +454,37 @@ impl Overlay {
                 Task::none()
             }
             Message::Layer(_) => Task::none(),
+        }
+    }
+
+    /// Moving the toolbar by its grip.
+    fn drag_toolbar(&mut self, message: &Message) {
+        match *message {
+            Message::GripHover(at) => self.grip_at = at,
+            Message::ToolbarGrab => {
+                if let Some((at, _)) = self.toolbar_place() {
+                    self.toolbar_at = Some(at);
+                    self.toolbar_drag = Some(Vector::new(
+                        self.grip_at.x + kirie_ui::space::S,
+                        self.grip_at.y + kirie_ui::space::S,
+                    ));
+                }
+            }
+            Message::ToolbarMoved(id, at) => {
+                let surface = self
+                    .surfaces
+                    .get(&id)
+                    .map(|&index| self.screens[index].area);
+                if let (Some(held), Some(surface)) = (self.toolbar_drag, surface) {
+                    let desktop = Point::new(at.x + surface.x, at.y + surface.y);
+                    self.toolbar_at = Some(desktop - held);
+                }
+            }
+            Message::ToolbarDropped => {
+                self.toolbar_drag = None;
+                self.toolbar_at = self.toolbar_place().map(|(at, _)| at);
+            }
+            _ => {}
         }
     }
 
@@ -543,6 +602,10 @@ impl Overlay {
     }
 
     fn escape(&mut self) -> Task<Message> {
+        if self.toolbar_drag.is_some() {
+            self.drag_toolbar(&Message::ToolbarDropped);
+            return Task::none();
+        }
         // A save or copy on its way finishes first; leaving now would drop it half done.
         if self.busy {
             return Task::none();
@@ -777,8 +840,14 @@ impl Overlay {
         } else {
             event::listen_with(key)
         };
+        let toolbar = if self.toolbar_drag.is_some() {
+            event::listen_with(dragging_toolbar)
+        } else {
+            Subscription::none()
+        };
         Subscription::batch([
             keys,
+            toolbar,
             window::resize_events().map(|(id, size)| Message::Resized(id, size)),
         ])
     }
@@ -826,6 +895,19 @@ fn surface_settings(output: &str) -> NewLayerShellSettings {
         output_option: OutputOption::OutputName(output.to_owned()),
         events_transparent: false,
         namespace: Some(NAMESPACE.to_owned()),
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn dragging_toolbar(event: Event, _: event::Status, id: window::Id) -> Option<Message> {
+    match event {
+        Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+            Some(Message::ToolbarMoved(id, position))
+        }
+        Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+            Some(Message::ToolbarDropped)
+        }
+        _ => None,
     }
 }
 
