@@ -83,6 +83,8 @@ pub enum Message {
     /// Enter: the action the overlay was opened for.
     Accept,
     SelectAll,
+    /// Selects the screen with this index.
+    SelectScreen(usize),
     Nudge(Vector),
     /// Keeps the selection for the next screenshot, or forgets it.
     ToggleRemember,
@@ -457,11 +459,11 @@ impl Overlay {
                 self.keep_remembered();
                 Task::none()
             }
-            Message::SelectAll => {
-                self.selection = Selection::selected(self.desktop);
-                self.keep_remembered();
-                Task::none()
-            }
+            Message::SelectAll => self.select_area(self.desktop),
+            Message::SelectScreen(index) => match self.screens.get(index) {
+                Some(screen) => self.select_area(screen.area),
+                None => Task::none(),
+            },
             Message::ToggleRemember => {
                 self.toggle_remember();
                 Task::none()
@@ -519,6 +521,12 @@ impl Overlay {
     }
 
     /// Forgets the remembered region once the selection is changed.
+    fn select_area(&mut self, area: Rectangle) -> Task<Message> {
+        self.selection = Selection::selected(area);
+        self.keep_remembered();
+        Task::none()
+    }
+
     fn keep_remembered(&mut self) {
         if self
             .remembered
