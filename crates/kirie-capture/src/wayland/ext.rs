@@ -37,8 +37,12 @@ pub(super) fn capture(
         Cursor::Shown => ext_image_copy_capture_manager_v1::Options::PaintCursors,
     };
     let mut sessions = Vec::new();
-    for (index, output) in state.outputs.iter().enumerate() {
-        let wl = output.wl.as_ref().expect("bound outputs have a wl_output");
+    for (index, wl) in state
+        .outputs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, output)| Some((index, output.wl.as_ref()?)))
+    {
         let source = sources.create_source(wl, handle, ());
         sessions.push((
             manager.create_session(&source, options, handle, index),
@@ -60,7 +64,10 @@ pub(super) fn capture(
             .ok_or_else(|| CaptureError::Protocol("no buffer size".into()))?;
         let format = ShmFormat::pick(pending.shm_formats.iter().copied())
             .ok_or_else(|| CaptureError::Protocol("no 32-bit shm format offered".into()))?;
-        let buffer = ShmBuffer::new(shm, handle, width, height, width * 4, format)?;
+        let stride = width
+            .checked_mul(4)
+            .ok_or_else(|| CaptureError::Protocol(format!("a {width} pixel wide buffer")))?;
+        let buffer = ShmBuffer::new(shm, handle, width, height, stride, format)?;
         let frame = session.create_frame(handle, index);
         frame.attach_buffer(&buffer.buffer);
         frame.damage_buffer(0, 0, i32::MAX, i32::MAX);
@@ -75,7 +82,9 @@ pub(super) fn capture(
     }
     manager.destroy();
     sources.destroy();
-    queue.roundtrip(state)?;
+    queue
+        .flush()
+        .map_err(|error| CaptureError::Protocol(error.to_string()))?;
     Ok(())
 }
 

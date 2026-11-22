@@ -75,7 +75,8 @@ impl OutputState {
 pub(crate) struct Pending {
     shm_formats: Vec<u32>,
     size: Option<(u32, u32)>,
-    stride: Option<u32>,
+    /// The stride wlr-screencopy asks for, per shm format.
+    strides: Vec<(u32, u32)>,
     constraints_done: bool,
     buffer: Option<shm::ShmBuffer>,
     y_invert: bool,
@@ -198,16 +199,51 @@ fn bind_outputs(
     Ok(())
 }
 
-/// Waits until the compositor has answered every pending capture.
+/// How long a compositor may take to answer a capture.
+const ANSWER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Waits until the compositor has answered every pending capture, or gives up after
+/// `ANSWER_TIMEOUT` so a compositor that never answers cannot hang Kirie.
 fn wait(
     state: &mut State,
     queue: &mut EventQueue<State>,
     done: impl Fn(&Pending) -> bool,
 ) -> Result<(), CaptureError> {
-    while !state.pending.iter().all(&done) {
-        queue.blocking_dispatch(state)?;
+    let deadline = std::time::Instant::now() + ANSWER_TIMEOUT;
+    loop {
+        queue.dispatch_pending(state)?;
+        if state.pending.iter().all(&done) {
+            return Ok(());
+        }
+        queue
+            .flush()
+            .map_err(|error| CaptureError::Protocol(error.to_string()))?;
+        let Some(guard) = queue.prepare_read() else {
+            continue;
+        };
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err(CaptureError::Failed(
+                "the compositor did not answer in time".into(),
+            ));
+        }
+        let timeout = rustix::event::Timespec {
+            tv_sec: i64::try_from(left.as_secs()).unwrap_or(i64::MAX),
+            tv_nsec: i64::from(left.subsec_nanos()),
+        };
+        let fd = guard.connection_fd();
+        let mut fds = [rustix::event::PollFd::new(
+            &fd,
+            rustix::event::PollFlags::IN | rustix::event::PollFlags::ERR,
+        )];
+        let ready = rustix::event::poll(&mut fds, Some(&timeout))
+            .map_err(|error| CaptureError::Io(error.into()))?;
+        if ready > 0 {
+            guard
+                .read()
+                .map_err(|error| CaptureError::Protocol(error.to_string()))?;
+        }
     }
-    Ok(())
 }
 
 fn frames(state: &State) -> Result<Vec<Frame>, CaptureError> {

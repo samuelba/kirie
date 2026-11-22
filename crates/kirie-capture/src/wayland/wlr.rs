@@ -29,8 +29,12 @@ pub(super) fn capture(
         .map_err(|error| CaptureError::Protocol(format!("{error}")))?;
     let overlay_cursor = i32::from(cursor == crate::Cursor::Shown);
     let mut frames = Vec::new();
-    for (index, output) in state.outputs.iter().enumerate() {
-        let wl = output.wl.as_ref().expect("bound outputs have a wl_output");
+    for (index, wl) in state
+        .outputs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, output)| Some((index, output.wl.as_ref()?)))
+    {
         frames.push(manager.capture_output(overlay_cursor, wl, handle, index));
     }
     state.pending = (0..frames.len()).map(|_| Pending::default()).collect();
@@ -52,9 +56,14 @@ pub(super) fn capture(
         let (width, height) = pending
             .size
             .ok_or_else(|| CaptureError::Protocol("no buffer size".into()))?;
-        let stride = pending.stride.unwrap_or(width * 4);
         let format = ShmFormat::pick(pending.shm_formats.iter().copied())
             .ok_or_else(|| CaptureError::Protocol("no 32-bit shm format offered".into()))?;
+        let stride = pending
+            .strides
+            .iter()
+            .find(|(offered, _)| *offered == format.to_wayland())
+            .map(|(_, stride)| *stride)
+            .ok_or_else(|| CaptureError::Protocol("no stride for the buffer format".into()))?;
         let buffer = ShmBuffer::new(shm, handle, width, height, stride, format)?;
         frame.copy(&buffer.buffer);
         pending.buffer = Some(buffer);
@@ -65,7 +74,9 @@ pub(super) fn capture(
         frame.destroy();
     }
     manager.destroy();
-    queue.roundtrip(state)?;
+    queue
+        .flush()
+        .map_err(|error| CaptureError::Protocol(error.to_string()))?;
     Ok(())
 }
 
@@ -93,7 +104,7 @@ impl Dispatch<ZwlrScreencopyFrameV1, usize> for State {
                 if ShmFormat::from_wayland(format).is_some() {
                     pending.shm_formats.push(format);
                     pending.size = Some((width, height));
-                    pending.stride = Some(stride);
+                    pending.strides.push((format, stride));
                 }
             }
             zwlr_screencopy_frame_v1::Event::BufferDone => pending.constraints_done = true,
