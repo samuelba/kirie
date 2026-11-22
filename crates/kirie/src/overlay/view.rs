@@ -179,7 +179,10 @@ impl Overlay {
         } else {
             mouse::Interaction::Grab
         });
-        container(row![grip, panel.push(properties).push(main)].spacing(space::XS))
+        let content = row![grip, panel.push(properties).push(main)]
+            .spacing(space::XS)
+            .height(Length::Shrink);
+        container(content)
             .padding(space::S)
             .style(floating(palette))
             .into()
