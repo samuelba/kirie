@@ -98,7 +98,7 @@ fn capture_to_file(path: &std::path::Path, cursor: bool) -> anyhow::Result<()> {
     } else {
         Cursor::Hidden
     };
-    let (protocol, frames) = kirie_capture::wayland::capture(cursor)?;
+    let (protocol, frames) = block_on(kirie_capture::capture(cursor))??;
     for frame in &frames {
         tracing::info!(
             output = frame.output.name,
@@ -154,7 +154,7 @@ fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
     } else {
         Cursor::Hidden
     };
-    let (_, frames) = kirie_capture::wayland::capture(cursor)?;
+    let (_, frames) = block_on(kirie_capture::capture(cursor))??;
     let primary = if edit {
         overlay::Action::Edit
     } else {

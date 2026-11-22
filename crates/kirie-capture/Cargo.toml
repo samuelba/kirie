@@ -12,11 +12,17 @@ publish = false
 [dependencies]
 image.workspace = true
 rustix = { version = "1", features = ["fs"] }
+futures-util = { version = "0.3", default-features = false }
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] }
 thiserror.workspace = true
 tracing.workspace = true
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"] }
 
 [lints]
 workspace = true

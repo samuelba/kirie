@@ -3,6 +3,7 @@
 
 pub mod geometry;
 pub mod pixels;
+pub mod portal;
 pub mod wayland;
 
 pub use geometry::{Frame, Output, Rect, Transform};
@@ -31,8 +32,41 @@ pub enum CaptureError {
     Protocol(String),
     #[error("capturing {0}")]
     Failed(String),
+    #[error("the screenshot portal failed: {0}")]
+    Portal(String),
+    #[error("the screenshot was cancelled")]
+    Cancelled,
     #[error(transparent)]
     Pixels(#[from] pixels::PixelError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+/// How a capture was taken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backend {
+    Wayland(wayland::Protocol),
+    Portal,
+}
+
+/// Captures every screen: through the compositor's capture protocol when it has one, else
+/// through the screenshot portal. `KIRIE_CAPTURE=portal` forces the portal.
+pub async fn capture(cursor: Cursor) -> Result<(Backend, Vec<Frame>), CaptureError> {
+    let forced_portal = std::env::var("KIRIE_CAPTURE").is_ok_and(|value| value == "portal");
+    if !forced_portal {
+        match wayland::capture(cursor) {
+            Ok((protocol, frames)) => return Ok((Backend::Wayland(protocol), frames)),
+            Err(CaptureError::Unsupported) => {}
+            Err(error) => {
+                tracing::warn!(%error, "the compositor's capture failed, asking the portal");
+            }
+        }
+    }
+    let outputs = wayland::outputs()?;
+    let image = portal::screenshot(false).await?;
+    let frames = portal::slice(&image, &outputs);
+    if frames.is_empty() {
+        return Err(CaptureError::NoScreens);
+    }
+    Ok((Backend::Portal, frames))
 }

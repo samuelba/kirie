@@ -1751,13 +1751,16 @@ dependencies = [
 name = "kirie-capture"
 version = "0.0.0"
 dependencies = [
+ "futures-util",
  "image",
  "rustix 1.1.6",
  "thiserror 2.0.21",
+ "tokio",
  "tracing",
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
+ "zbus",
 ]
 
 [[package]]

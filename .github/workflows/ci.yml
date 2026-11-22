@@ -46,6 +46,8 @@ jobs:
           tool: cargo-nextest
       - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev
       - run: cargo nextest run --workspace --locked --no-tests=pass
+      - name: The screenshot portal client against a fake portal
+        run: dbus-run-session -- cargo nextest run --workspace --locked --run-ignored only -E 'test(fake_portal)'
       - run: cargo build --workspace --release --locked
 
   coverage:

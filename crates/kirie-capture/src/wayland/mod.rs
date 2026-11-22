@@ -119,6 +119,16 @@ pub enum Protocol {
     WlrScreencopy,
 }
 
+/// The screens and where they sit, without capturing them.
+pub fn outputs() -> Result<Vec<Output>, CaptureError> {
+    let connection = Connection::connect_to_env()?;
+    let (list, mut queue) = registry_queue_init::<State>(&connection)?;
+    let mut state = State::default();
+    let handle = queue.handle();
+    bind_outputs(&list, &handle, &mut state, &mut queue)?;
+    Ok(state.outputs.iter().map(OutputState::output).collect())
+}
+
 /// Captures every screen with the best protocol the compositor offers.
 pub fn capture(cursor: Cursor) -> Result<(Protocol, Vec<Frame>), CaptureError> {
     let connection = Connection::connect_to_env()?;
