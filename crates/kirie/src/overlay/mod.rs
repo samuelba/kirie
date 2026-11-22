@@ -74,7 +74,18 @@ pub enum Message {
     SelectAll,
     Nudge(Vector),
     Finished(Result<Outcome, String>),
+    Resized(window::Id, Size),
     Layer(LayerShellCustomActionWithId),
+}
+
+/// How the overlay's surfaces are made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Host {
+    /// A layer-shell surface on every screen, above everything.
+    Layer,
+    /// One fullscreen window, for desktops without layer-shell (GNOME without Kirie's
+    /// extension).
+    Window,
 }
 
 impl TryInto<LayerShellCustomActionWithId> for Message {
@@ -165,6 +176,7 @@ impl Overlay {
     pub fn boot(
         frames: Vec<Frame>,
         primary: Action,
+        host: Host,
         outcome: Arc<Mutex<Outcome>>,
     ) -> (Self, Task<Message>) {
         let screens: Vec<Screen> = frames
@@ -185,21 +197,30 @@ impl Overlay {
             .reduce(|all, area| all.union(&area))
             .unwrap_or_default();
         let mut surfaces = HashMap::new();
-        let open: Vec<Task<Message>> = frames
-            .iter()
-            .enumerate()
-            .map(|(index, frame)| {
-                let id = window::Id::unique();
-                surfaces.insert(id, index);
-                Task::done(Message::Layer(LayerShellCustomActionWithId::new(
-                    None,
-                    LayerShellCustomAction::NewLayerShell {
-                        settings: surface_settings(&frame.output.name),
-                        id,
-                    },
-                )))
-            })
-            .collect();
+        let open: Vec<Task<Message>> = match host {
+            Host::Layer => frames
+                .iter()
+                .enumerate()
+                .map(|(index, frame)| {
+                    let id = window::Id::unique();
+                    surfaces.insert(id, index);
+                    Task::done(Message::Layer(LayerShellCustomActionWithId::new(
+                        None,
+                        LayerShellCustomAction::NewLayerShell {
+                            settings: surface_settings(&frame.output.name),
+                            id,
+                        },
+                    )))
+                })
+                .collect(),
+            // Without layer-shell the compositor puts the window on a screen of its choosing;
+            // which one it is shows once the window has its size.
+            Host::Window => {
+                let (id, open) = window::open(window_settings());
+                surfaces.insert(id, 0);
+                vec![open.discard()]
+            }
+        };
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let document = Document::new(
             (desktop.x + desktop.width).max(1.0) as u32,
@@ -346,7 +367,30 @@ impl Overlay {
             Message::Accept => self.finish(self.primary),
             Message::Finished(Ok(outcome)) => self.close(outcome),
             Message::Finished(Err(error)) => self.close(Outcome::Failed(error)),
+            Message::Resized(id, size) => {
+                self.place(id, size);
+                Task::none()
+            }
             Message::Layer(_) => Task::none(),
+        }
+    }
+
+    /// Shows the screen a fullscreen window landed on: the one with the window's size.
+    fn place(&mut self, id: window::Id, size: Size) {
+        let Some(index) = self.screens.iter().position(|screen| {
+            (screen.area.width - size.width).abs() < 1.0
+                && (screen.area.height - size.height).abs() < 1.0
+        }) else {
+            return;
+        };
+        if let Some(shown) = self.surfaces.get_mut(&id)
+            && *shown != index
+        {
+            *shown = index;
+            if self.surfaces.len() == 1 {
+                self.desktop = self.screens[index].area;
+                self.selection = Selection::default();
+            }
         }
     }
 
@@ -510,11 +554,15 @@ impl Overlay {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        if self.typing.is_some() {
+        let keys = if self.typing.is_some() {
             event::listen_with(typing_key)
         } else {
             event::listen_with(key)
-        }
+        };
+        Subscription::batch([
+            keys,
+            window::resize_events().map(|(id, size)| Message::Resized(id, size)),
+        ])
     }
 
     #[expect(
@@ -523,6 +571,21 @@ impl Overlay {
     )]
     pub fn theme(&self, _: window::Id) -> iced::Theme {
         iced::Theme::Dark
+    }
+}
+
+fn window_settings() -> window::Settings {
+    window::Settings {
+        decorations: false,
+        fullscreen: true,
+        resizable: false,
+        level: window::Level::AlwaysOnTop,
+        exit_on_close_request: true,
+        platform_specific: window::settings::PlatformSpecific {
+            application_id: crate::APP_ID.to_owned(),
+            ..window::settings::PlatformSpecific::default()
+        },
+        ..window::Settings::default()
     }
 }
 
@@ -588,8 +651,9 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
     }
 }
 
-/// Shows the overlay on every screen as layer-shell surfaces until the user is done.
-pub fn run(frames: Vec<Frame>, primary: Action) -> Result<Outcome, String> {
+/// Shows the overlay until the user is done: layer-shell surfaces on every screen where the
+/// compositor has layer-shell, else one fullscreen window.
+pub fn run(frames: Vec<Frame>, primary: Action, host: Host) -> Result<Outcome, String> {
     use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
 
     let outcome = Arc::new(Mutex::new(Outcome::Cancelled));
@@ -601,25 +665,35 @@ pub fn run(frames: Vec<Frame>, primary: Action) -> Result<Outcome, String> {
             .ok()
             .and_then(|mut frames| frames.take())
             .unwrap_or_default();
-        Overlay::boot(frames, primary, shared.clone())
+        Overlay::boot(frames, primary, host, shared.clone())
     };
-    iced_layershell::daemon(boot, NAMESPACE, Overlay::update, Overlay::view)
-        .theme(Overlay::theme)
-        .subscription(Overlay::subscription)
-        .style(|_, _| iced::theme::Style {
-            background_color: iced::Color::TRANSPARENT,
-            text_color: iced::Color::WHITE,
-        })
-        .settings(Settings {
-            id: Some(crate::APP_ID.to_owned()),
-            layer_settings: LayerShellSettings {
-                start_mode: StartMode::Background,
-                ..LayerShellSettings::default()
-            },
-            ..Settings::default()
-        })
-        .run()
-        .map_err(|error| error.to_string())?;
+    let style = |_: &Overlay, _: &iced::Theme| iced::theme::Style {
+        background_color: iced::Color::TRANSPARENT,
+        text_color: iced::Color::WHITE,
+    };
+    let ran = match host {
+        Host::Layer => iced_layershell::daemon(boot, NAMESPACE, Overlay::update, Overlay::view)
+            .theme(Overlay::theme)
+            .subscription(Overlay::subscription)
+            .style(style)
+            .settings(Settings {
+                id: Some(crate::APP_ID.to_owned()),
+                layer_settings: LayerShellSettings {
+                    start_mode: StartMode::Background,
+                    ..LayerShellSettings::default()
+                },
+                ..Settings::default()
+            })
+            .run()
+            .map_err(|error| error.to_string()),
+        Host::Window => iced::daemon(boot, Overlay::update, Overlay::view)
+            .theme(Overlay::theme)
+            .subscription(Overlay::subscription)
+            .style(style)
+            .run()
+            .map_err(|error| error.to_string()),
+    };
+    ran?;
     Ok(outcome
         .lock()
         .map(|outcome| outcome.clone())

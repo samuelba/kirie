@@ -160,7 +160,14 @@ fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
     } else {
         overlay::Action::Copy
     };
-    match overlay::run(frames, primary).map_err(anyhow::Error::msg)? {
+    let host = if kirie_capture::wayland::globals().is_ok_and(|globals| globals.layer_shell)
+        && std::env::var("KIRIE_OVERLAY").as_deref() != Ok("window")
+    {
+        overlay::Host::Layer
+    } else {
+        overlay::Host::Window
+    };
+    match overlay::run(frames, primary, host).map_err(anyhow::Error::msg)? {
         overlay::Outcome::Saved(path) => {
             println!("{}", path.display());
             Ok(())
