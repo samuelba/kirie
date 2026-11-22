@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.samuelba.Kirie</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Kirie</name>
+  <summary>Cut a piece out of your screen and mark it up</summary>
+  <description>
+    <p>
+      Kirie freezes the screen, lets you pick a region, a window or a whole monitor, and mark it up
+      on the spot with arrows, boxes, text, blur and freehand ink. Or open any image in the editor
+      and annotate it there. It runs natively on Wayland: GNOME, COSMIC, KDE Plasma and the
+      layer-shell compositors.
+    </p>
+    <ul>
+      <li>Annotate on screen or later in the editor</li>
+      <li>Arrows, shapes, text, step numbers, highlighter, blur, pixelate and redact</li>
+      <li>Clean, sketch and ink annotation styles</li>
+      <li>Copy to the clipboard, save, or keep an editable project</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">dev.samuelba.Kirie.desktop</launchable>
+  <url type="homepage">https://github.com/samuelba/kirie</url>
+  <url type="bugtracker">https://github.com/samuelba/kirie/issues</url>
+  <url type="vcs-browser">https://github.com/samuelba/kirie</url>
+  <developer id="dev.samuelba">
+    <name>Samuel Bachmann</name>
+  </developer>
+  <provides>
+    <binary>kirie</binary>
+  </provides>
+  <categories>
+    <category>Graphics</category>
+    <category>2DGraphics</category>
+  </categories>
+  <branding>
+    <color type="primary" scheme_preference="light">#f4efe6</color>
+    <color type="primary" scheme_preference="dark">#16181d</color>
+  </branding>
+  <content_rating type="oars-1.1"/>
+</component>

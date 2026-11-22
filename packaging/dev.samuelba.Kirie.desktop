@@ -1,0 +1,24 @@
+[Desktop Entry]
+Type=Application
+Name=Kirie
+GenericName=Screenshot Tool
+Comment=Cut a piece out of your screen and mark it up
+Exec=kirie edit %F
+Icon=dev.samuelba.Kirie
+Terminal=false
+Categories=Graphics;2DGraphics;RasterGraphics;
+Keywords=screenshot;screen;capture;snip;annotate;markup;arrow;blur;
+MimeType=image/png;image/jpeg;image/webp;
+StartupNotify=true
+StartupWMClass=dev.samuelba.Kirie
+SingleMainWindow=true
+Actions=capture-region;capture-screen;
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2
+
+[Desktop Action capture-region]
+Name=Capture a Region
+Exec=kirie capture region
+
+[Desktop Action capture-screen]
+Name=Capture the Screen
+Exec=kirie capture screen
