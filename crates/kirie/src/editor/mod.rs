@@ -100,6 +100,7 @@ pub enum Message {
     Modifiers(keyboard::Modifiers),
     PickTool(Tool),
     PickStyle(StyleId),
+    ToggleShadow,
     PickColor(Rgba),
     /// Opens the color picker on a swatch, or to add one.
     EditColor(Target),
@@ -270,6 +271,7 @@ impl Editor {
                 }
             }
             Message::PickStyle(_)
+            | Message::ToggleShadow
             | Message::PickColor(_)
             | Message::EditColor(_)
             | Message::Picker(_)
@@ -345,6 +347,10 @@ impl Editor {
         match message {
             Message::PickStyle(style) => {
                 self.history.apply(Op::SetStyle(style));
+            }
+            Message::ToggleShadow => {
+                let shadow = !self.document().shadow;
+                self.history.apply(Op::SetShadow(shadow));
             }
             Message::PickColor(color) => self.repaint(|paint| paint.color = color),
             Message::EditColor(target) => {

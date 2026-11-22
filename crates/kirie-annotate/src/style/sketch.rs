@@ -248,6 +248,7 @@ mod tests {
             paint: Paint::default(),
             unit: 1.0,
             seed: 3,
+            shadow: true,
         };
         assert!(hachure(&mut rng, &square, &plain).is_empty());
         let filled = Context {

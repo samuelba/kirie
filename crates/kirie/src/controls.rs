@@ -53,6 +53,27 @@ pub fn styles<'a, Message: Clone + 'a>(
     .into()
 }
 
+/// Turns the shadow marks cast on or off; only the clean style draws one.
+pub fn shadow<'a, Message: Clone + 'a>(
+    style: StyleId,
+    shadow: bool,
+    palette: Palette,
+    on_toggle: Message,
+) -> Element<'a, Message> {
+    let clean = style == StyleId::Clean;
+    icon_button(
+        Icon::Shadow,
+        if clean {
+            "Shadow"
+        } else {
+            "Shadow (in the Clean style)"
+        },
+        palette,
+        clean && shadow,
+        clean.then_some(on_toggle),
+    )
+}
+
 /// The swatches to draw with, then a button to add a color. A right click on a swatch
 /// changes it; `editing` is what the picker is open for, if it is.
 pub fn colors<'a, Message: Clone + 'a>(

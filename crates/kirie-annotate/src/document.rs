@@ -17,6 +17,9 @@ pub struct Document {
     /// Image pixels per logical pixel, so marks look the same size on high-density captures.
     pub unit: f64,
     pub style: StyleId,
+    /// Whether marks cast a shadow, in the styles that draw one.
+    #[serde(default = "casts_shadows")]
+    pub shadow: bool,
     /// The part of the image that is kept, if cropped.
     pub crop: Option<Rect>,
     shapes: Vec<Arc<Shape>>,
@@ -57,7 +60,12 @@ pub enum Op {
     },
     Clear,
     SetStyle(StyleId),
+    SetShadow(bool),
     Crop(Option<Rect>),
+}
+
+fn casts_shadows() -> bool {
+    true
 }
 
 impl Document {
@@ -71,6 +79,7 @@ impl Document {
                 1.0
             },
             style: StyleId::default(),
+            shadow: true,
             crop: None,
             shapes: Vec::new(),
             next_id: 1,
@@ -150,6 +159,7 @@ impl Document {
     ) -> Document {
         let mut next = Document::new(width, height, unit);
         next.style = self.style;
+        next.shadow = self.shadow;
         next.next_id = self.next_id;
         next.shapes = self
             .shapes
@@ -207,6 +217,7 @@ impl Document {
             }
             Op::Clear => next.shapes.clear(),
             Op::SetStyle(style) => next.style = style,
+            Op::SetShadow(shadow) => next.shadow = shadow,
             Op::Crop(crop) => {
                 next.crop = crop
                     .map(|rect| self.clamp(rect))
@@ -469,6 +480,14 @@ mod tests {
         assert_eq!(cropped.apply(Op::Crop(None)).crop, None);
         let styled = doc.apply(Op::SetStyle(StyleId::Sketch));
         assert_eq!(styled.style, StyleId::Sketch);
+        assert!(doc.shadow);
+        let flat = doc.apply(Op::SetShadow(false));
+        assert!(!flat.shadow);
+        assert!(
+            !flat
+                .transformed(kurbo::Affine::IDENTITY, 100, 50, 1.0)
+                .shadow
+        );
     }
 
     #[test]

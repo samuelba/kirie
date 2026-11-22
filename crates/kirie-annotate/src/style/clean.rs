@@ -1,4 +1,5 @@
-//! Clean: crisp vectors with round ends and a soft shadow that lifts them off the screenshot.
+//! Clean: crisp vectors with round ends and, unless turned off, a soft shadow that lifts them
+//! off the screenshot.
 
 use kurbo::{BezPath, Point, RoundedRect, Shape as _, Vec2};
 
@@ -17,18 +18,19 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
     let width = context.width();
     let shadow_offset = Vec2::new(0.0, 1.5 * context.unit);
     let stroke = |path: BezPath| {
-        vec![
-            Primitive::Stroke {
-                path: translated(&path, shadow_offset),
-                color: SHADOW,
-                width: width + context.unit,
-            },
-            Primitive::Stroke {
+        let shadow = context.shadow.then(|| Primitive::Stroke {
+            path: translated(&path, shadow_offset),
+            color: SHADOW,
+            width: width + context.unit,
+        });
+        shadow
+            .into_iter()
+            .chain([Primitive::Stroke {
                 path,
                 color: context.color(),
                 width,
-            },
-        ]
+            }])
+            .collect::<Vec<_>>()
     };
     match kind {
         Kind::Line { from, to } => stroke(line(*from, *to)),
@@ -102,17 +104,22 @@ fn arrow(from: Point, to: Point, context: &Context) -> Vec<Primitive> {
     head_path.line_to(right);
     head_path.close_path();
     let shadow = Vec2::new(0.0, 1.5 * context.unit);
-    vec![
-        Primitive::Stroke {
-            path: translated(&line(from, shaft_end), shadow),
-            color: SHADOW,
-            width: width + context.unit,
-        },
-        Primitive::Fill {
-            path: translated(&head_path, shadow),
-            color: SHADOW,
-            rule: FillRule::NonZero,
-        },
+    let mut drawn = Vec::with_capacity(5);
+    if context.shadow {
+        drawn.extend([
+            Primitive::Stroke {
+                path: translated(&line(from, shaft_end), shadow),
+                color: SHADOW,
+                width: width + context.unit,
+            },
+            Primitive::Fill {
+                path: translated(&head_path, shadow),
+                color: SHADOW,
+                rule: FillRule::NonZero,
+            },
+        ]);
+    }
+    drawn.extend([
         Primitive::Stroke {
             path: line(from, shaft_end),
             color: context.color(),
@@ -129,7 +136,8 @@ fn arrow(from: Point, to: Point, context: &Context) -> Vec<Primitive> {
             color: context.color(),
             width: width * 0.6,
         },
-    ]
+    ]);
+    drawn
 }
 
 fn counter(at: Point, number: u32, context: &Context) -> Vec<Primitive> {
@@ -140,28 +148,31 @@ fn counter(at: Point, number: u32, context: &Context) -> Vec<Primitive> {
         radius + context.unit,
     )
     .to_path(0.1);
-    vec![
-        Primitive::Fill {
-            path: shadow,
-            color: SHADOW,
-            rule: FillRule::NonZero,
-        },
-        Primitive::Fill {
-            path: circle,
-            color: context.color(),
-            rule: FillRule::NonZero,
-        },
-        Primitive::Text {
-            at,
-            text: number.to_string(),
-            size: radius * 1.15,
-            color: text_on(context.color()),
-            font: Font::Sans,
-            align: Align::Left,
-            halo: None,
-            centered: true,
-        },
-    ]
+    let shadow = context.shadow.then_some(Primitive::Fill {
+        path: shadow,
+        color: SHADOW,
+        rule: FillRule::NonZero,
+    });
+    shadow
+        .into_iter()
+        .chain([
+            Primitive::Fill {
+                path: circle,
+                color: context.color(),
+                rule: FillRule::NonZero,
+            },
+            Primitive::Text {
+                at,
+                text: number.to_string(),
+                size: radius * 1.15,
+                color: text_on(context.color()),
+                font: Font::Sans,
+                align: Align::Left,
+                halo: None,
+                centered: true,
+            },
+        ])
+        .collect()
 }
 
 #[cfg(test)]
@@ -191,6 +202,7 @@ mod tests {
             },
             unit: 1.0,
             seed: 1,
+            shadow: true,
         }
     }
 
@@ -222,6 +234,37 @@ mod tests {
         };
         assert_eq!(*color, SHADOW);
         assert!(path.bounding_box().y0 > 0.0);
+    }
+
+    #[test]
+    fn shadows_can_be_turned_off() {
+        let flat = Context {
+            shadow: false,
+            ..context()
+        };
+        let kinds = [
+            Kind::Line {
+                from: Point::ORIGIN,
+                to: Point::new(10.0, 0.0),
+            },
+            Kind::Arrow {
+                from: Point::ORIGIN,
+                to: Point::new(40.0, 0.0),
+            },
+            Kind::Counter {
+                at: Point::new(20.0, 20.0),
+                number: 1,
+            },
+        ];
+        for kind in kinds {
+            let shaded = primitives(&kind, &context());
+            let plain = primitives(&kind, &flat);
+            assert!(plain.len() < shaded.len(), "{kind:?}");
+            assert!(plain.iter().all(|primitive| !matches!(
+                primitive,
+                Primitive::Fill { color, .. } | Primitive::Stroke { color, .. } if *color == SHADOW
+            )));
+        }
     }
 
     #[test]

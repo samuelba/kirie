@@ -104,7 +104,18 @@ impl Editor {
                 .push(primary_button(Icon::Copy, "Copy", palette, Message::Copy));
         }
         actions = actions.push(divider(palette)).push(theme);
-        let styles = controls::styles(self.document().style, palette, Message::PickStyle);
+        let document = self.document();
+        let styles = row![
+            controls::styles(document.style, palette, Message::PickStyle),
+            controls::shadow(
+                document.style,
+                document.shadow,
+                palette,
+                Message::ToggleShadow
+            ),
+        ]
+        .spacing(space::S)
+        .align_y(Alignment::Center);
         container(
             row![
                 brand,

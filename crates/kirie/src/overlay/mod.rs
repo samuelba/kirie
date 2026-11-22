@@ -63,6 +63,7 @@ pub enum Message {
     Modifiers(keyboard::Modifiers),
     PickTool(Option<Tool>),
     PickStyle(StyleId),
+    ToggleShadow,
     PickColor(kirie_annotate::Rgba),
     /// Opens the color picker on a swatch, or to add one.
     EditColor(Target),
@@ -373,6 +374,7 @@ impl Overlay {
                 Task::none()
             }
             Message::PickStyle(_)
+            | Message::ToggleShadow
             | Message::PickColor(_)
             | Message::EditColor(_)
             | Message::Picker(_)
@@ -432,6 +434,10 @@ impl Overlay {
         match message {
             Message::PickStyle(style) => {
                 self.history.apply(Op::SetStyle(style));
+            }
+            Message::ToggleShadow => {
+                let shadow = !self.document().shadow;
+                self.history.apply(Op::SetShadow(shadow));
             }
             Message::PickColor(color) => {
                 self.repaint(|paint| paint.color = color);

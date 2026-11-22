@@ -44,27 +44,34 @@ impl StyleId {
 
 /// Everything the document's marks draw, bottom to top, in image coordinates.
 pub fn render_list(document: &Document) -> Vec<Primitive> {
-    let stage = Stage::new(document.visible(), document.shapes());
+    let stage = Stage::new(document.visible(), document.shadow, document.shapes());
     document
         .shapes()
         .flat_map(|shape| primitives(shape, document.style, document.unit, &stage))
         .collect()
 }
 
-/// The image area shown and the spotlights on it. All spotlights dim that area once, together,
-/// where the lowest of them sits, so overlapping spotlights never darken it twice.
+/// What marks are drawn onto: the image area shown, whether marks cast shadows, and the
+/// spotlights. All spotlights dim that area once, together, where the lowest of them sits, so
+/// overlapping spotlights never darken it twice.
 #[derive(Debug, Clone, Default)]
 pub struct Stage {
     visible: Rect,
+    shadow: bool,
     holes: Vec<Rect>,
     lowest: Option<crate::shape::ShapeId>,
 }
 
 impl Stage {
     /// `shapes` bottom to top.
-    pub fn new<'a>(visible: Rect, shapes: impl IntoIterator<Item = &'a Shape>) -> Self {
+    pub fn new<'a>(
+        visible: Rect,
+        shadow: bool,
+        shapes: impl IntoIterator<Item = &'a Shape>,
+    ) -> Self {
         let mut stage = Self {
             visible,
+            shadow,
             ..Self::default()
         };
         for shape in shapes {
@@ -130,6 +137,7 @@ fn unturned(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Vec<Prim
         paint: shape.paint,
         unit,
         seed: shape.id.0,
+        shadow: stage.shadow,
     };
     match &shape.kind {
         Kind::Blur { rect } => vec![Primitive::Effect {
@@ -171,6 +179,8 @@ struct Context {
     unit: f64,
     /// Makes hand-drawn wobble the same on every redraw of the same mark.
     seed: u64,
+    /// Whether marks cast a shadow, in the styles that draw one.
+    shadow: bool,
 }
 
 impl Context {
@@ -507,7 +517,7 @@ mod tests {
                         style: None,
                         rotation: 0.0,
                     };
-                    let stage = Stage::new(Rect::new(0.0, 0.0, 100.0, 100.0), [&shape]);
+                    let stage = Stage::new(Rect::new(0.0, 0.0, 100.0, 100.0), true, [&shape]);
                     let drawn = primitives(&shape, style, 1.0, &stage);
                     assert!(!drawn.is_empty(), "{style:?} drew nothing for {kind:?}");
                 }
@@ -674,6 +684,7 @@ mod tests {
             },
             unit: 2.0,
             seed: 0,
+            shadow: true,
         };
         assert!((context.width() - 14.0).abs() < 1e-9);
         assert_eq!(context.tint().a, 0x40);

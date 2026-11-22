@@ -14,7 +14,7 @@ use crate::picker::{self, Picker};
 
 pub const TEXT_INPUT: &str = "kirie-text";
 /// Room the toolbar takes; used to keep it on screen.
-const TOOLBAR: iced::Size = iced::Size::new(930.0, 92.0);
+const TOOLBAR: iced::Size = iced::Size::new(970.0, 92.0);
 const GAP: f32 = 12.0;
 /// A swatch and the space after it.
 const SWATCH: f32 = 30.0;
@@ -188,7 +188,17 @@ impl Overlay {
         let palette = self.palette;
         let style = self.style();
         let paint = self.shown_paint();
-        let styles = controls::styles(style, palette, Message::PickStyle);
+        let styles = row![
+            controls::styles(style, palette, Message::PickStyle),
+            controls::shadow(
+                style,
+                self.document().shadow,
+                palette,
+                Message::ToggleShadow
+            ),
+        ]
+        .spacing(space::XS)
+        .align_y(iced::Alignment::Center);
         let colors = controls::colors(
             &self.swatches,
             paint,

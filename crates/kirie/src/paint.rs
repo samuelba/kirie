@@ -180,7 +180,7 @@ impl Painter<'_> {
                 _ => shape,
             })
             .collect();
-        let stage = style::Stage::new(marks.visible, &shapes);
+        let stage = style::Stage::new(marks.visible, document.shadow, &shapes);
         let mut picked = None;
         for shape in shapes {
             let draft = shape.id == document.next_id();

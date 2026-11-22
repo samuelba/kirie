@@ -58,6 +58,7 @@ icons! {
     AlignCenter => "text-align-center",
     AlignRight => "text-align-end",
     TextOutline => "type-outline",
+    Shadow => "shadow",
 }
 
 impl Icon {
