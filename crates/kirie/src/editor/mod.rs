@@ -114,6 +114,8 @@ pub enum Message {
     Opened(Result<Loaded, String>),
     ToastExpired(u64),
     Ipc(crate::ipc::Request),
+    /// The desktop switched between light and dark.
+    SystemScheme(Scheme),
     /// Hides the window and opens the overlay; the capture comes back over D-Bus.
     Capture,
     CaptureEnded(Result<(), String>),
@@ -146,6 +148,8 @@ pub struct Editor {
     modifiers: keyboard::Modifiers,
     toast: Option<Toast>,
     toasts: u64,
+    /// Set once the user picks light or dark; until then the editor follows the desktop.
+    scheme_chosen: bool,
     typesetter: RefCell<Typesetter>,
     patches: RefCell<HashMap<crate::paint::PatchKey, image::Handle>>,
 }
@@ -175,6 +179,7 @@ impl Editor {
             modifiers: keyboard::Modifiers::default(),
             toast: None,
             toasts: 0,
+            scheme_chosen: false,
             typesetter: RefCell::new(Typesetter::new()),
             patches: RefCell::new(HashMap::new()),
         };
@@ -253,12 +258,8 @@ impl Editor {
             Message::PickColor(color) => self.repaint(|paint| paint.color = color),
             Message::PickWeight(weight) => self.repaint(|paint| paint.weight = weight),
             Message::ToggleFill => self.repaint(|paint| paint.filled = !paint.filled),
-            Message::ToggleScheme => {
-                self.palette = match self.palette.scheme {
-                    Scheme::Dark => Palette::LIGHT,
-                    Scheme::Light => Palette::DARK,
-                };
-            }
+            Message::SystemScheme(scheme) => self.follow(Some(scheme)),
+            Message::ToggleScheme => self.follow(None),
             Message::TextChanged(text) => {
                 if let Some(typing) = &mut self.typing {
                     typing.text = text;
@@ -318,6 +319,21 @@ impl Editor {
             }
         }
         Task::none()
+    }
+
+    /// Follows the desktop's `scheme` until the user switches it themselves (`None`).
+    fn follow(&mut self, scheme: Option<Scheme>) {
+        match scheme {
+            Some(scheme) if !self.scheme_chosen => self.palette = Palette::of(scheme),
+            Some(_) => {}
+            None => {
+                self.scheme_chosen = true;
+                self.palette = match self.palette.scheme {
+                    Scheme::Dark => Palette::LIGHT,
+                    Scheme::Light => Palette::DARK,
+                };
+            }
+        }
     }
 
     /// Changes the paint for new marks, and the picked mark's paint too.
@@ -454,6 +470,7 @@ impl Editor {
         Subscription::batch([
             keys,
             Subscription::run(crate::ipc::requests).map(Message::Ipc),
+            Subscription::run(crate::appearance::changes).map(Message::SystemScheme),
         ])
     }
 
