@@ -286,7 +286,7 @@ impl Editor {
             colors = colors.push(picker::view(open, palette).map(Message::Picker));
         }
         let mut content = column![
-            column![text("Colour").size(12).color(palette.muted), colors].spacing(space::S),
+            column![text("Color").size(12).color(palette.muted), colors].spacing(space::S),
             section(
                 "Weight",
                 controls::weights(self.paint, palette, Message::PickWeight)

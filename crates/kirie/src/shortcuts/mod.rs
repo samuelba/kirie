@@ -128,7 +128,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn desktops_are_recognised() {
+    fn desktops_are_recognized() {
         assert_eq!(desktop("COSMIC"), Desktop::Cosmic);
         assert_eq!(desktop("ubuntu:GNOME"), Desktop::Gnome);
         assert_eq!(desktop("GNOME-Classic:GNOME"), Desktop::Gnome);

@@ -1,4 +1,4 @@
-//! The colours offered for drawing: the defaults, which can be changed, and custom colours
+//! The colors offered for drawing: the defaults, which can be changed, and custom colors
 //! kept for reuse, saved in `~/.config/kirie/colors.ron`.
 
 use std::path::{Path, PathBuf};
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use kirie_annotate::{PALETTE, Rgba};
 use serde::{Deserialize, Serialize};
 
-/// Custom colours beyond this many drop the oldest.
+/// Custom colors beyond this many drop the oldest.
 pub const MAX_CUSTOM: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,7 +31,7 @@ impl Default for Swatches {
     }
 }
 
-/// The file's form: colours as `#rrggbb`, so it is easy to edit by hand.
+/// The file's form: colors as `#rrggbb`, so it is easy to edit by hand.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct Stored {
@@ -48,7 +48,7 @@ impl Swatches {
         &self.custom
     }
 
-    /// The colour new marks start with.
+    /// The color new marks start with.
     pub fn first(&self) -> Rgba {
         self.defaults[0]
     }
@@ -60,7 +60,7 @@ impl Swatches {
         }
     }
 
-    /// Keeps `color` as the newest custom colour, unless it is offered already.
+    /// Keeps `color` as the newest custom color, unless it is offered already.
     pub fn add(&mut self, color: Rgba) {
         if self.defaults.contains(&color) || self.custom.contains(&color) {
             return;
@@ -69,7 +69,7 @@ impl Swatches {
         self.custom.truncate(MAX_CUSTOM);
     }
 
-    /// Changes a swatch. A custom colour that would repeat another swatch goes away instead.
+    /// Changes a swatch. A custom color that would repeat another swatch goes away instead.
     pub fn replace(&mut self, slot: Slot, color: Rgba) {
         match slot {
             Slot::Default(index) => {
@@ -107,7 +107,7 @@ impl Swatches {
         self.defaults = PALETTE;
     }
 
-    /// The saved colours, or the built-in ones when there are none or they cannot be read.
+    /// The saved colors, or the built-in ones when there are none or they cannot be read.
     pub fn load() -> Self {
         let Some(path) = path() else {
             return Self::default();
@@ -119,16 +119,16 @@ impl Swatches {
                     path = %path.display(),
                     backup = %backup.display(),
                     %error,
-                    "unreadable colours; keeping them aside and starting from the built-in ones"
+                    "unreadable colors; keeping them aside and starting from the built-in ones"
                 );
                 if let Err(error) = std::fs::rename(&path, &backup) {
-                    tracing::warn!(%error, "cannot keep the unreadable colours aside");
+                    tracing::warn!(%error, "cannot keep the unreadable colors aside");
                 }
                 Self::default()
             }),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Self::default(),
             Err(error) => {
-                tracing::warn!(path = %path.display(), %error, "cannot read the colours");
+                tracing::warn!(path = %path.display(), %error, "cannot read the colors");
                 Self::default()
             }
         }
@@ -137,7 +137,7 @@ impl Swatches {
     pub fn save(&self) -> Result<(), String> {
         let path = path().ok_or("cannot find the config folder")?;
         write(&path, &self.to_ron()?)
-            .map_err(|error| format!("cannot save colours to {}: {error}", path.display()))
+            .map_err(|error| format!("cannot save colors to {}: {error}", path.display()))
     }
 
     fn parse(text: &str) -> Result<Self, ron::error::SpannedError> {
@@ -188,7 +188,7 @@ mod tests {
     const PINK: Rgba = Rgba::rgb(0xec, 0x48, 0x99);
 
     #[test]
-    fn custom_colours_come_newest_first_without_repeats() {
+    fn custom_colors_come_newest_first_without_repeats() {
         let mut swatches = Swatches::default();
         swatches.add(TEAL);
         swatches.add(PINK);
@@ -198,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_colours_keep_only_the_newest() {
+    fn custom_colors_keep_only_the_newest() {
         let mut swatches = Swatches::default();
         for blue in 0..=u8::try_from(MAX_CUSTOM).unwrap() {
             swatches.add(Rgba::rgb(1, 2, blue));
@@ -231,7 +231,7 @@ mod tests {
     }
 
     #[test]
-    fn only_custom_colours_are_removed() {
+    fn only_custom_colors_are_removed() {
         let mut swatches = Swatches::default();
         swatches.add(TEAL);
         swatches.remove(Slot::Default(0));
@@ -243,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn colours_survive_a_round_trip() {
+    fn colors_survive_a_round_trip() {
         let mut swatches = Swatches::default();
         swatches.replace(Slot::Default(3), PINK);
         swatches.add(TEAL);

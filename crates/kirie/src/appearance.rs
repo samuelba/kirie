@@ -55,7 +55,7 @@ pub fn changes() -> impl Stream<Item = Scheme> {
             Ok::<_, zbus::Error>(())
         };
         if let Err(error) = watched.await {
-            tracing::debug!(%error, "no colour scheme from the Settings portal");
+            tracing::debug!(%error, "no color scheme from the Settings portal");
         }
     })
 }

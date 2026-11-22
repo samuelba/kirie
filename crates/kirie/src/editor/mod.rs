@@ -99,7 +99,7 @@ pub enum Message {
     PickTool(Tool),
     PickStyle(StyleId),
     PickColor(Rgba),
-    /// Opens the colour picker on a swatch, or to add one.
+    /// Opens the color picker on a swatch, or to add one.
     EditColor(Target),
     Picker(picker::Event),
     PickWeight(Weight),

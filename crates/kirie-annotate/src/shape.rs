@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::style::StyleId;
 
-/// An 8-bit sRGB colour with straight alpha.
+/// An 8-bit sRGB color with straight alpha.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Rgba {
     pub r: u8,
@@ -67,7 +67,7 @@ impl Weight {
     }
 }
 
-/// The colours offered in every style, the first being the default.
+/// The colors offered in every style, the first being the default.
 pub const PALETTE: [Rgba; 6] = [
     Rgba::rgb(0xe4, 0x57, 0x2e),
     Rgba::rgb(0xf2, 0xb1, 0x34),
@@ -77,7 +77,7 @@ pub const PALETTE: [Rgba; 6] = [
     Rgba::rgb(0x16, 0x18, 0x1d),
 ];
 
-/// The colour the highlighter starts with.
+/// The color the highlighter starts with.
 pub const HIGHLIGHT: Rgba = Rgba::rgb(0xf2, 0xd1, 0x3a);
 
 /// The paint a mark was made with.
@@ -85,7 +85,7 @@ pub const HIGHLIGHT: Rgba = Rgba::rgb(0xf2, 0xd1, 0x3a);
 pub struct Paint {
     pub color: Rgba,
     pub weight: Weight,
-    /// Closed shapes are filled with a translucent tint of the colour.
+    /// Closed shapes are filled with a translucent tint of the color.
     pub filled: bool,
 }
 
@@ -156,13 +156,13 @@ pub struct Shape {
     pub paint: Paint,
     /// Overrides the document's style for this mark.
     pub style: Option<StyleId>,
-    /// Turn in radians around the centre of the mark's bounds; only boxes and ellipses turn.
+    /// Turn in radians around the center of the mark's bounds; only boxes and ellipses turn.
     #[serde(default)]
     pub rotation: f64,
 }
 
 impl Shape {
-    /// The turn about the mark's centre, as an affine map.
+    /// The turn about the mark's center, as an affine map.
     pub fn turn(&self) -> kurbo::Affine {
         if self.rotation == 0.0 {
             kurbo::Affine::IDENTITY

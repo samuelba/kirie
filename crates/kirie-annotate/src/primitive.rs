@@ -61,7 +61,7 @@ pub enum Primitive {
         font: Font,
         /// An outline around the glyphs, so text reads on any background.
         halo: Option<Rgba>,
-        /// Centre the text on `at` instead of hanging it from there.
+        /// Center the text on `at` instead of hanging it from there.
         centered: bool,
     },
     Effect {

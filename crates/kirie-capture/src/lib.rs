@@ -38,8 +38,8 @@ pub enum CaptureError {
     Portal(String),
     #[error("the GNOME Shell extension failed: {0}")]
     Shell(String),
-    #[error("the screenshot was cancelled")]
-    Cancelled,
+    #[error("the screenshot was canceled")]
+    Canceled,
     #[error(transparent)]
     Pixels(#[from] pixels::PixelError),
     #[error(transparent)]

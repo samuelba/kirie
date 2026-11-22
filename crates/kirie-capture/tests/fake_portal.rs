@@ -103,10 +103,10 @@ async fn fake_portal_screenshot_and_cancel() {
         answer: 1,
     })
     .await;
-    let cancelled = kirie_capture::portal::screenshot(false).await;
+    let canceled = kirie_capture::portal::screenshot(false).await;
     assert!(matches!(
-        cancelled,
-        Err(kirie_capture::CaptureError::Cancelled)
+        canceled,
+        Err(kirie_capture::CaptureError::Canceled)
     ));
     let _ = std::fs::remove_dir_all(dir);
 }

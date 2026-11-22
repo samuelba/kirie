@@ -232,7 +232,7 @@ fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
             ))?;
             Ok(())
         }
-        overlay::Outcome::Cancelled => Ok(()),
+        overlay::Outcome::Canceled => Ok(()),
         overlay::Outcome::Edit(path) => {
             if !block_on(ipc::hand_over(Some(&path)))? {
                 std::process::Command::new(std::env::current_exe()?)

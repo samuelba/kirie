@@ -48,7 +48,7 @@ impl Typesetter {
     }
 
     /// The glyph outlines of `text` at `size`. Unless `centered`, `at` is the top left of the
-    /// first line; centred text is centred on `at`.
+    /// first line; centered text is centered on `at`.
     #[allow(clippy::cast_possible_truncation)]
     pub fn outline(
         &mut self,

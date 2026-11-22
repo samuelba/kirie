@@ -1,4 +1,4 @@
-//! Annotation controls the overlay toolbar and the editor share: tool icons, style, colour and
+//! Annotation controls the overlay toolbar and the editor share: tool icons, style, color and
 //! weight pickers.
 
 use iced::Element;
@@ -30,8 +30,8 @@ pub fn tool_icon(tool: Tool) -> Icon {
     }
 }
 
-/// The colour to draw with after switching tools: the highlighter takes the highlight colour
-/// while the colour is still the default, and gives it back when put down.
+/// The color to draw with after switching tools: the highlighter takes the highlight color
+/// while the color is still the default, and gives it back when put down.
 pub fn tool_color(tool: Option<Tool>, color: Rgba, default: Rgba) -> Rgba {
     match tool {
         Some(Tool::Highlighter) if color == default => HIGHLIGHT,
@@ -53,7 +53,7 @@ pub fn styles<'a, Message: Clone + 'a>(
     .into()
 }
 
-/// The swatches to draw with, then a button to add a colour. A right click on a swatch
+/// The swatches to draw with, then a button to add a color. A right click on a swatch
 /// changes it; `editing` is what the picker is open for, if it is.
 pub fn colors<'a, Message: Clone + 'a>(
     swatches: &Swatches,
@@ -84,7 +84,7 @@ pub fn colors<'a, Message: Clone + 'a>(
     row(swatches)
         .push(swatch_button(
             Icon::Plus,
-            "Add a colour (right-click a colour to change it)",
+            "Add a color (right-click a color to change it)",
             palette,
             editing == Some(Target::New),
             on_edit(Target::New),
@@ -115,7 +115,7 @@ mod tests {
     use kirie_annotate::PALETTE;
 
     #[test]
-    fn the_highlighter_brings_its_own_colour() {
+    fn the_highlighter_brings_its_own_color() {
         let default = PALETTE[0];
         assert_eq!(
             tool_color(Some(Tool::Highlighter), default, default),

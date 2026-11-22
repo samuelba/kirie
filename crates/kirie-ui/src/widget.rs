@@ -1,4 +1,4 @@
-//! Kirie's controls: flat icon buttons, colour swatches, segmented pills and the floating panel
+//! Kirie's controls: flat icon buttons, color swatches, segmented pills and the floating panel
 //! they sit on.
 
 use iced::widget::{button, container, row, svg, text, tooltip};
@@ -72,7 +72,7 @@ pub fn icon_button<'a, Message: Clone + 'a>(
     hint(control.into(), label, palette)
 }
 
-/// A labelled button for the main action.
+/// A labeled button for the main action.
 pub fn primary_button<'a, Message: Clone + 'a>(
     icon: Icon,
     label: &'a str,
@@ -116,7 +116,7 @@ pub fn primary_button<'a, Message: Clone + 'a>(
     .into()
 }
 
-/// A round colour choice, ringed when selected.
+/// A round color choice, ringed when selected.
 pub fn swatch<'a, Message: Clone + 'a>(
     color: Color,
     selected: bool,
@@ -281,7 +281,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mixing_moves_between_colours() {
+    fn mixing_moves_between_colors() {
         assert_eq!(mix(Color::BLACK, Color::WHITE, 0.0), Color::BLACK);
         assert_eq!(mix(Color::BLACK, Color::WHITE, 1.0), Color::WHITE);
         let half = mix(Color::BLACK, Color::WHITE, 0.5);

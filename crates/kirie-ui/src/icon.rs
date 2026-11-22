@@ -1,4 +1,4 @@
-//! Line icons from Lucide (ISC), drawn in the current text or accent colour.
+//! Line icons from Lucide (ISC), drawn in the current text or accent color.
 
 use iced::widget::svg;
 

@@ -87,7 +87,7 @@ cargo fmt --all --check && cargo clippy --workspace --all-targets && cargo test 
 |---|---|
 | `kirie-capture` | Captures every screen through the compositor's protocol, Kirie's GNOME Shell extension or the screenshot portal |
 | `kirie-annotate` | Documents of marks, the drawing tools, the three styles, rendering and `.kirie` projects |
-| `kirie-ui` | Kirie's colours, spacing, icons and controls |
+| `kirie-ui` | Kirie's colors, spacing, icons and controls |
 | `kirie` | The command, the on-screen overlay and the editor |
 
 Smoke tests run Kirie under a headless compositor: `scripts/sway-smoke.sh` (needs sway) and

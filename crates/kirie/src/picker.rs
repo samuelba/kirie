@@ -1,5 +1,5 @@
-//! A colour picker: a saturation and brightness field, a hue strip and a hex field, for adding a
-//! custom colour or changing a swatch.
+//! A color picker: a saturation and brightness field, a hue strip and a hex field, for adding a
+//! custom color or changing a swatch.
 
 use iced::mouse::{self, Interaction};
 use iced::widget::canvas::{self, Action, Frame, Geometry, Path, Stroke, gradient};
@@ -18,7 +18,7 @@ pub const HEIGHT: f32 = 264.0;
 const SHADE: f32 = 132.0;
 const HUE: f32 = 14.0;
 
-/// A colour as hue (degrees), saturation and value, so the hue survives greys.
+/// A color as hue (degrees), saturation and value, so the hue survives grays.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hsv {
     pub hue: f32,
@@ -84,7 +84,7 @@ pub enum Event {
 /// What the picker is open for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
-    /// A new custom colour.
+    /// A new custom color.
     New,
     Change(Slot),
 }
@@ -98,7 +98,7 @@ pub struct Picker {
 }
 
 impl Picker {
-    /// Opens on the swatch's colour, or on `current` for a new one.
+    /// Opens on the swatch's color, or on `current` for a new one.
     pub fn new(target: Target, swatches: &Swatches, current: Rgba) -> Self {
         let color = match target {
             Target::Change(slot) => swatches.get(slot),
@@ -194,9 +194,9 @@ pub fn update(picker: &mut Option<Picker>, swatches: &mut Swatches, event: Event
 
 pub fn view(picker: &Picker, palette: Palette) -> Element<'_, Event> {
     let title = match picker.target {
-        Target::New => "New colour",
-        Target::Change(Slot::Default(_)) => "Change this colour",
-        Target::Change(Slot::Custom(_)) => "Change your colour",
+        Target::New => "New color",
+        Target::Change(Slot::Default(_)) => "Change this color",
+        Target::Change(Slot::Custom(_)) => "Change your color",
     };
     let preview = container(text("")).width(26).height(26).style({
         let color = color_of(picker.color());
@@ -420,7 +420,7 @@ mod tests {
     use kirie_annotate::PALETTE;
 
     #[test]
-    fn colours_survive_hsv() {
+    fn colors_survive_hsv() {
         for color in PALETTE
             .into_iter()
             .chain([Rgba::rgb(0x80, 0x80, 0x80), Rgba::rgb(1, 2, 3)])
@@ -434,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_colour_is_kept_and_drawn_with() {
+    fn a_new_color_is_kept_and_drawn_with() {
         let mut swatches = Swatches::default();
         let mut picker = Some(Picker::new(Target::New, &swatches, PALETTE[0]));
         update(&mut picker, &mut swatches, Event::Hue(240.0));
@@ -512,7 +512,7 @@ mod tests {
     }
 
     #[test]
-    fn a_translucent_colour_stays_translucent() {
+    fn a_translucent_color_stays_translucent() {
         let mut swatches = Swatches::default();
         let glass = Rgba::rgb(0xec, 0x48, 0x99).with_alpha(0x80);
         swatches.add(glass);
@@ -529,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn cancelling_changes_nothing() {
+    fn canceling_changes_nothing() {
         let mut swatches = Swatches::default();
         let mut picker = Some(Picker::new(
             Target::Change(Slot::Default(0)),

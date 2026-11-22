@@ -365,7 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn colours_keep_their_alpha() {
+    fn colors_keep_their_alpha() {
         let color = color_of(Rgba::rgb(255, 0, 0).with_alpha(51));
         assert!((color.a - 0.2).abs() < 1e-6);
         assert!((color.r - 1.0).abs() < 1e-6);

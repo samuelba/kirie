@@ -240,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn lines_draw_in_their_colour() {
+    fn lines_draw_in_their_color() {
         let document = add(
             &Document::new(40, 40, 1.0),
             Kind::Line {

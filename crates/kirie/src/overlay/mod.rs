@@ -63,7 +63,7 @@ pub enum Message {
     PickTool(Option<Tool>),
     PickStyle(StyleId),
     PickColor(kirie_annotate::Rgba),
-    /// Opens the colour picker on a swatch, or to add one.
+    /// Opens the color picker on a swatch, or to add one.
     EditColor(Target),
     Picker(picker::Event),
     PickWeight(Weight),
@@ -112,7 +112,7 @@ impl TryInto<LayerShellCustomActionWithId> for Message {
 #[derive(Debug, Clone, Default)]
 pub enum Outcome {
     #[default]
-    Cancelled,
+    Canceled,
     Saved(PathBuf),
     Copied,
     /// A project for the editor to open.
@@ -391,7 +391,7 @@ impl Overlay {
                         self.paint.color = color;
                     }
                     if let Err(error) = self.swatches.save() {
-                        tracing::warn!(%error, "colours not saved");
+                        tracing::warn!(%error, "colors not saved");
                     }
                 }
                 Task::none()
@@ -486,7 +486,7 @@ impl Overlay {
         if self.tool.take().is_some() {
             return Task::none();
         }
-        self.close(Outcome::Cancelled)
+        self.close(Outcome::Canceled)
     }
 
     fn pointer(&mut self, pointer: Pointer) -> Task<Message> {
@@ -805,7 +805,7 @@ pub fn run(
 ) -> Result<Outcome, String> {
     use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
 
-    let outcome = Arc::new(Mutex::new(Outcome::Cancelled));
+    let outcome = Arc::new(Mutex::new(Outcome::Canceled));
     let shared = outcome.clone();
     let start = Mutex::new(Some((frames, windows)));
     let boot = move || {

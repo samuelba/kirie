@@ -333,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    fn rotating_turns_about_the_centre_and_snaps() {
+    fn rotating_turns_about_the_center_and_snaps() {
         let turned = drag(&rectangle(), Grip::Rotate, Point::new(100.0, 25.0), false);
         assert!((turned.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
         let snapped = drag(&rectangle(), Grip::Rotate, Point::new(100.0, 22.0), true);

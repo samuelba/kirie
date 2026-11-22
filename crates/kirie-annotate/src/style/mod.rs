@@ -176,7 +176,7 @@ fn spotlight(visible: Rect, hole: Rect, radius: f64) -> Primitive {
     }
 }
 
-/// A dark or light outline colour that sets `color` apart from any background.
+/// A dark or light outline color that sets `color` apart from any background.
 fn halo_for(color: Rgba) -> Rgba {
     let luminance =
         0.2126 * f64::from(color.r) + 0.7152 * f64::from(color.g) + 0.0722 * f64::from(color.b);

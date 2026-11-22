@@ -65,7 +65,7 @@ where
         .map_err(|error| CaptureError::Portal(error.to_string()))?;
     match response {
         0 => Ok(results),
-        1 => Err(CaptureError::Cancelled),
+        1 => Err(CaptureError::Canceled),
         _ => Err(CaptureError::Portal(format!("the portal refused {method}"))),
     }
 }
