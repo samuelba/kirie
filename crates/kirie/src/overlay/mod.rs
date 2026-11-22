@@ -354,13 +354,12 @@ impl Overlay {
                 }
                 self.tool = tool;
                 self.paint.color =
-                    crate::controls::tool_color(tool, self.paint.color, self.style());
+                    crate::controls::tool_color(tool, self.paint.color, kirie_annotate::PALETTE[0]);
                 self.draft = None;
                 Task::none()
             }
             Message::PickStyle(style) => {
                 self.history.apply(Op::SetStyle(style));
-                self.paint.color = style.palette()[0];
                 Task::none()
             }
             Message::PickColor(color) => {

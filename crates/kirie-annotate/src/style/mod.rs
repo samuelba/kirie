@@ -32,45 +32,6 @@ impl StyleId {
             StyleId::Ink => "Ink",
         }
     }
-
-    /// The colour the highlighter starts with.
-    pub const fn highlight(self) -> Rgba {
-        match self {
-            StyleId::Clean => Rgba::rgb(0xf2, 0xd1, 0x3a),
-            StyleId::Sketch => Rgba::rgb(0xf5, 0xd7, 0x1f),
-            StyleId::Ink => Rgba::rgb(0xe8, 0xc5, 0x4a),
-        }
-    }
-
-    /// The colours offered for this style, the first being the default.
-    pub const fn palette(self) -> [Rgba; 6] {
-        match self {
-            StyleId::Clean => [
-                Rgba::rgb(0xe4, 0x57, 0x2e),
-                Rgba::rgb(0xf2, 0xb1, 0x34),
-                Rgba::rgb(0x2f, 0xb3, 0x72),
-                Rgba::rgb(0x3b, 0x82, 0xf6),
-                Rgba::rgb(0xff, 0xff, 0xff),
-                Rgba::rgb(0x16, 0x18, 0x1d),
-            ],
-            StyleId::Sketch => [
-                Rgba::rgb(0xe0, 0x31, 0x31),
-                Rgba::rgb(0x1e, 0x6f, 0xd9),
-                Rgba::rgb(0x2b, 0x8a, 0x3e),
-                Rgba::rgb(0xf0, 0x8c, 0x00),
-                Rgba::rgb(0x86, 0x3b, 0xd6),
-                Rgba::rgb(0x1e, 0x1e, 0x1e),
-            ],
-            StyleId::Ink => [
-                Rgba::rgb(0xe4, 0x57, 0x2e),
-                Rgba::rgb(0x1f, 0x1d, 0x1a),
-                Rgba::rgb(0x2a, 0x4d, 0x7a),
-                Rgba::rgb(0x3f, 0x6b, 0x3a),
-                Rgba::rgb(0xb8, 0x8a, 0x2b),
-                Rgba::rgb(0xf4, 0xef, 0xe6),
-            ],
-        }
-    }
 }
 
 /// Everything the document's marks draw, bottom to top, in image coordinates.
@@ -413,10 +374,9 @@ mod tests {
     }
 
     #[test]
-    fn styles_have_names_and_palettes() {
+    fn styles_have_names() {
         for style in StyleId::ALL {
             assert!(!style.name().is_empty());
-            assert_eq!(style.palette().len(), 6);
         }
     }
 
@@ -436,9 +396,6 @@ mod tests {
         assert_eq!(smoothed.first(), shaky.first());
         assert_eq!(smoothed.last(), shaky.last());
         assert_eq!(chaikin(&shaky[..2], 3), shaky[..2].to_vec());
-        for style in StyleId::ALL {
-            assert_eq!(style.highlight().a, 255);
-        }
     }
 
     #[test]

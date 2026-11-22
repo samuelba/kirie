@@ -64,6 +64,19 @@ impl Weight {
     }
 }
 
+/// The colours offered in every style, the first being the default.
+pub const PALETTE: [Rgba; 6] = [
+    Rgba::rgb(0xe4, 0x57, 0x2e),
+    Rgba::rgb(0xf2, 0xb1, 0x34),
+    Rgba::rgb(0x2f, 0xb3, 0x72),
+    Rgba::rgb(0x3b, 0x82, 0xf6),
+    Rgba::rgb(0xff, 0xff, 0xff),
+    Rgba::rgb(0x16, 0x18, 0x1d),
+];
+
+/// The colour the highlighter starts with.
+pub const HIGHLIGHT: Rgba = Rgba::rgb(0xf2, 0xd1, 0x3a);
+
 /// The paint a mark was made with.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Paint {
@@ -76,7 +89,7 @@ pub struct Paint {
 impl Default for Paint {
     fn default() -> Self {
         Self {
-            color: Rgba::rgb(0xe4, 0x57, 0x2e),
+            color: PALETTE[0],
             weight: Weight::Medium,
             filled: false,
         }

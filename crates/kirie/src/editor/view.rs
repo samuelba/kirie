@@ -230,7 +230,6 @@ impl Editor {
 
     fn inspector(&self) -> Element<'_, Message> {
         let palette = self.palette;
-        let style = self.document().style;
         let section = |title: &'static str, content: Element<'static, Message>| {
             column![text(title).size(12).color(palette.muted), content].spacing(space::S)
         };
@@ -273,7 +272,7 @@ impl Editor {
         let mut content = column![
             section(
                 "Colour",
-                controls::colors(style, self.paint, palette, Message::PickColor)
+                controls::colors(self.paint, palette, Message::PickColor)
             ),
             section(
                 "Weight",

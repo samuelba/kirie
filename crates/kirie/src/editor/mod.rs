@@ -199,7 +199,6 @@ impl Editor {
             loaded.image.height(),
             loaded.image.as_raw().clone(),
         );
-        self.paint.color = loaded.document.style.palette()[0];
         self.history = History::new(loaded.document);
         self.image = Some((loaded.image, handle));
         self.path = loaded.path;
@@ -250,7 +249,7 @@ impl Editor {
                 self.paint.color = crate::controls::tool_color(
                     Some(tool),
                     self.paint.color,
-                    self.document().style,
+                    kirie_annotate::PALETTE[0],
                 );
                 self.draft = None;
                 if tool != Tool::Select {
@@ -259,7 +258,6 @@ impl Editor {
             }
             Message::PickStyle(style) => {
                 self.history.apply(Op::SetStyle(style));
-                self.paint.color = style.palette()[0];
             }
             Message::PickColor(color) => self.repaint(|paint| paint.color = color),
             Message::PickWeight(weight) => self.repaint(|paint| paint.weight = weight),

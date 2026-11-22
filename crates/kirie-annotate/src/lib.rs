@@ -14,7 +14,7 @@ pub mod tools;
 
 pub use document::{Document, History, Op};
 pub use primitive::{Effect, FillRule, Font, Primitive};
-pub use shape::{Kind, Paint, Rgba, Shape, ShapeId, Weight};
+pub use shape::{HIGHLIGHT, Kind, PALETTE, Paint, Rgba, Shape, ShapeId, Weight};
 pub use style::StyleId;
 pub use text::Typesetter;
 pub use tools::{Draft, Press, Tool};

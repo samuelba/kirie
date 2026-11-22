@@ -137,7 +137,7 @@ impl Overlay {
             .align_y(iced::Alignment::Center);
 
         let styles = controls::styles(style, palette, Message::PickStyle);
-        let colors = controls::colors(style, self.paint, palette, Message::PickColor);
+        let colors = controls::colors(self.paint, palette, Message::PickColor);
         let weights = controls::weights(self.paint, palette, Message::PickWeight);
         let properties = row![
             styles,

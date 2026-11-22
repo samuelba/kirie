@@ -140,14 +140,6 @@ fn main() {
         let x = COLUMN * column as f64;
         let mut document = Document::new(width, height, 1.0).apply(Op::SetStyle(style));
         for (kind, paint) in marks(x) {
-            let paint = Paint {
-                color: if paint.color == Paint::default().color {
-                    style.palette()[0]
-                } else {
-                    paint.color
-                },
-                ..paint
-            };
             document = document.apply(Op::Add { kind, paint });
         }
         document = document.apply(Op::Add {
