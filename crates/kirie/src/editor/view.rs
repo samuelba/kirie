@@ -67,7 +67,14 @@ impl Editor {
             false,
             Some(Message::ToggleScheme),
         );
-        let mut actions = row![history, divider(palette)]
+        let capture = icon_button(
+            Icon::Capture,
+            "Take a screenshot",
+            palette,
+            false,
+            Some(Message::Capture),
+        );
+        let mut actions = row![capture, divider(palette), history, divider(palette)]
             .spacing(space::S)
             .align_y(Alignment::Center);
         if has_image {
@@ -182,15 +189,17 @@ impl Editor {
 
     fn empty(&self) -> Element<'_, Message> {
         let palette = self.palette;
-        let card = column![
+        let card =
+            column![
             svg(svg::Handle::from_memory(APP_ICON)).width(96).height(96),
             text("Cut a piece out of your screen").size(22),
-            text("Paste an image with Ctrl+V, open one with kirie edit FILE, or take a screenshot with kirie capture.")
+            text("Take a screenshot, paste an image with Ctrl+V, or open one with kirie edit FILE.")
                 .size(14)
                 .color(palette.muted),
+            primary_button(Icon::Capture, "Take a screenshot", palette, Message::Capture),
         ]
-        .spacing(space::M)
-        .align_x(Alignment::Center);
+            .spacing(space::M)
+            .align_x(Alignment::Center);
         container(card).center(Length::Fill).into()
     }
 

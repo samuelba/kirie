@@ -45,6 +45,35 @@ pub fn pretty(path: &Path) -> String {
     }
 }
 
+/// Where the overlay leaves a capture for the editor: private to the user, gone on logout.
+pub fn handoff_dir() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map_or_else(std::env::temp_dir, PathBuf::from)
+        .join("kirie")
+}
+
+pub fn is_handoff(path: &Path) -> bool {
+    path.starts_with(handoff_dir())
+}
+
+/// Writes a project for the editor to pick up.
+pub fn save_handoff(project: &kirie_annotate::project::Project) -> Result<PathBuf, String> {
+    let dir = handoff_dir();
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
+    let path = named(
+        &dir,
+        &jiff::Zoned::now(),
+        kirie_annotate::project::EXTENSION,
+        Path::exists,
+    );
+    let file = std::fs::File::create(&path)
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+    kirie_annotate::project::save(project, std::io::BufWriter::new(file))
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+    Ok(path)
+}
+
 /// Writes an editable `.kirie` project into the screenshots folder.
 pub async fn save_project(project: kirie_annotate::project::Project) -> Result<PathBuf, String> {
     tokio::task::spawn_blocking(move || {
@@ -112,6 +141,12 @@ mod tests {
             assert_eq!(pretty(&path), "~/Pictures/a.png");
         }
         assert_eq!(pretty(Path::new("/tmp/a.png")), "/tmp/a.png");
+    }
+
+    #[test]
+    fn handoffs_live_in_their_own_folder() {
+        assert!(is_handoff(&handoff_dir().join("x.kirie")));
+        assert!(!is_handoff(Path::new("/elsewhere/x.kirie")));
     }
 
     #[test]

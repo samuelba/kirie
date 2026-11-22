@@ -103,6 +103,10 @@ pub enum Message {
     Done(Result<String, String>),
     Opened(Result<Loaded, String>),
     ToastExpired(u64),
+    Ipc(crate::ipc::Request),
+    /// Hides the window and opens the overlay; the capture comes back over D-Bus.
+    Capture,
+    CaptureEnded(Result<(), String>),
 }
 
 #[derive(Debug, Clone)]
@@ -170,7 +174,10 @@ impl Editor {
         (editor, Task::none())
     }
 
-    fn open(&mut self, loaded: Loaded) {
+    fn open(&mut self, mut loaded: Loaded) {
+        if let Some(path) = loaded.path.take_if(|path| crate::save::is_handoff(path)) {
+            let _ = std::fs::remove_file(path);
+        }
         let handle = image::Handle::from_rgba(
             loaded.image.width(),
             loaded.image.height(),
@@ -273,7 +280,26 @@ impl Editor {
             Message::Save => return self.export(Export::Save),
             Message::SaveProject => return self.export(Export::Project),
             Message::Done(result) => return self.toast(result),
-            Message::Opened(Ok(loaded)) => self.open(loaded),
+            Message::Opened(Ok(loaded)) => {
+                self.open(loaded);
+                return present();
+            }
+            Message::Ipc(crate::ipc::Request::Open(path)) => {
+                return Task::perform(load_async(path), Message::Opened);
+            }
+            Message::Ipc(crate::ipc::Request::Present) => return present(),
+            Message::Capture => {
+                return window::oldest()
+                    .then(|id| id.map_or_else(Task::none, |id| window::minimize(id, true)))
+                    .chain(Task::perform(capture(), Message::CaptureEnded));
+            }
+            Message::CaptureEnded(result) => {
+                let shown = present();
+                return match result {
+                    Ok(()) => shown,
+                    Err(error) => shown.chain(self.toast(Err(error))),
+                };
+            }
             Message::Opened(Err(error)) => return self.toast(Err(error)),
             Message::ToastExpired(id) => {
                 if self.toast.as_ref().is_some_and(|toast| toast.id == id) {
@@ -410,11 +436,15 @@ impl Editor {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        if self.typing.is_some() {
+        let keys = if self.typing.is_some() {
             event::listen_with(typing_key)
         } else {
             event::listen_with(key)
-        }
+        };
+        Subscription::batch([
+            keys,
+            Subscription::run(crate::ipc::requests).map(Message::Ipc),
+        ])
     }
 
     pub fn theme(&self) -> iced::Theme {
@@ -423,6 +453,42 @@ impl Editor {
             Scheme::Light => iced::Theme::Light,
         }
     }
+}
+
+async fn load_async(path: PathBuf) -> Result<Loaded, String> {
+    tokio::task::spawn_blocking(move || load(&path))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// Raises and focuses the editor window.
+fn present() -> Task<Message> {
+    window::oldest().then(|id| {
+        id.map_or_else(Task::none, |id| {
+            Task::batch([window::minimize(id, false), window::gain_focus(id)])
+        })
+    })
+}
+
+/// Runs the overlay in its own process, after the window has had time to hide.
+async fn capture() -> Result<(), String> {
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        std::process::Command::new(exe)
+            .args(["capture", "--edit"])
+            .status()
+            .map_err(|error| format!("cannot take a screenshot: {error}"))
+            .and_then(|status| {
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err("the screenshot failed".to_owned())
+                }
+            })
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

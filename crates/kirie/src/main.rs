@@ -1,6 +1,7 @@
 mod clipboard;
 mod controls;
 mod editor;
+mod ipc;
 mod overlay;
 mod paint;
 mod save;
@@ -36,6 +37,9 @@ enum Command {
         /// Draw the mouse pointer into the screenshot.
         #[arg(long)]
         cursor: bool,
+        /// Enter opens the selection in the editor instead of copying it.
+        #[arg(long)]
+        edit: bool,
     },
     /// Open an image in the editor.
     Edit { path: PathBuf },
@@ -70,19 +74,18 @@ fn main() -> anyhow::Result<()> {
             mode: Mode::All,
             output: Some(path),
             cursor,
+            ..
         }) => capture_to_file(&path, cursor),
         Some(Command::Capture {
             mode: Mode::Region,
             output: None,
             cursor,
-        }) => capture_region(cursor),
+            edit,
+        }) => capture_region(cursor, edit),
         Some(Command::Debug(Debug::Globals)) => print_globals(),
         Some(Command::ServeClipboard) => clipboard::serve(),
-        None => editor::run(None).map_err(anyhow::Error::from),
-        Some(Command::Edit { path }) => {
-            let loaded = editor::load(&path).map_err(anyhow::Error::msg)?;
-            editor::run(Some(loaded)).map_err(anyhow::Error::from)
-        }
+        None => edit(None),
+        Some(Command::Edit { path }) => edit(Some(&path)),
         Some(Command::Capture { .. }) => {
             anyhow::bail!("this capture mode is not implemented yet")
         }
@@ -120,19 +123,59 @@ fn capture_to_file(path: &std::path::Path, cursor: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn capture_region(cursor: bool) -> anyhow::Result<()> {
+/// Opens `path` (or an empty editor) in the running editor, or in a new one.
+fn edit(path: Option<&std::path::Path>) -> anyhow::Result<()> {
+    let path = path
+        .map(std::path::absolute)
+        .transpose()
+        .context("cannot find the file")?;
+    if block_on(ipc::hand_over(path.as_deref()))? {
+        return Ok(());
+    }
+    let loaded = path
+        .as_deref()
+        .map(editor::load)
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
+    editor::run(loaded).map_err(anyhow::Error::from)
+}
+
+/// Runs a future to completion before any UI event loop exists.
+fn block_on<T>(future: impl Future<Output = T>) -> anyhow::Result<T> {
+    Ok(tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(future))
+}
+
+fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
     let cursor = if cursor {
         Cursor::Shown
     } else {
         Cursor::Hidden
     };
     let (_, frames) = kirie_capture::wayland::capture(cursor)?;
-    match overlay::run(frames).map_err(anyhow::Error::msg)? {
+    let primary = if edit {
+        overlay::Action::Edit
+    } else {
+        overlay::Action::Copy
+    };
+    match overlay::run(frames, primary).map_err(anyhow::Error::msg)? {
         overlay::Outcome::Saved(path) => {
             println!("{}", path.display());
             Ok(())
         }
         overlay::Outcome::Copied | overlay::Outcome::Cancelled => Ok(()),
+        overlay::Outcome::Edit(path) => {
+            if !block_on(ipc::hand_over(Some(&path)))? {
+                std::process::Command::new(std::env::current_exe()?)
+                    .arg("edit")
+                    .arg(&path)
+                    .spawn()
+                    .context("cannot open the editor")?;
+            }
+            Ok(())
+        }
         overlay::Outcome::Failed(error) => anyhow::bail!(error),
     }
 }

@@ -13,7 +13,7 @@ use crate::controls;
 
 pub const TEXT_INPUT: &str = "kirie-text";
 /// Room the toolbar takes; used to keep it on screen.
-const TOOLBAR: iced::Size = iced::Size::new(760.0, 92.0);
+const TOOLBAR: iced::Size = iced::Size::new(800.0, 92.0);
 const GAP: f32 = 12.0;
 
 impl Overlay {
@@ -113,6 +113,13 @@ impl Overlay {
         ]
         .spacing(2);
         let actions = row![
+            icon_button(
+                Icon::Edit,
+                "Open in the editor (Ctrl+E)",
+                palette,
+                false,
+                Some(Message::Finish(Action::Edit))
+            ),
             icon_button(
                 Icon::Save,
                 "Save to Pictures",

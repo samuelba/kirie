@@ -50,6 +50,8 @@ pub enum Pointer {
 pub enum Action {
     Copy,
     Save,
+    /// Hands the selection and its marks to the editor.
+    Edit,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +69,8 @@ pub enum Message {
     Redo,
     Escape,
     Finish(Action),
+    /// Enter: the action the overlay was opened for.
+    Accept,
     SelectAll,
     Nudge(Vector),
     Finished(Result<Outcome, String>),
@@ -91,6 +95,8 @@ pub enum Outcome {
     Cancelled,
     Saved(PathBuf),
     Copied,
+    /// A project for the editor to open.
+    Edit(PathBuf),
     Failed(String),
 }
 
@@ -116,6 +122,8 @@ pub struct Overlay {
     draft: Option<Draft>,
     typing: Option<Typing>,
     busy: bool,
+    /// What Enter does.
+    primary: Action,
     typesetter: RefCell<Typesetter>,
     patches: RefCell<HashMap<crate::paint::PatchKey, image::Handle>>,
     outcome: Arc<Mutex<Outcome>>,
@@ -154,7 +162,11 @@ fn to_kurbo(point: Point) -> kurbo::Point {
 }
 
 impl Overlay {
-    pub fn boot(frames: Vec<Frame>, outcome: Arc<Mutex<Outcome>>) -> (Self, Task<Message>) {
+    pub fn boot(
+        frames: Vec<Frame>,
+        primary: Action,
+        outcome: Arc<Mutex<Outcome>>,
+    ) -> (Self, Task<Message>) {
         let screens: Vec<Screen> = frames
             .iter()
             .map(|frame| Screen {
@@ -209,6 +221,7 @@ impl Overlay {
             draft: None,
             typing: None,
             busy: false,
+            primary,
             typesetter: RefCell::new(Typesetter::new()),
             patches: RefCell::new(HashMap::new()),
             outcome,
@@ -330,6 +343,7 @@ impl Overlay {
                 Task::none()
             }
             Message::Finish(action) => self.finish(action),
+            Message::Accept => self.finish(self.primary),
             Message::Finished(Ok(outcome)) => self.close(outcome),
             Message::Finished(Err(error)) => self.close(Outcome::Failed(error)),
             Message::Layer(_) => Task::none(),
@@ -432,19 +446,30 @@ impl Overlay {
         });
     }
 
-    /// The selection, rendered with every mark, at the highest scale of the screens it covers.
-    fn picture(&self) -> Result<::image::RgbaImage, String> {
+    /// The selection's pixels at the highest scale of the screens it covers, and the marks
+    /// moved onto them.
+    fn project(&self) -> Result<kirie_annotate::project::Project, String> {
         let region = self.selection.rect().ok_or("nothing is selected")?;
         let region = whole(region);
-        let base = geometry::crop(&self.captures, region).ok_or("the selection is empty")?;
-        let scale = f64::from(base.width()) / f64::from(region.width.max(1));
+        let image = geometry::crop(&self.captures, region).ok_or("the selection is empty")?;
+        let scale = f64::from(image.width()) / f64::from(region.width.max(1));
         let transform = kurbo::Affine::translate((-f64::from(region.x), -f64::from(region.y)))
             .then_scale(scale);
         let document = self
             .document()
-            .transformed(transform, base.width(), base.height(), scale);
-        kirie_annotate::render::render(&document, &base, &mut self.typesetter.borrow_mut())
-            .map_err(|error| error.to_string())
+            .transformed(transform, image.width(), image.height(), scale);
+        Ok(kirie_annotate::project::Project { image, document })
+    }
+
+    /// The selection with every mark drawn on it.
+    fn picture(&self) -> Result<::image::RgbaImage, String> {
+        let project = self.project()?;
+        kirie_annotate::render::render(
+            &project.document,
+            &project.image,
+            &mut self.typesetter.borrow_mut(),
+        )
+        .map_err(|error| error.to_string())
     }
 
     fn finish(&mut self, action: Action) -> Task<Message> {
@@ -453,6 +478,15 @@ impl Overlay {
             return Task::none();
         }
         self.busy = true;
+        if action == Action::Edit {
+            let handed = self
+                .project()
+                .and_then(|project| crate::save::save_handoff(&project));
+            return match handed {
+                Ok(path) => self.close(Outcome::Edit(path)),
+                Err(error) => self.close(Outcome::Failed(error)),
+            };
+        }
         let picture = match self.picture() {
             Ok(picture) => picture,
             Err(error) => return self.close(Outcome::Failed(error)),
@@ -464,6 +498,7 @@ impl Overlay {
             Action::Copy => Task::perform(crate::clipboard::copy(picture), |copied| {
                 Message::Finished(copied.map(|()| Outcome::Copied))
             }),
+            Action::Edit => Task::none(),
         }
     }
 
@@ -532,7 +567,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
     let command = modifiers.command();
     match key.as_ref() {
         keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
-        keyboard::Key::Named(Named::Enter) => Some(Message::Finish(Action::Copy)),
+        keyboard::Key::Named(Named::Enter) => Some(Message::Accept),
         keyboard::Key::Named(Named::ArrowLeft) => Some(Message::Nudge(Vector::new(-step, 0.0))),
         keyboard::Key::Named(Named::ArrowRight) => Some(Message::Nudge(Vector::new(step, 0.0))),
         keyboard::Key::Named(Named::ArrowUp) => Some(Message::Nudge(Vector::new(0.0, -step))),
@@ -543,6 +578,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("a") if command => Some(Message::SelectAll),
         keyboard::Key::Character("s") if command => Some(Message::Finish(Action::Save)),
         keyboard::Key::Character("c") if command => Some(Message::Finish(Action::Copy)),
+        keyboard::Key::Character("e") if command => Some(Message::Finish(Action::Edit)),
         keyboard::Key::Character(c) if !command => c
             .chars()
             .next()
@@ -553,7 +589,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
 }
 
 /// Shows the overlay on every screen as layer-shell surfaces until the user is done.
-pub fn run(frames: Vec<Frame>) -> Result<Outcome, String> {
+pub fn run(frames: Vec<Frame>, primary: Action) -> Result<Outcome, String> {
     use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
 
     let outcome = Arc::new(Mutex::new(Outcome::Cancelled));
@@ -565,7 +601,7 @@ pub fn run(frames: Vec<Frame>) -> Result<Outcome, String> {
             .ok()
             .and_then(|mut frames| frames.take())
             .unwrap_or_default();
-        Overlay::boot(frames, shared.clone())
+        Overlay::boot(frames, primary, shared.clone())
     };
     iced_layershell::daemon(boot, NAMESPACE, Overlay::update, Overlay::view)
         .theme(Overlay::theme)
