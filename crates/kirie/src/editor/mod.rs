@@ -16,8 +16,8 @@ use iced::widget::image;
 use iced::{Event, Point, Size, Subscription, Task, Vector, event, keyboard, window};
 use kirie_annotate::project::{self, Project};
 use kirie_annotate::{
-    Document, Draft, History, Kind, Op, Paint, Press, Rgba, ShapeId, StyleId, Tool, Typesetter,
-    Weight,
+    Document, Draft, History, Kind, Op, Paint, Press, Rgba, Shape, ShapeId, StyleId, Tool,
+    Typesetter, Weight,
 };
 use kirie_ui::{Palette, Scheme};
 
@@ -334,6 +334,51 @@ impl Editor {
         } else {
             self.document().canvas()
         }
+    }
+
+    /// What the canvas draws on: like [`Self::content`], but grown as marks being drawn reach
+    /// beyond it, before they are done and the view settles on them.
+    fn shown_canvas(&self) -> kurbo::Rect {
+        if self.cropping.is_some() {
+            self.content()
+        } else {
+            self.document().canvas_with(&self.drafts())
+        }
+    }
+
+    /// The marks being drawn, moved, reshaped or typed, as they will be once done.
+    fn drafts(&self) -> Vec<Shape> {
+        let document = self.document();
+        let mut drafts = Vec::new();
+        match &self.draft {
+            Some(Draft::Moving { ids, by, .. }) => {
+                drafts.extend(
+                    ids.iter()
+                        .filter_map(|id| document.shape(*id))
+                        .map(|shape| Shape {
+                            kind: shape.kind.translated(*by),
+                            ..shape.clone()
+                        }),
+                );
+            }
+            Some(draft) => {
+                drafts.extend(draft.edited().cloned());
+                drafts.extend(draft.preview().map(|kind| Shape {
+                    id: document.next_id(),
+                    kind,
+                    paint: self.paint,
+                    style: None,
+                    rotation: 0.0,
+                }));
+            }
+            None => {}
+        }
+        drafts.extend(
+            self.typing
+                .as_ref()
+                .map(|typing| typing.preview(document, self.paint)),
+        );
+        drafts
     }
 
     /// The crop being drawn, while cropping.

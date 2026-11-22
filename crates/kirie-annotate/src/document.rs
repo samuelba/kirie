@@ -96,6 +96,8 @@ impl Frame {
     /// How far beyond the picture marks are taken in, in logical pixels, so a stray mark far
     /// away cannot make a saved image too large to hold.
     pub const MAX_OVERFLOW: f64 = 500.0;
+    /// How soft the picture's shadow is, in logical pixels.
+    pub const SHADOW: f64 = 16.0;
 }
 
 fn casts_shadows() -> bool {
@@ -197,13 +199,24 @@ impl Document {
     }
 
     /// What the saved image covers, in whole pixels: the image area kept and, when the frame
-    /// takes them in, the marks beyond it, with the frame's margin around.
+    /// takes them in, the marks beyond it, with the frame's margin around, and room for the
+    /// picture's shadow.
     pub fn canvas(&self) -> Rect {
+        self.canvas_with(&[])
+    }
+
+    /// Like [`Self::canvas`], with `drafts`, marks still being drawn, taken in too.
+    pub fn canvas_with(&self, drafts: &[Shape]) -> Rect {
         let visible = self.visible();
         let reach = if self.frame.overflow {
-            crate::style::render_list(self)
+            let stage = crate::style::Stage::default();
+            let drafted = drafts
                 .iter()
-                .filter_map(crate::style::reach)
+                .flat_map(|shape| crate::style::primitives(shape, self.style, self.unit, &stage));
+            crate::style::render_list(self)
+                .into_iter()
+                .chain(drafted)
+                .filter_map(|primitive| crate::style::reach(&primitive))
                 .fold(visible, |all, drawn| all.union(drawn))
                 .intersect(visible.inflate(
                     Frame::MAX_OVERFLOW * self.unit,
@@ -213,13 +226,27 @@ impl Document {
             visible
         };
         let margin = self.frame.margin;
-        let area = reach.inflate(margin, margin);
+        let mut area = reach.inflate(margin, margin);
+        if self.frame.shadow {
+            let room = 1.5 * self.shadow_radius();
+            area = area.union(visible.inflate(room, room) + Vec2::new(0.0, self.shadow_drop()));
+        }
         Rect::new(
             area.x0.floor(),
             area.y0.floor(),
             area.x1.ceil(),
             area.y1.ceil(),
         )
+    }
+
+    /// How soft the picture's shadow is, in image pixels.
+    pub fn shadow_radius(&self) -> f64 {
+        Frame::SHADOW * self.unit
+    }
+
+    /// How far below the picture its shadow falls, in image pixels.
+    pub fn shadow_drop(&self) -> f64 {
+        0.4 * self.shadow_radius()
     }
 
     /// The image area kept: the crop, or the whole image.
@@ -660,6 +687,23 @@ mod tests {
             ..Frame::default()
         }));
         assert!(huge.frame.margin.abs() < f64::EPSILON);
+        let shaded = doc.apply(Op::SetFrame(Frame {
+            shadow: true,
+            ..Frame::default()
+        }));
+        assert_eq!(shaded.canvas(), Rect::new(-24.0, -18.0, 124.0, 81.0));
+        let drafted = Shape {
+            id: ShapeId(99),
+            kind: Kind::Line {
+                from: kurbo::Point::new(50.0, 25.0),
+                to: kurbo::Point::new(50.0, 90.0),
+            },
+            paint: Paint::default(),
+            style: None,
+            rotation: 0.0,
+        };
+        assert!(taken_in.canvas_with(std::slice::from_ref(&drafted)).y1 >= 90.0);
+        assert!((doc.canvas_with(&[drafted]).y1 - 50.0).abs() < f64::EPSILON);
     }
 
     #[test]

@@ -65,7 +65,12 @@ pub fn render(
         (kept.y + kept.height) as f64,
     ) + shift;
     if frame.shadow {
-        cast_shadow(&mut pixmap, picture, frame.margin, document.unit);
+        cast_shadow(
+            &mut pixmap,
+            picture,
+            document.shadow_radius(),
+            document.shadow_drop(),
+        );
     }
     #[allow(clippy::cast_possible_truncation)]
     let part = image::imageops::crop_imm(
@@ -136,16 +141,12 @@ fn shifted(primitive: Primitive, by: Vec2) -> Primitive {
     }
 }
 
-/// A soft shadow under `picture`, as deep as the `margin` around it leaves room for.
-fn cast_shadow(pixmap: &mut Pixmap, picture: kurbo::Rect, margin: f64, unit: f64) {
-    let radius = (margin * 0.4).min(24.0 * unit);
-    if radius < 1.0 {
-        return;
-    }
+/// A soft shadow of `radius` under `picture`, fallen `drop` below it.
+fn cast_shadow(pixmap: &mut Pixmap, picture: kurbo::Rect, radius: f64, drop: f64) {
     let Some(mut layer) = Pixmap::new(pixmap.width(), pixmap.height()) else {
         return;
     };
-    let dropped = picture + Vec2::new(0.0, radius * 0.4);
+    let dropped = picture + Vec2::new(0.0, drop);
     #[allow(clippy::cast_possible_truncation)]
     let Some(rect) = tiny_skia::Rect::from_ltrb(
         dropped.x0 as f32,
@@ -447,17 +448,17 @@ mod tests {
         let document = framed(
             &Document::new(40, 30, 1.0),
             crate::Frame {
-                margin: 20.0,
+                margin: 40.0,
                 background: Some(red),
                 shadow: true,
                 overflow: false,
             },
         );
         let out = render(&document, &white(40, 30), &mut Typesetter::new()).unwrap();
-        assert_eq!(out.dimensions(), (80, 70));
+        assert_eq!(out.dimensions(), (120, 110));
         assert_eq!(out.get_pixel(1, 1), &Pixel([200, 0, 0, 255]));
-        assert_eq!(out.get_pixel(40, 35), &Pixel([255, 255, 255, 255]));
-        let under = out.get_pixel(40, 53);
+        assert_eq!(out.get_pixel(60, 55), &Pixel([255, 255, 255, 255]));
+        let under = out.get_pixel(60, 74);
         assert!(
             under[0] < 190 && under[3] == 255,
             "a shadow below: {under:?}"

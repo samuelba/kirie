@@ -140,7 +140,7 @@ impl canvas::Program<Message> for Board<'_> {
             draw_crop(&mut frame, crop, transform, bounds.size(), editor);
             return vec![frame.into_geometry()];
         }
-        let kept = to_rectangle(transform.transform_rect_bbox(self.content()));
+        let kept = to_rectangle(transform.transform_rect_bbox(editor.shown_canvas()));
         let picked = frame.with_clip(kept, |frame| self.draw_marks(frame, image, transform));
         if let Some(picked) = picked {
             let pixel = 1.0 / f64::from(editor.viewport.scale(self.content(), bounds.size()));
@@ -272,12 +272,8 @@ impl canvas::Program<Message> for Backdrop<'_> {
         let content = editor.content();
         let transform = editor.viewport.transform(content, bounds.size());
         let scale = editor.viewport.scale(content, bounds.size());
-        let area = to_rectangle(transform.transform_rect_bbox(content));
-        frame.fill_rectangle(
-            area.position() + Vector::new(0.0, 6.0),
-            area.size(),
-            Color::BLACK.scale_alpha(0.25),
-        );
+        let canvas = editor.shown_canvas();
+        let area = to_rectangle(transform.transform_rect_bbox(canvas));
         let document = editor.document();
         let shown = if editor.cropping.is_some() {
             content
@@ -285,7 +281,13 @@ impl canvas::Program<Message> for Backdrop<'_> {
             document.visible()
         };
         let kept = to_rectangle(transform.transform_rect_bbox(shown));
-        if shown != content {
+        if shown == canvas {
+            frame.fill_rectangle(
+                area.position() + Vector::new(0.0, 6.0),
+                area.size(),
+                Color::BLACK.scale_alpha(0.25),
+            );
+        } else {
             let on_screen = area
                 .intersection(&Rectangle::with_size(bounds.size()))
                 .unwrap_or(area);
@@ -297,7 +299,7 @@ impl canvas::Program<Message> for Backdrop<'_> {
             }
             if document.frame.shadow {
                 #[allow(clippy::cast_possible_truncation)]
-                let radius = (document.frame.margin * 0.4).min(24.0 * document.unit) as f32;
+                let radius = document.shadow_radius() as f32;
                 soft_shadow(&mut frame, kept, radius * scale);
             }
         }
