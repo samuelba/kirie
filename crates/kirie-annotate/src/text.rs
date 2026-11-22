@@ -141,6 +141,16 @@ impl Typesetter {
     }
 }
 
+thread_local! {
+    static MEASURER: std::cell::RefCell<Typesetter> = std::cell::RefCell::new(Typesetter::new());
+}
+
+/// The room `text` takes, as [`Typesetter::measure`] gives it, with a typesetter kept per
+/// thread for code that has none of its own at hand.
+pub fn measure(text: &str, font: Font, size: f64) -> Size {
+    MEASURER.with_borrow_mut(|typesetter| typesetter.measure(text, font, size))
+}
+
 /// Adds glyph commands (y up, relative to the pen) at `origin` (y down).
 fn append(path: &mut BezPath, commands: &[Command], origin: Point) {
     let at = |x: f32, y: f32| Point::new(origin.x + f64::from(x), origin.y - f64::from(y));

@@ -98,8 +98,26 @@ impl Document {
     pub fn hit(&self, point: kurbo::Point, reach: f64) -> Option<ShapeId> {
         self.shapes()
             .rev()
-            .find(|shape| shape.distance(point) <= reach)
+            .find(|shape| self.distance(shape, point) <= reach)
             .map(|shape| shape.id)
+    }
+
+    /// The area `shape` covers here, before stroke width, with text measured in its face.
+    pub fn bounds(&self, shape: &Shape) -> Rect {
+        crate::style::bounds(shape, self.style, self.unit)
+    }
+
+    /// How far `point` is from `shape`, 0 when on or inside it.
+    pub fn distance(&self, shape: &Shape, point: kurbo::Point) -> f64 {
+        match shape.kind {
+            Kind::Text { .. } => {
+                let area = self.bounds(shape);
+                let dx = (area.x0 - point.x).max(point.x - area.x1).max(0.0);
+                let dy = (area.y0 - point.y).max(point.y - area.y1).max(0.0);
+                dx.hypot(dy)
+            }
+            _ => shape.distance(point),
+        }
     }
 
     /// The next number for a step counter.
@@ -393,6 +411,36 @@ mod tests {
             .apply(line(12.0));
         assert_eq!(doc.hit(Point::new(11.0, 5.0), 2.0), Some(ShapeId(2)));
         assert_eq!(doc.hit(Point::new(50.0, 5.0), 2.0), None);
+    }
+
+    #[test]
+    fn text_is_hit_where_its_letters_are() {
+        let doc = Document::new(400, 200, 1.0).apply(Op::Add {
+            kind: Kind::Text {
+                at: Point::new(10.0, 10.0),
+                text: "a fairly long line".into(),
+            },
+            paint: Paint::default(),
+        });
+        let text = doc.shape(ShapeId(1)).unwrap();
+        let area = doc.bounds(text);
+        assert!(area.width() > 150.0 && area.height() > 20.0, "{area:?}");
+        assert_eq!(doc.hit(Point::new(150.0, 20.0), 2.0), Some(ShapeId(1)));
+        assert_eq!(doc.hit(Point::new(10.0, 60.0), 2.0), None);
+        let bigger = doc.apply(Op::Repaint {
+            ids: vec![ShapeId(1)],
+            paint: Paint {
+                text: crate::shape::TextLook {
+                    size: 44.0,
+                    ..crate::shape::TextLook::default()
+                },
+                ..Paint::default()
+            },
+        });
+        let grown = bigger.bounds(bigger.shape(ShapeId(1)).unwrap());
+        assert!(grown.width() > area.width() * 1.8);
+        let sketched = doc.apply(Op::SetStyle(StyleId::Sketch));
+        assert_ne!(sketched.bounds(text), area, "measured in the style's face");
     }
 
     #[test]

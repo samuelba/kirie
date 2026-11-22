@@ -265,15 +265,22 @@ impl Painter<'_> {
     }
 }
 
-/// The outline and grips of a picked mark; `pixel` is one screen pixel in mark coordinates.
-pub fn draw_grips(frame: &mut Frame, shape: &Shape, transform: Affine, pixel: f64, accent: Color) {
+/// The outline and grips of a picked mark that covers `bounds`; `pixel` is one screen pixel in
+/// mark coordinates.
+pub fn draw_grips(
+    frame: &mut Frame,
+    shape: &Shape,
+    bounds: kurbo::Rect,
+    transform: Affine,
+    pixel: f64,
+    accent: Color,
+) {
     #[allow(clippy::cast_possible_truncation)]
     let at = |point: kurbo::Point| {
         let point = transform * point;
         Point::new(point.x as f32, point.y as f32)
     };
     let turn = shape.turn();
-    let bounds = shape.kind.bounds();
     let corners = [
         kurbo::Point::new(bounds.x0, bounds.y0),
         kurbo::Point::new(bounds.x1, bounds.y0),

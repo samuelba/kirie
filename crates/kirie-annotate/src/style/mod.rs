@@ -77,6 +77,29 @@ impl Stage {
     }
 }
 
+/// The area `shape` covers in `style` on an image of `unit`, before stroke width; text is
+/// measured in its face and size.
+pub fn bounds(shape: &Shape, style: StyleId, unit: f64) -> Rect {
+    let Kind::Text { at, text } = &shape.kind else {
+        return shape.kind.bounds();
+    };
+    let font = text_font(shape, style);
+    let size = crate::text::measure(text, font, text_size(shape, font, unit));
+    Rect::from_origin_size(*at, size)
+}
+
+fn text_font(shape: &Shape, style: StyleId) -> Font {
+    shape
+        .paint
+        .text
+        .font
+        .unwrap_or(shape.style.unwrap_or(style).font())
+}
+
+fn text_size(shape: &Shape, font: Font, unit: f64) -> f64 {
+    shape.paint.text.size * unit * font.scale()
+}
+
 /// What one mark draws on `stage`.
 pub fn primitives(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Vec<Primitive> {
     let drawn = unturned(shape, style, unit, stage);
@@ -124,12 +147,14 @@ fn unturned(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Vec<Prim
         }
         Kind::Spotlight { .. } => Vec::new(),
         Kind::Text { at, text } => {
-            let font = shape
-                .paint
-                .text
-                .font
-                .unwrap_or(shape.style.unwrap_or(style).font());
-            vec![text_mark(*at, text, font, &context)]
+            let font = text_font(shape, style);
+            vec![text_mark(
+                *at,
+                text,
+                font,
+                text_size(shape, font, unit),
+                &context,
+            )]
         }
         kind => match shape.style.unwrap_or(style) {
             StyleId::Clean => clean::primitives(kind, &context),
@@ -167,13 +192,13 @@ impl Context {
 }
 
 /// A text mark, the same in every style but for its face.
-fn text_mark(at: Point, text: &str, font: Font, context: &Context) -> Primitive {
+fn text_mark(at: Point, text: &str, font: Font, size: f64, context: &Context) -> Primitive {
     let look = context.paint.text;
     let color = context.color();
     Primitive::Text {
         at,
         text: text.to_owned(),
-        size: look.size * context.unit * font.scale(),
+        size,
         color,
         font,
         align: look.align,

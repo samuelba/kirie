@@ -247,7 +247,10 @@ impl Shape {
 }
 
 impl Kind {
-    /// The area the mark covers, before stroke width.
+    /// The area the mark covers, before stroke width. Text covers only its anchor here: how
+    /// far it reaches depends on its face and size, which [`Document::bounds`] measures.
+    ///
+    /// [`Document::bounds`]: crate::Document::bounds
     pub fn bounds(&self) -> Rect {
         match self {
             Kind::Arrow { from, to } | Kind::Line { from, to } => Rect::from_points(*from, *to),
@@ -258,13 +261,7 @@ impl Kind {
             | Kind::Redact { rect }
             | Kind::Spotlight { rect } => rect.abs(),
             Kind::Pen { points } | Kind::Highlighter { points } => points_bounds(points),
-            Kind::Text { at, text } => {
-                let longest = text.lines().map(|line| line.chars().count()).max();
-                let lines = text.lines().count().max(1);
-                #[allow(clippy::cast_precision_loss)]
-                let size = (longest.unwrap_or(0) as f64 * 10.0, lines as f64 * 20.0);
-                Rect::from_origin_size(*at, size)
-            }
+            Kind::Text { at, .. } => Rect::from_origin_size(*at, (0.0, 0.0)),
             Kind::Counter { at, .. } => Rect::from_center_size(*at, (28.0, 28.0)),
         }
     }
@@ -459,10 +456,10 @@ mod tests {
         assert_eq!(Kind::Pen { points: vec![] }.bounds(), Rect::ZERO);
         assert_eq!(Kind::Counter { at: a, number: 1 }.bounds().center(), a);
         let text = Kind::Text {
-            at: Point::ORIGIN,
+            at: a,
             text: "ab\nc".into(),
         };
-        assert_eq!(text.bounds(), Rect::new(0.0, 0.0, 20.0, 40.0));
+        assert_eq!(text.bounds(), Rect::from_origin_size(a, (0.0, 0.0)));
     }
 
     #[test]

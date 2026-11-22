@@ -189,7 +189,15 @@ impl Surface<'_> {
             transform,
         );
         if let Some(picked) = picked {
-            draw_grips(frame, &picked, transform, 1.0, overlay.palette.accent);
+            let bounds = document.bounds(&picked);
+            draw_grips(
+                frame,
+                &picked,
+                bounds,
+                transform,
+                1.0,
+                overlay.palette.accent,
+            );
         }
     }
 

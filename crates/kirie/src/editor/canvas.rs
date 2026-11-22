@@ -121,7 +121,15 @@ impl canvas::Program<Message> for Board<'_> {
         let transform = editor.viewport.transform(self.image(), bounds.size());
         if let Some(picked) = self.draw_marks(&mut frame, image, transform) {
             let pixel = 1.0 / f64::from(editor.viewport.scale(self.image(), bounds.size()));
-            draw_grips(&mut frame, &picked, transform, pixel, editor.palette.accent);
+            let bounds = editor.document().bounds(&picked);
+            draw_grips(
+                &mut frame,
+                &picked,
+                bounds,
+                transform,
+                pixel,
+                editor.palette.accent,
+            );
         }
         vec![frame.into_geometry()]
     }
