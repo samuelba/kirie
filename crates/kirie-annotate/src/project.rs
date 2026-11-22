@@ -129,7 +129,10 @@ mod tests {
 
     fn sample() -> Project {
         let document = Document::new(8, 4, 2.0)
-            .apply(Op::SetStyle(StyleId::Ink))
+            .apply(Op::SetStyle {
+                style: StyleId::Ink,
+                recolor: Vec::new(),
+            })
             .apply(Op::Add {
                 kind: Kind::Arrow {
                     from: Point::new(1.0, 1.0),

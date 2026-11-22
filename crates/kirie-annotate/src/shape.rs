@@ -114,7 +114,8 @@ impl<'de> Deserialize<'de> for Weight {
     }
 }
 
-/// The colors offered in every style, the first being the default.
+/// The standard colors as the clean style shades them, the first being the default; the other
+/// styles shade them their own way, see [`StyleId::palette`].
 pub const PALETTE: [Rgba; 6] = [
     Rgba::rgb(0xe4, 0x57, 0x2e),
     Rgba::rgb(0xf2, 0xb1, 0x34),

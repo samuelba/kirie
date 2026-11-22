@@ -76,10 +76,19 @@ pub fn shadow<'a, Message: Clone + 'a>(
     )
 }
 
-/// The swatches to draw with, then a button to add a color. A right click on a swatch
+/// `color` in another style: the new style's shade of it, if it is a standard color.
+pub fn restyled(color: Rgba, recolor: &[(Rgba, Rgba)]) -> Rgba {
+    recolor
+        .iter()
+        .find(|(from, _)| *from == color)
+        .map_or(color, |(_, to)| *to)
+}
+
+/// The swatches of `style` to draw with, then a button to add a color. A right click on a swatch
 /// changes it; `editing` is what the picker is open for, if it is.
 pub fn colors<'a, Message: Clone + 'a>(
     swatches: &Swatches,
+    style: StyleId,
     paint: Paint,
     palette: Palette,
     editing: Option<Target>,
@@ -87,7 +96,7 @@ pub fn colors<'a, Message: Clone + 'a>(
     on_edit: impl Fn(Target) -> Message,
 ) -> Row<'a, Message> {
     let defaults = swatches
-        .defaults()
+        .defaults(style)
         .iter()
         .enumerate()
         .map(|(index, &color)| (Slot::Default(index), color));
@@ -371,6 +380,15 @@ mod tests {
         assert_eq!(tool_color(Some(Tool::Highlighter), blue, default), blue);
         assert_eq!(tool_color(Some(Tool::Arrow), HIGHLIGHT, default), default);
         assert_eq!(tool_color(None, blue, default), blue);
+    }
+
+    #[test]
+    fn a_new_style_reshades_only_standard_colors() {
+        let ink = StyleId::Ink.palette();
+        let recolor: Vec<(Rgba, Rgba)> = PALETTE.into_iter().zip(ink).collect();
+        assert_eq!(restyled(PALETTE[2], &recolor), ink[2]);
+        let teal = Rgba::rgb(0x14, 0xb8, 0xa6);
+        assert_eq!(restyled(teal, &recolor), teal);
     }
 
     #[test]

@@ -5,7 +5,7 @@ use iced::mouse::{self, Interaction};
 use iced::widget::canvas::{self, Action, Frame, Geometry, Path, Stroke, gradient};
 use iced::widget::{column, container, row, text, text_input};
 use iced::{Alignment, Background, Border, Color, Element, Length, Point, Rectangle, Renderer};
-use kirie_annotate::Rgba;
+use kirie_annotate::{Rgba, StyleId};
 use kirie_ui::widget::pill;
 use kirie_ui::{Palette, radius, space};
 
@@ -92,21 +92,24 @@ pub enum Target {
 #[derive(Debug, Clone)]
 pub struct Picker {
     target: Target,
+    /// The style whose swatches are offered.
+    style: StyleId,
     hsv: Hsv,
     alpha: u8,
     hex: String,
 }
 
 impl Picker {
-    /// Opens on the swatch's color, or on `current` for a new one.
-    pub fn new(target: Target, swatches: &Swatches, current: Rgba) -> Self {
+    /// Opens on the swatch's color among `style`'s, or on `current` for a new one.
+    pub fn new(target: Target, style: StyleId, swatches: &Swatches, current: Rgba) -> Self {
         let color = match target {
-            Target::Change(slot) => swatches.get(slot),
+            Target::Change(slot) => swatches.get(style, slot),
             Target::New => None,
         }
         .unwrap_or(current.with_alpha(255));
         Self {
             target,
+            style,
             hsv: Hsv::from_rgba(color),
             alpha: color.a,
             hex: color.to_hex(),
@@ -172,8 +175,8 @@ pub fn update(picker: &mut Option<Picker>, swatches: &mut Swatches, event: Event
         Event::Apply => {
             let color = open.color();
             match open.target {
-                Target::Change(slot) => swatches.replace(slot, color),
-                Target::New => swatches.add(color),
+                Target::Change(slot) => swatches.replace(open.style, slot, color),
+                Target::New => swatches.add(open.style, color),
             }
             Some(color)
         }
@@ -436,7 +439,12 @@ mod tests {
     #[test]
     fn a_new_color_is_kept_and_drawn_with() {
         let mut swatches = Swatches::default();
-        let mut picker = Some(Picker::new(Target::New, &swatches, PALETTE[0]));
+        let mut picker = Some(Picker::new(
+            Target::New,
+            StyleId::Clean,
+            &swatches,
+            PALETTE[0],
+        ));
         update(&mut picker, &mut swatches, Event::Hue(240.0));
         let shade = Event::Shade {
             saturation: 1.0,
@@ -458,6 +466,7 @@ mod tests {
         let mut swatches = Swatches::default();
         let mut picker = Some(Picker::new(
             Target::Change(Slot::Default(1)),
+            StyleId::Clean,
             &swatches,
             PALETTE[0],
         ));
@@ -475,6 +484,7 @@ mod tests {
         let mut swatches = Swatches::default();
         let mut picker = Some(Picker::new(
             Target::Change(Slot::Default(2)),
+            StyleId::Clean,
             &swatches,
             PALETTE[0],
         ));
@@ -484,16 +494,17 @@ mod tests {
             update(&mut picker, &mut swatches, Event::Apply),
             Outcome::Changed { pick: Some(pink) }
         );
-        assert_eq!(swatches.defaults()[2], pink);
+        assert_eq!(swatches.defaults(StyleId::Clean)[2], pink);
     }
 
     #[test]
     fn removing_and_resetting_change_the_swatches_only() {
         let mut swatches = Swatches::default();
-        swatches.add(Rgba::rgb(1, 2, 3));
-        swatches.replace(Slot::Default(0), Rgba::rgb(4, 5, 6));
+        swatches.add(StyleId::Clean, Rgba::rgb(1, 2, 3));
+        swatches.replace(StyleId::Clean, Slot::Default(0), Rgba::rgb(4, 5, 6));
         let mut picker = Some(Picker::new(
             Target::Change(Slot::Custom(0)),
+            StyleId::Clean,
             &swatches,
             PALETTE[0],
         ));
@@ -504,6 +515,7 @@ mod tests {
         assert!(swatches.custom().is_empty());
         let mut picker = Some(Picker::new(
             Target::Change(Slot::Default(0)),
+            StyleId::Clean,
             &swatches,
             PALETTE[0],
         ));
@@ -515,9 +527,10 @@ mod tests {
     fn a_translucent_color_stays_translucent() {
         let mut swatches = Swatches::default();
         let glass = Rgba::rgb(0xec, 0x48, 0x99).with_alpha(0x80);
-        swatches.add(glass);
+        swatches.add(StyleId::Clean, glass);
         let mut picker = Some(Picker::new(
             Target::Change(Slot::Custom(0)),
+            StyleId::Clean,
             &swatches,
             PALETTE[0],
         ));
@@ -533,6 +546,7 @@ mod tests {
         let mut swatches = Swatches::default();
         let mut picker = Some(Picker::new(
             Target::Change(Slot::Default(0)),
+            StyleId::Clean,
             &swatches,
             PALETTE[0],
         ));

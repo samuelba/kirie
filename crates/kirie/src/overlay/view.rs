@@ -196,6 +196,7 @@ impl Overlay {
         let styles = controls::styles(style, palette, Message::PickStyle);
         let colors = controls::colors(
             &self.swatches,
+            style,
             paint,
             palette,
             self.picker.as_ref().map(Picker::target),

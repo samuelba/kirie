@@ -71,6 +71,11 @@ button. **Save project** (Ctrl+Shift+S) keeps a `.kirie` file whose marks you ca
 - **Sketch**: hand-drawn lines, hatched fills and handwritten text.
 - **Ink**: brush strokes that swell and taper, and an open ensō for circles.
 
+Each style has its own shades of the standard colors: bright pastels for Sketch, the pigments of
+ink painting for Ink.
+Switching styles moves marks in a standard color to the new style's shade and leaves your own
+colors as they are.
+
 ## Build from source
 
 Kirie needs Rust (stable) and the Wayland and xkbcommon development files.

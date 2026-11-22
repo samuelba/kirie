@@ -6,7 +6,7 @@ use std::sync::Arc;
 use kurbo::{Rect, Vec2};
 use serde::{Deserialize, Serialize};
 
-use crate::shape::{Kind, Paint, Shape, ShapeId};
+use crate::shape::{Kind, Paint, Rgba, Shape, ShapeId};
 use crate::style::StyleId;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -62,7 +62,12 @@ pub enum Op {
         ids: Vec<ShapeId>,
     },
     Clear,
-    SetStyle(StyleId),
+    /// Changes the style. Marks in the document's style painted the first color of a pair in
+    /// `recolor` take the second: the old style's shade of a standard color becomes the new one's.
+    SetStyle {
+        style: StyleId,
+        recolor: Vec<(Rgba, Rgba)>,
+    },
     SetShadow(bool),
     SetSpotlightBrightness(f64),
     Crop(Option<Rect>),
@@ -241,7 +246,28 @@ impl Document {
                 next.shapes = kept.into_iter().chain(raised).collect();
             }
             Op::Clear => next.shapes.clear(),
-            Op::SetStyle(style) => next.style = style,
+            Op::SetStyle { style, recolor } => {
+                next.style = style;
+                let painted = |shape: &Shape| {
+                    recolor
+                        .iter()
+                        .find(|(from, _)| *from == shape.paint.color)
+                        .filter(|_| shape.style.is_none())
+                        .map(|(_, to)| *to)
+                };
+                let ids: Vec<ShapeId> = next
+                    .shapes()
+                    .filter(|shape| painted(shape).is_some())
+                    .map(|shape| shape.id)
+                    .collect();
+                next.map(&ids, |shape| Shape {
+                    paint: Paint {
+                        color: painted(shape).unwrap_or(shape.paint.color),
+                        ..shape.paint
+                    },
+                    ..shape.clone()
+                });
+            }
             Op::SetShadow(shadow) => next.shadow = shadow,
             Op::SetSpotlightBrightness(brightness) => {
                 next.spotlight_brightness = Self::spotlight_brightness(brightness);
@@ -354,6 +380,8 @@ impl History {
 #[cfg(test)]
 mod tests {
     use kurbo::Point;
+
+    use crate::shape::PALETTE;
 
     use super::*;
 
@@ -478,7 +506,10 @@ mod tests {
         });
         let grown = bigger.bounds(bigger.shape(ShapeId(1)).unwrap());
         assert!(grown.width() > area.width() * 1.8);
-        let sketched = doc.apply(Op::SetStyle(StyleId::Sketch));
+        let sketched = doc.apply(Op::SetStyle {
+            style: StyleId::Sketch,
+            recolor: Vec::new(),
+        });
         assert_ne!(sketched.bounds(text), area, "measured in the style's face");
     }
 
@@ -497,6 +528,36 @@ mod tests {
     }
 
     #[test]
+    fn a_new_style_reshades_standard_colors_and_keeps_the_rest() {
+        let red = (PALETTE[0], StyleId::Ink.palette()[0]);
+        let teal = Rgba::rgb(0x14, 0xb8, 0xa6);
+        let painted = |color| Op::Add {
+            kind: Kind::Rectangle {
+                rect: Rect::new(0.0, 0.0, 5.0, 5.0),
+            },
+            paint: Paint {
+                color,
+                ..Paint::default()
+            },
+        };
+        let doc = Document::new(10, 10, 1.0)
+            .apply(painted(red.0))
+            .apply(painted(teal))
+            .apply(painted(red.0));
+        let own = doc.shapes().last().unwrap().id;
+        let mut doc = doc;
+        Arc::make_mut(&mut doc.shapes[2]).style = Some(StyleId::Clean);
+        let inked = doc.apply(Op::SetStyle {
+            style: StyleId::Ink,
+            recolor: vec![red],
+        });
+        assert_eq!(inked.style, StyleId::Ink);
+        let colors: Vec<Rgba> = inked.shapes().map(|shape| shape.paint.color).collect();
+        assert_eq!(colors, [red.1, teal, red.0]);
+        assert_eq!(inked.shape(own).unwrap().style, Some(StyleId::Clean));
+    }
+
+    #[test]
     fn crops_stay_inside_the_image() {
         let doc = Document::new(100, 50, 1.0);
         assert_eq!(doc.visible(), Rect::new(0.0, 0.0, 100.0, 50.0));
@@ -506,7 +567,10 @@ mod tests {
         let outside = doc.apply(Op::Crop(Some(Rect::new(200.0, 200.0, 300.0, 300.0))));
         assert_eq!(outside.crop, None);
         assert_eq!(cropped.apply(Op::Crop(None)).crop, None);
-        let styled = doc.apply(Op::SetStyle(StyleId::Sketch));
+        let styled = doc.apply(Op::SetStyle {
+            style: StyleId::Sketch,
+            recolor: Vec::new(),
+        });
         assert_eq!(styled.style, StyleId::Sketch);
         assert!(doc.shadow);
         let flat = doc.apply(Op::SetShadow(false));
@@ -534,7 +598,10 @@ mod tests {
     #[test]
     fn transformed_documents_keep_their_marks() {
         let doc = Document::new(100, 100, 1.0)
-            .apply(Op::SetStyle(StyleId::Ink))
+            .apply(Op::SetStyle {
+                style: StyleId::Ink,
+                recolor: Vec::new(),
+            })
             .apply(line(10.0));
         let moved = doc.transformed(
             kurbo::Affine::translate((-5.0, 0.0)).then_scale(2.0),

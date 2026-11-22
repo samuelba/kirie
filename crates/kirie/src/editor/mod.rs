@@ -201,7 +201,7 @@ impl Editor {
             viewport: Viewport::fitted(),
             tool: Tool::Arrow,
             paint: Paint {
-                color: swatches.first(),
+                color: swatches.first(StyleId::default()),
                 ..Paint::default()
             },
             swatches,
@@ -233,8 +233,10 @@ impl Editor {
             loaded.image.height(),
             loaded.image.as_raw().clone(),
         );
+        let before = self.document().style;
         self.kept = loaded.document.clone();
         self.history = History::new(loaded.document);
+        self.follow_style(before);
         self.image = Some((loaded.image, handle));
         self.path = loaded.path;
         self.viewport = Viewport::fitted();
@@ -284,8 +286,11 @@ impl Editor {
             Message::PickTool(tool) => {
                 self.commit_text();
                 self.tool = tool;
-                self.paint.color =
-                    controls::tool_color(Some(tool), self.paint.color, self.swatches.first());
+                self.paint.color = controls::tool_color(
+                    Some(tool),
+                    self.paint.color,
+                    self.swatches.first(self.document().style),
+                );
                 self.draft = None;
                 if tool != Tool::Select {
                     self.picked = None;
@@ -309,12 +314,8 @@ impl Editor {
                 }
             }
             Message::TextDone => self.commit_text(),
-            Message::Undo => {
-                self.history.undo();
-            }
-            Message::Redo => {
-                self.history.redo();
-            }
+            Message::Undo => self.travel(true),
+            Message::Redo => self.travel(false),
             Message::Delete => {
                 if let Some(id) = self.picked.take() {
                     self.history.apply(Op::Remove { ids: vec![id] });
@@ -398,7 +399,10 @@ impl Editor {
     fn restyle(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::PickStyle(style) => {
-                self.history.apply(Op::SetStyle(style));
+                let before = self.document().style;
+                let recolor = self.swatches.recolor(before, style);
+                self.history.apply(Op::SetStyle { style, recolor });
+                self.follow_style(before);
             }
             Message::ToggleShadow => {
                 let shadow = !self.document().shadow;
@@ -406,7 +410,12 @@ impl Editor {
             }
             Message::PickColor(color) => self.repaint(|paint| paint.color = color),
             Message::EditColor(target) => {
-                self.picker = Some(Picker::new(target, &self.swatches, self.paint.color));
+                self.picker = Some(Picker::new(
+                    target,
+                    self.document().style,
+                    &self.swatches,
+                    self.paint.color,
+                ));
             }
             Message::Picker(event) => return self.edit_color(event),
             Message::Weight(controls::WeightEvent::Done)
@@ -492,6 +501,27 @@ impl Editor {
                     Scheme::Light => Palette::DARK,
                 };
             }
+        }
+    }
+
+    /// Undoes or redoes a step; the drawing color follows the style there.
+    fn travel(&mut self, undo: bool) {
+        let before = self.document().style;
+        if undo {
+            self.history.undo();
+        } else {
+            self.history.redo();
+        }
+        self.follow_style(before);
+    }
+
+    /// Keeps drawing in the standard color drawn with before the style changed from `before`,
+    /// in the new style's shade of it.
+    fn follow_style(&mut self, before: StyleId) {
+        let now = self.document().style;
+        if now != before {
+            let recolor = self.swatches.recolor(before, now);
+            self.paint.color = crate::controls::restyled(self.paint.color, &recolor);
         }
     }
 

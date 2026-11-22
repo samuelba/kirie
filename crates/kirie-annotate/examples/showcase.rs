@@ -138,7 +138,10 @@ fn main() {
     let mut typesetter = Typesetter::new();
     for (column, style) in StyleId::ALL.into_iter().enumerate() {
         let x = COLUMN * column as f64;
-        let mut document = Document::new(width, height, 1.0).apply(Op::SetStyle(style));
+        let mut document = Document::new(width, height, 1.0).apply(Op::SetStyle {
+            style,
+            recolor: Vec::new(),
+        });
         for (kind, paint) in marks(x) {
             document = document.apply(Op::Add { kind, paint });
         }

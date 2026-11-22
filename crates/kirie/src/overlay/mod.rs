@@ -283,7 +283,7 @@ impl Overlay {
             palette: Palette::DARK,
             tool: None,
             paint: Paint {
-                color: swatches.first(),
+                color: swatches.first(document.style),
                 ..Paint::default()
             },
             swatches,
@@ -398,8 +398,11 @@ impl Overlay {
                     self.picked = None;
                 }
                 self.tool = tool;
-                self.paint.color =
-                    crate::controls::tool_color(tool, self.paint.color, self.swatches.first());
+                self.paint.color = crate::controls::tool_color(
+                    tool,
+                    self.paint.color,
+                    self.swatches.first(self.style()),
+                );
                 self.draft = None;
                 Task::none()
             }
@@ -427,11 +430,11 @@ impl Overlay {
                 Task::none()
             }
             Message::Undo => {
-                self.history.undo();
+                self.travel(true);
                 Task::none()
             }
             Message::Redo => {
-                self.history.redo();
+                self.travel(false);
                 Task::none()
             }
             Message::Delete => {
@@ -496,7 +499,10 @@ impl Overlay {
     fn restyle(&mut self, message: Message) {
         match message {
             Message::PickStyle(style) => {
-                self.history.apply(Op::SetStyle(style));
+                let before = self.style();
+                let recolor = self.swatches.recolor(before, style);
+                self.history.apply(Op::SetStyle { style, recolor });
+                self.follow_style(before);
             }
             Message::ToggleShadow => {
                 let shadow = !self.document().shadow;
@@ -506,7 +512,12 @@ impl Overlay {
                 self.repaint(|paint| paint.color = color);
             }
             Message::EditColor(target) => {
-                self.picker = Some(Picker::new(target, &self.swatches, self.paint.color));
+                self.picker = Some(Picker::new(
+                    target,
+                    self.style(),
+                    &self.swatches,
+                    self.paint.color,
+                ));
             }
             Message::Picker(event) => {
                 if let picker::Outcome::Changed { pick } =
@@ -545,6 +556,27 @@ impl Overlay {
                 );
             }
             _ => {}
+        }
+    }
+
+    /// Undoes or redoes a step; the drawing color follows the style there.
+    fn travel(&mut self, undo: bool) {
+        let before = self.document().style;
+        if undo {
+            self.history.undo();
+        } else {
+            self.history.redo();
+        }
+        self.follow_style(before);
+    }
+
+    /// Keeps drawing in the standard color drawn with before the style changed from `before`,
+    /// in the new style's shade of it.
+    fn follow_style(&mut self, before: StyleId) {
+        let now = self.document().style;
+        if now != before {
+            let recolor = self.swatches.recolor(before, now);
+            self.paint.color = crate::controls::restyled(self.paint.color, &recolor);
         }
     }
 

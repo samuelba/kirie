@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::document::Document;
 use crate::primitive::{Effect, FillRule, Font, Primitive};
-use crate::shape::{Kind, Rgba, Shape, SpotShape};
+use crate::shape::{Kind, PALETTE, Rgba, Shape, SpotShape};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum StyleId {
@@ -31,6 +31,30 @@ impl StyleId {
             StyleId::Clean => "Clean",
             StyleId::Sketch => "Sketch",
             StyleId::Ink => "Ink",
+        }
+    }
+
+    /// The standard colors in this style's shades, in the order of [`PALETTE`]: bright pastels
+    /// for pencil, the pigments of ink painting for ink.
+    pub const fn palette(self) -> [Rgba; 6] {
+        match self {
+            StyleId::Clean => PALETTE,
+            StyleId::Sketch => [
+                Rgba::rgb(0xf2, 0x70, 0x6d),
+                Rgba::rgb(0xf5, 0xc4, 0x51),
+                Rgba::rgb(0x5f, 0xc8, 0x8f),
+                Rgba::rgb(0x6a, 0xa6, 0xf8),
+                Rgba::rgb(0xff, 0xfc, 0xf5),
+                Rgba::rgb(0x3b, 0x3f, 0x48),
+            ],
+            StyleId::Ink => [
+                Rgba::rgb(0xc7, 0x3a, 0x2c),
+                Rgba::rgb(0xc9, 0x95, 0x2a),
+                Rgba::rgb(0x2c, 0x7a, 0x54),
+                Rgba::rgb(0x2b, 0x4f, 0x8f),
+                Rgba::rgb(0xf5, 0xf0, 0xe6),
+                Rgba::rgb(0x1f, 0x1d, 0x1a),
+            ],
         }
     }
 
@@ -449,7 +473,10 @@ mod tests {
     #[test]
     fn drawing_is_deterministic() {
         let document = Document::new(100, 100, 1.0)
-            .apply(Op::SetStyle(StyleId::Sketch))
+            .apply(Op::SetStyle {
+                style: StyleId::Sketch,
+                recolor: Vec::new(),
+            })
             .apply(Op::Add {
                 kind: Kind::Rectangle {
                     rect: Rect::new(10.0, 10.0, 50.0, 50.0),
@@ -539,6 +566,23 @@ mod tests {
     fn styles_have_names() {
         for style in StyleId::ALL {
             assert!(!style.name().is_empty());
+        }
+    }
+
+    #[test]
+    fn every_style_shades_the_standard_colors_its_own_way() {
+        assert_eq!(StyleId::Clean.palette(), PALETTE);
+        for style in StyleId::ALL {
+            let palette = style.palette();
+            for (index, color) in palette.iter().enumerate() {
+                assert!(!palette[index + 1..].contains(color), "{style:?} repeats");
+            }
+            for other in StyleId::ALL.into_iter().filter(|other| *other != style) {
+                assert!(
+                    palette.iter().all(|color| !other.palette().contains(color)),
+                    "{style:?} and {other:?} share a shade"
+                );
+            }
         }
     }
 

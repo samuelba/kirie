@@ -298,6 +298,7 @@ impl Editor {
         let mut colors = column![
             controls::colors(
                 &self.swatches,
+                self.document().style,
                 paint,
                 palette,
                 self.picker.as_ref().map(Picker::target),
