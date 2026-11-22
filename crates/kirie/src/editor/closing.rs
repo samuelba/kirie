@@ -62,7 +62,7 @@ impl Editor {
         } else {
             self.open(loaded);
         }
-        super::present()
+        Task::none()
     }
 
     pub(super) fn answer(&mut self, answer: Answer) -> Task<Message> {

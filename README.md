@@ -61,9 +61,25 @@ Then mark it up with the toolbar under the selection.
 
 Hold **Shift** while drawing to snap lines to 45° and boxes to squares.
 
+Taking the same region again and again? Press the pin in the toolbar: the next screenshot starts
+with that region selected, so Enter takes it at once. Moving or resizing the selection unpins it.
+
+Kirie keeps the style, color, weight, text look, shadow, spotlight brightness and frame you last
+used for the next screenshot, in `~/.local/state/kirie/drawing.ron`.
+
 `kirie` opens the editor. Paste an image with Ctrl+V, open one with `kirie edit FILE`, or take a
-screenshot from its header. Zoom with Ctrl+scroll, pan with the scroll wheel or the middle
-button. **Save project** (Ctrl+Shift+S) keeps a `.kirie` file whose marks you can change later.
+screenshot from its header. Zoom with Ctrl+scroll, Ctrl+plus and Ctrl+minus, or the zoom control
+in the status bar (Ctrl+0 fits the image, Ctrl+1 shows it at actual size); pan with the scroll
+wheel or the middle button. Press C, or the crop button under the tools, to keep only part of the image: drag the
+frame and press Enter. **Frame** puts room around the picture, filled with a color or left
+transparent, with a soft shadow under the picture if you like, and can take in marks drawn
+beyond the picture's edges. **Save project** (Ctrl+Shift+S) keeps a `.kirie` file whose marks you can change later.
+
+Saved and copied images hold only the finished picture. Redact covers every pixel it touches
+with solid color. Blur and pixelate scramble each block a little, so guesses of what was there
+never match exactly, but they keep a trace of light and dark: use Redact for passwords, keys and
+anything else that must stay secret. A `.kirie` project keeps the original screenshot, under
+every mark, so that the marks stay editable; share the saved image, not the project.
 
 ### Styles
 

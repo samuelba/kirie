@@ -1,7 +1,7 @@
 //! The colors offered for drawing: each style's shades of the standard colors, which can be
 //! changed, and custom colors kept for reuse, saved in `~/.config/kirie/colors.ron`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use kirie_annotate::{PALETTE, Rgba, StyleId};
 use serde::{Deserialize, Serialize};
@@ -162,7 +162,7 @@ impl Swatches {
 
     pub fn save(&self) -> Result<(), String> {
         let path = path().ok_or("cannot find the config folder")?;
-        write(&path, &self.to_ron()?)
+        crate::store::write(&path, &self.to_ron()?)
             .map_err(|error| format!("cannot save colors to {}: {error}", path.display()))
     }
 
@@ -212,16 +212,6 @@ impl Stored {
 
 fn path() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|dirs| dirs.config_dir().join("kirie/colors.ron"))
-}
-
-/// Writes through a temporary file so a crash never leaves half a file behind.
-fn write(path: &Path, text: &str) -> std::io::Result<()> {
-    if let Some(folder) = path.parent() {
-        std::fs::create_dir_all(folder)?;
-    }
-    let partial = path.with_extension("ron.partial");
-    std::fs::write(&partial, text)?;
-    std::fs::rename(&partial, path)
 }
 
 #[cfg(test)]
@@ -345,16 +335,5 @@ mod tests {
         assert_eq!(swatches.first(StyleId::Clean), TEAL);
         assert_eq!(swatches.defaults(StyleId::Ink), StyleId::Ink.palette());
         assert_eq!(swatches.custom(), [PINK]);
-    }
-
-    #[test]
-    fn saving_replaces_the_file_whole() {
-        let folder = std::env::temp_dir().join(format!("kirie-swatches-{}", std::process::id()));
-        let path = folder.join("nested/colors.ron");
-        write(&path, "one").unwrap();
-        write(&path, "two").unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "two");
-        assert!(!path.with_extension("ron.partial").exists());
-        std::fs::remove_dir_all(folder).unwrap();
     }
 }

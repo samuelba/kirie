@@ -108,6 +108,9 @@ impl Painter<'_> {
             Primitive::Stroke { path, color, width } => {
                 frame.stroke(&to_iced(path, transform), stroke(*color, *width * scale));
             }
+            Primitive::Cover { path, color } => {
+                frame.fill(&to_iced(path, transform), color_of(color.with_alpha(0xff)));
+            }
             Primitive::Text {
                 at,
                 text,

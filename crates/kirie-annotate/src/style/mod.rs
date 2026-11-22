@@ -5,7 +5,7 @@ mod ink;
 mod sketch;
 mod spotlight;
 
-use kurbo::{BezPath, Point, Rect, Vec2};
+use kurbo::{BezPath, Point, Rect, Shape as _, Vec2};
 use serde::{Deserialize, Serialize};
 
 use crate::document::Document;
@@ -150,6 +150,36 @@ fn text_size(shape: &Shape, font: Font, unit: f64) -> f64 {
     shape.paint.text.size * unit * font.scale()
 }
 
+/// Where `primitive` puts paint, roughly: its outline grown by its stroke.
+pub fn reach(primitive: &Primitive) -> Option<Rect> {
+    use kurbo::Shape as _;
+    match primitive {
+        Primitive::Fill { path, .. } | Primitive::Cover { path, .. } => Some(path.bounding_box()),
+        Primitive::Stroke { path, width, .. } => {
+            Some(path.bounding_box().inflate(width / 2.0, width / 2.0))
+        }
+        Primitive::Text {
+            at,
+            text,
+            size,
+            font,
+            halo,
+            centered,
+            ..
+        } => {
+            let measured = crate::text::measure(text, *font, *size);
+            let origin = if *centered {
+                *at - Vec2::new(measured.width / 2.0, measured.height / 2.0)
+            } else {
+                *at
+            };
+            let halo = if halo.is_some() { size * 0.08 } else { 0.0 };
+            Some(Rect::from_origin_size(origin, measured).inflate(halo, halo))
+        }
+        Primitive::Effect { rect, .. } => Some(rect.abs()),
+    }
+}
+
 /// What one mark draws on `stage`.
 pub fn primitives(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Vec<Primitive> {
     let drawn = unturned(shape, style, unit, stage);
@@ -169,6 +199,10 @@ pub fn primitives(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Ve
                 path: turn * path,
                 color,
                 width,
+            },
+            Primitive::Cover { path, color } => Primitive::Cover {
+                path: turn * path,
+                color,
             },
             other => other,
         })
@@ -212,11 +246,37 @@ fn unturned(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Vec<Prim
                 &context,
             )]
         }
-        kind => match shape.style.unwrap_or(style) {
-            StyleId::Clean => clean::primitives(kind, &context),
-            StyleId::Sketch => sketch::primitives(kind, &context),
-            StyleId::Ink => ink::primitives(kind, &context),
-        },
+        Kind::Redact { rect } => {
+            let style = shape.style.unwrap_or(style);
+            let cover = Primitive::Cover {
+                path: rect.abs().inflate(COVER_REACH, COVER_REACH).to_path(0.1),
+                color: redact_color(style),
+            };
+            std::iter::once(cover)
+                .chain(styled(&shape.kind, style, &context))
+                .collect()
+        }
+        kind => styled(kind, shape.style.unwrap_or(style), &context),
+    }
+}
+
+/// How far past a redaction its cover reaches, in pixels: enough to take in every pixel the
+/// redaction touches, turned or not.
+const COVER_REACH: f64 = 0.75;
+
+fn styled(kind: &Kind, style: StyleId, context: &Context) -> Vec<Primitive> {
+    match style {
+        StyleId::Clean => clean::primitives(kind, context),
+        StyleId::Sketch => sketch::primitives(kind, context),
+        StyleId::Ink => ink::primitives(kind, context),
+    }
+}
+
+fn redact_color(style: StyleId) -> Rgba {
+    match style {
+        StyleId::Clean => clean::REDACT,
+        StyleId::Sketch => sketch::REDACT,
+        StyleId::Ink => ink::REDACT,
     }
 }
 
@@ -413,8 +473,6 @@ impl Rng {
 
 #[cfg(test)]
 mod tests {
-    use kurbo::Shape as _;
-
     use super::*;
     use crate::document::Op;
     use crate::shape::{Paint, ShapeId, Weight};

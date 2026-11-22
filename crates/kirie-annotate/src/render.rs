@@ -1,7 +1,7 @@
 //! Draws a document onto its image with tiny-skia: what gets saved, copied and exported.
 
 use image::RgbaImage;
-use kurbo::{BezPath, PathEl};
+use kurbo::{Affine, BezPath, PathEl, Vec2};
 use tiny_skia::{
     FillRule as SkiaFillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform,
 };
@@ -26,7 +26,8 @@ pub enum RenderError {
     Empty,
 }
 
-/// The finished image: `base` with every mark drawn on it, cut to the document's crop.
+/// The finished image: what the document's canvas covers, the kept part of `base` in its
+/// frame, with every mark drawn on top.
 pub fn render(
     document: &Document,
     base: &RgbaImage,
@@ -40,26 +41,143 @@ pub fn render(
             got_height: base.height(),
         });
     }
-    let mut pixmap = to_pixmap(base).ok_or(RenderError::Empty)?;
-    for primitive in render_list(document) {
-        draw(&mut pixmap, &primitive, typesetter);
+    let kept =
+        Region::clamp(document.visible(), base.width(), base.height()).ok_or(RenderError::Empty)?;
+    let canvas = document.canvas();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let mut pixmap =
+        Pixmap::new(canvas.width() as u32, canvas.height() as u32).ok_or(RenderError::Empty)?;
+    let frame = document.frame;
+    if let Some(background) = frame.background {
+        pixmap.fill(tiny_skia::Color::from_rgba8(
+            background.r,
+            background.g,
+            background.b,
+            background.a,
+        ));
     }
-    let image = from_pixmap(&pixmap);
-    let Some(crop) = document
-        .crop
-        .and_then(|crop| Region::clamp(crop, image.width(), image.height()))
-    else {
-        return Ok(image);
-    };
+    let shift = -canvas.origin().to_vec2();
+    #[allow(clippy::cast_precision_loss)]
+    let picture = kurbo::Rect::new(
+        kept.x as f64,
+        kept.y as f64,
+        (kept.x + kept.width) as f64,
+        (kept.y + kept.height) as f64,
+    ) + shift;
+    if frame.shadow {
+        cast_shadow(
+            &mut pixmap,
+            picture,
+            document.shadow_radius(),
+            document.shadow_drop(),
+        );
+    }
     #[allow(clippy::cast_possible_truncation)]
-    Ok(image::imageops::crop_imm(
-        &image,
-        crop.x as u32,
-        crop.y as u32,
-        crop.width as u32,
-        crop.height as u32,
+    let part = image::imageops::crop_imm(
+        base,
+        kept.x as u32,
+        kept.y as u32,
+        kept.width as u32,
+        kept.height as u32,
     )
-    .to_image())
+    .to_image();
+    let part = to_pixmap(&part).ok_or(RenderError::Empty)?;
+    #[allow(clippy::cast_possible_truncation)]
+    pixmap.draw_pixmap(
+        picture.x0 as i32,
+        picture.y0 as i32,
+        part.as_ref(),
+        &tiny_skia::PixmapPaint::default(),
+        Transform::identity(),
+        None,
+    );
+    for primitive in render_list(document) {
+        draw(&mut pixmap, &shifted(primitive, shift), typesetter);
+    }
+    Ok(from_pixmap(&pixmap))
+}
+
+/// `primitive` moved `by`.
+fn shifted(primitive: Primitive, by: Vec2) -> Primitive {
+    let moved = Affine::translate(by);
+    match primitive {
+        Primitive::Fill { path, color, rule } => Primitive::Fill {
+            path: moved * path,
+            color,
+            rule,
+        },
+        Primitive::Stroke { path, color, width } => Primitive::Stroke {
+            path: moved * path,
+            color,
+            width,
+        },
+        Primitive::Cover { path, color } => Primitive::Cover {
+            path: moved * path,
+            color,
+        },
+        Primitive::Text {
+            at,
+            text,
+            size,
+            color,
+            font,
+            align,
+            halo,
+            centered,
+        } => Primitive::Text {
+            at: at + by,
+            text,
+            size,
+            color,
+            font,
+            align,
+            halo,
+            centered,
+        },
+        Primitive::Effect { rect, effect } => Primitive::Effect {
+            rect: rect + by,
+            effect,
+        },
+    }
+}
+
+/// A soft shadow of `radius` under `picture`, fallen `drop` below it.
+fn cast_shadow(pixmap: &mut Pixmap, picture: kurbo::Rect, radius: f64, drop: f64) {
+    let Some(mut layer) = Pixmap::new(pixmap.width(), pixmap.height()) else {
+        return;
+    };
+    let dropped = picture + Vec2::new(0.0, drop);
+    #[allow(clippy::cast_possible_truncation)]
+    let Some(rect) = tiny_skia::Rect::from_ltrb(
+        dropped.x0 as f32,
+        dropped.y0 as f32,
+        dropped.x1 as f32,
+        dropped.y1 as f32,
+    ) else {
+        return;
+    };
+    layer.fill_rect(
+        rect,
+        &paint(Rgba::rgb(0, 0, 0).with_alpha(0x73)),
+        Transform::identity(),
+        None,
+    );
+    let region = Region {
+        x: 0,
+        y: 0,
+        width: layer.width() as usize,
+        height: layer.height() as usize,
+    };
+    let stride = region.width * 4;
+    effects::soften(layer.data_mut(), stride, region, radius);
+    pixmap.draw_pixmap(
+        0,
+        0,
+        layer.as_ref(),
+        &tiny_skia::PixmapPaint::default(),
+        Transform::identity(),
+        None,
+    );
 }
 
 /// Draws one primitive.
@@ -83,6 +201,7 @@ pub fn draw(pixmap: &mut Pixmap, primitive: &Primitive, typesetter: &mut Typeset
             }
             fill(pixmap, &outline, *color, FillRule::NonZero);
         }
+        Primitive::Cover { path, color } => cover(pixmap, path, *color),
         Primitive::Effect { rect, effect } => {
             let Some(region) = Region::clamp(*rect, pixmap.width(), pixmap.height()) else {
                 return;
@@ -105,6 +224,22 @@ fn paint(color: Rgba) -> Paint<'static> {
     paint.set_color_rgba8(color.r, color.g, color.b, color.a);
     paint.anti_alias = true;
     paint
+}
+
+/// Fills every pixel whose center is inside `path` with `color`, fully opaque.
+fn cover(pixmap: &mut Pixmap, path: &BezPath, color: Rgba) {
+    let Some(path) = to_skia(path) else {
+        return;
+    };
+    let mut paint = paint(color.with_alpha(0xff));
+    paint.anti_alias = false;
+    pixmap.fill_path(
+        &path,
+        &paint,
+        SkiaFillRule::Winding,
+        Transform::identity(),
+        None,
+    );
 }
 
 fn fill(pixmap: &mut Pixmap, path: &BezPath, color: Rgba, rule: FillRule) {
@@ -241,6 +376,41 @@ mod tests {
     }
 
     #[test]
+    fn a_redaction_leaves_no_trace_in_any_pixel_it_touches() {
+        let rect = Rect::new(10.3, 10.7, 29.6, 29.2);
+        for style in crate::style::StyleId::ALL {
+            for rotation in [0.0, 0.3] {
+                let redacted = add(
+                    &Document::new(40, 40, 1.0).apply(Op::SetStyle {
+                        style,
+                        recolor: Vec::new(),
+                    }),
+                    Kind::Redact { rect },
+                );
+                let id = redacted.shapes().next().unwrap().id;
+                let document = redacted.apply(Op::Reshape {
+                    id,
+                    kind: Kind::Redact { rect },
+                    rotation,
+                });
+                let out = render(&document, &white(40, 40), &mut Typesetter::new()).unwrap();
+                let turn = document.shape(id).unwrap().turn();
+                let touched = |x: u32, y: u32| {
+                    let middle =
+                        turn.inverse() * Point::new(f64::from(x) + 0.5, f64::from(y) + 0.5);
+                    rect.inflate(0.5, 0.5).contains(middle)
+                };
+                let colors: std::collections::HashSet<_> = (0..40)
+                    .flat_map(|y| (0..40).map(move |x| (x, y)))
+                    .filter(|&(x, y)| touched(x, y))
+                    .map(|(x, y)| *out.get_pixel(x, y))
+                    .collect();
+                assert_eq!(colors.len(), 1, "{style:?} turned {rotation}: {colors:?}");
+            }
+        }
+    }
+
+    #[test]
     fn lines_draw_in_their_color() {
         let document = add(
             &Document::new(40, 40, 1.0),
@@ -266,6 +436,73 @@ mod tests {
         let out = render(&document, &white(120, 60), &mut Typesetter::new()).unwrap();
         let inked = out.pixels().filter(|pixel| pixel[1] < 200).count();
         assert!(inked > 50, "{inked}");
+    }
+
+    fn framed(document: &Document, frame: crate::Frame) -> Document {
+        document.apply(Op::SetFrame(frame))
+    }
+
+    #[test]
+    fn a_frame_puts_room_around_the_picture() {
+        let red = Rgba::rgb(200, 0, 0);
+        let document = framed(
+            &Document::new(40, 30, 1.0),
+            crate::Frame {
+                margin: 40.0,
+                background: Some(red),
+                shadow: true,
+                overflow: false,
+            },
+        );
+        let out = render(&document, &white(40, 30), &mut Typesetter::new()).unwrap();
+        assert_eq!(out.dimensions(), (120, 110));
+        assert_eq!(out.get_pixel(1, 1), &Pixel([200, 0, 0, 255]));
+        assert_eq!(out.get_pixel(60, 55), &Pixel([255, 255, 255, 255]));
+        let under = out.get_pixel(60, 74);
+        assert!(
+            under[0] < 190 && under[3] == 255,
+            "a shadow below: {under:?}"
+        );
+    }
+
+    #[test]
+    fn an_empty_background_is_transparent() {
+        let document = framed(
+            &Document::new(10, 10, 1.0),
+            crate::Frame {
+                margin: 5.0,
+                ..crate::Frame::default()
+            },
+        );
+        let out = render(&document, &white(10, 10), &mut Typesetter::new()).unwrap();
+        assert_eq!(out.dimensions(), (20, 20));
+        assert_eq!(out.get_pixel(0, 0)[3], 0);
+        assert_eq!(out.get_pixel(10, 10), &Pixel([255, 255, 255, 255]));
+    }
+
+    #[test]
+    fn marks_beyond_the_picture_can_be_taken_in() {
+        let line = add(
+            &Document::new(40, 40, 1.0),
+            Kind::Line {
+                from: Point::new(20.0, 20.0),
+                to: Point::new(70.0, 20.0),
+            },
+        );
+        let cut = render(&line, &white(40, 40), &mut Typesetter::new()).unwrap();
+        assert_eq!(cut.dimensions(), (40, 40));
+        let whole = framed(
+            &line,
+            crate::Frame {
+                overflow: true,
+                ..crate::Frame::default()
+            },
+        );
+        let out = render(&whole, &white(40, 40), &mut Typesetter::new()).unwrap();
+        assert!(out.width() >= 70, "{:?}", out.dimensions());
+        let tip = out.get_pixel(65, 20);
+        assert_eq!((tip[0], tip[1], tip[2]), (0xe4, 0x57, 0x2e));
+        assert_eq!(out.get_pixel(60, 5)[3], 0);
     }
 
     #[test]

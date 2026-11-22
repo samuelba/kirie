@@ -1,13 +1,17 @@
 //! The editor window: a header bar, the tool rail, the canvas and the inspector.
 
-use iced::widget::{Space, column, container, row, rule, stack, svg, text};
+use iced::widget::{Space, column, container, row, rule, scrollable, stack, svg, text};
 use iced::{Alignment, Background, Border, Element, Length, Padding};
 use kirie_annotate::{StyleId, Tool};
 use kirie_ui::icon::Icon;
-use kirie_ui::widget::{divider, floating, icon_button, primary_button};
+use kirie_ui::widget::{
+    divider, floating, icon_button, primary_button, secondary_button, small_icon_button,
+    small_pick_list,
+};
 use kirie_ui::{Palette, Scheme, space};
 
 use super::canvas::{Backdrop, Board};
+use super::viewport::Zoom;
 use super::{Editor, Message};
 use crate::controls;
 use crate::picker::{self, Picker};
@@ -18,17 +22,21 @@ const APP_ICON: &[u8] =
 const INSPECTOR: f32 = 248.0;
 
 impl Editor {
-    pub fn view(&self) -> Element<'_, Message> {
+    pub fn view(&self, _: iced::window::Id) -> Element<'_, Message> {
         let palette = self.palette;
         let body = row![self.rail(), self.center(), self.inspector()];
-        let window = container(column![self.header(), body.height(Length::Fill)])
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(move |_| container::Style {
-                background: Some(Background::Color(palette.background)),
-                text_color: Some(palette.text),
-                ..container::Style::default()
-            });
+        let window = container(column![
+            self.header(),
+            body.height(Length::Fill),
+            self.status_bar()
+        ])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(move |_| container::Style {
+            background: Some(Background::Color(palette.background)),
+            text_color: Some(palette.text),
+            ..container::Style::default()
+        });
         match self.closing_dialog() {
             Some(dialog) => stack![window, dialog].into(),
             None => window.into(),
@@ -93,7 +101,7 @@ impl Editor {
                 .push(divider(palette))
                 .push(icon_button(
                     Icon::Project,
-                    "Save editable project (Ctrl+Shift+S)",
+                    "Save editable project, with the original under the marks (Ctrl+Shift+S)",
                     palette,
                     false,
                     Some(Message::SaveProject),
@@ -132,15 +140,27 @@ impl Editor {
                 controls::tool_icon(tool),
                 tool.label(),
                 palette,
-                self.tool == tool,
+                self.tool == tool && self.cropping.is_none(),
                 Some(Message::PickTool(tool)),
             )
         });
-        container(column(tools).spacing(2))
-            .padding(space::S)
-            .height(Length::Fill)
-            .style(panel(palette))
-            .into()
+        let crop = icon_button(
+            Icon::Crop,
+            "Crop (C)",
+            palette,
+            self.cropping.is_some(),
+            self.image.is_some().then_some(Message::Crop),
+        );
+        container(
+            column(tools)
+                .push(container(rule::horizontal(1)).width(kirie_ui::widget::CONTROL))
+                .push(crop)
+                .spacing(2),
+        )
+        .padding(space::S)
+        .height(Length::Fill)
+        .style(panel(palette))
+        .into()
     }
 
     fn center(&self) -> Element<'_, Message> {
@@ -158,6 +178,9 @@ impl Editor {
             stack![self.empty()]
         };
         let mut floating_bits = column![].spacing(space::S).align_x(Alignment::Center);
+        if self.cropping.is_some() {
+            floating_bits = floating_bits.push(self.crop_bar());
+        }
         if let Some(typing) = &self.typing {
             floating_bits = floating_bits.push(
                 container(
@@ -207,6 +230,29 @@ impl Editor {
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
+    }
+
+    /// What cropping is about, and the buttons that end it.
+    fn crop_bar(&self) -> Element<'_, Message> {
+        let palette = self.palette;
+        container(
+            row![
+                column![
+                    text("Drag the frame to keep a part").size(12),
+                    text("Enter to crop, Esc to cancel")
+                        .size(12)
+                        .color(palette.muted),
+                ],
+                secondary_button("Whole image", palette, Message::CropReset),
+                secondary_button("Cancel", palette, Message::CropCancel),
+                primary_button(Icon::Crop, "Crop", palette, Message::CropDone),
+            ]
+            .spacing(space::M)
+            .align_y(Alignment::Center),
+        )
+        .padding(space::S)
+        .style(floating(palette))
+        .into()
     }
 
     fn empty(&self) -> Element<'_, Message> {
@@ -265,13 +311,12 @@ impl Editor {
             .paint_sections()
             .push(rule::horizontal(1))
             .push(section(palette, "View", zoom.into()));
-        if let Some((image, _)) = &self.image {
+        if self.image.is_some() {
+            let document = self.document();
             content = content.push(section(
                 palette,
-                "Image",
-                text(format!("{} × {} px", image.width(), image.height()))
-                    .size(13)
-                    .into(),
+                "Frame",
+                super::frame::view(document.frame, document.unit, palette, Message::Frame),
             ));
         }
         if self.picked.is_some() {
@@ -283,12 +328,106 @@ impl Editor {
                 Some(Message::Delete),
             ));
         }
-        container(content)
-            .width(INSPECTOR)
-            .height(Length::Fill)
-            .padding(Padding::new(space::L))
+        container(scrollable(
+            container(content).padding(Padding::new(space::L)),
+        ))
+        .width(INSPECTOR)
+        .height(Length::Fill)
+        .style(panel(palette))
+        .into()
+    }
+
+    /// The tool, where the pointer is on the image, the zoom and the image's size.
+    fn status_bar(&self) -> Element<'_, Message> {
+        let palette = self.palette;
+        let muted = |words: String| text(words).size(12).color(palette.muted);
+        let tool = row![
+            svg(if self.cropping.is_some() {
+                Icon::Crop.handle()
+            } else {
+                controls::tool_icon(self.tool).handle()
+            })
+            .width(14)
+            .height(14)
+            .style(move |_, _| svg::Style {
+                color: Some(palette.muted),
+            }),
+            muted(
+                if self.cropping.is_some() {
+                    "Crop"
+                } else {
+                    self.tool.name()
+                }
+                .to_owned()
+            ),
+        ]
+        .spacing(space::XS)
+        .align_y(Alignment::Center);
+        let mut bar = row![tool, Space::new().width(Length::Fill)]
+            .spacing(space::L)
+            .align_y(Alignment::Center);
+        if let Some((image, _)) = &self.image {
+            if let Some((x, y)) = self.hover.map(super::pixel) {
+                bar = bar.push(muted(format!("{x}, {y} px")));
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            let saved = self.crop().map_or_else(
+                || {
+                    let canvas = self.document().canvas();
+                    (canvas.width() as i64, canvas.height() as i64)
+                },
+                |crop| (crop.width.round() as i64, crop.height.round() as i64),
+            );
+            let whole = (i64::from(image.width()), i64::from(image.height()));
+            let size = if saved == whole {
+                format!("{} × {} px", whole.0, whole.1)
+            } else {
+                format!(
+                    "{} × {} px, from {} × {}",
+                    saved.0, saved.1, whole.0, whole.1
+                )
+            };
+            bar = bar.push(self.zoom_control()).push(muted(size));
+        }
+        container(bar)
+            .padding([space::XS, space::L])
+            .width(Length::Fill)
             .style(panel(palette))
             .into()
+    }
+
+    /// Zoom out, the zoom with a list of levels to pick, and zoom in.
+    fn zoom_control(&self) -> Element<'_, Message> {
+        let palette = self.palette;
+        let scale = self.viewport.scale(self.content(), self.canvas);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let percent = (scale * 100.0).round() as u32;
+        let shown = if self.viewport.is_fitted() {
+            ZoomChoice::Shown(format!("Fit {percent}%"), Zoom::Fit)
+        } else {
+            ZoomChoice::Shown(format!("{percent}%"), Zoom::Percent(percent))
+        };
+        let levels = Zoom::CHOICES.into_iter().map(ZoomChoice::Level).collect();
+        row![
+            small_icon_button(
+                Icon::ZoomOut,
+                "Zoom out (Ctrl+-)",
+                palette,
+                Some(Message::ZoomOut)
+            ),
+            small_pick_list(levels, shown, palette, |choice| Message::ZoomTo(
+                choice.zoom()
+            )),
+            small_icon_button(
+                Icon::ZoomIn,
+                "Zoom in (Ctrl++)",
+                palette,
+                Some(Message::ZoomIn)
+            ),
+        ]
+        .spacing(2)
+        .align_y(Alignment::Center)
+        .into()
     }
 
     /// The color, and the text look, the spotlight, or the weight, fill and shadow, of the
@@ -388,6 +527,30 @@ impl Editor {
             }))
             .push(section(palette, "Fill", fill.into()))
             .push(section(palette, "Shadow", shadow.into()))
+    }
+}
+
+/// A level in the zoom list, or the zoom now, which the list shows.
+#[derive(Debug, Clone, PartialEq)]
+enum ZoomChoice {
+    Level(Zoom),
+    Shown(String, Zoom),
+}
+
+impl ZoomChoice {
+    fn zoom(&self) -> Zoom {
+        match self {
+            ZoomChoice::Level(zoom) | ZoomChoice::Shown(_, zoom) => *zoom,
+        }
+    }
+}
+
+impl std::fmt::Display for ZoomChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ZoomChoice::Level(zoom) => zoom.fmt(f),
+            ZoomChoice::Shown(label, _) => f.write_str(label),
+        }
     }
 }
 

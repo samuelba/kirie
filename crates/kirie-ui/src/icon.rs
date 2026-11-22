@@ -31,8 +31,8 @@ icons! {
     Highlighter => "highlighter",
     Text => "type",
     Counter => "hash",
-    Blur => "droplet",
-    Pixelate => "grid-3x3",
+    Blur => "blur",
+    Pixelate => "pixelate",
     Redact => "eye-off",
     Spotlight => "focus",
     Undo => "undo-2",
@@ -60,6 +60,9 @@ icons! {
     TextOutline => "type-outline",
     Shadow => "shadow",
     Grip => "grip-vertical",
+    Crop => "crop",
+    Expand => "expand",
+    Pin => "pin",
 }
 
 impl Icon {

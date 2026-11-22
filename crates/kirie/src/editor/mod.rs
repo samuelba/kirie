@@ -2,6 +2,7 @@
 
 mod canvas;
 mod closing;
+mod frame;
 mod view;
 mod viewport;
 
@@ -15,20 +16,24 @@ use iced::widget::image;
 use iced::{Event, Point, Size, Subscription, Task, Vector, event, keyboard, window};
 use kirie_annotate::project::{self, Project};
 use kirie_annotate::{
-    Document, Draft, History, Kind, Op, Paint, Press, Rgba, ShapeId, StyleId, Tool, Typesetter,
-    Weight,
+    Document, Draft, History, Kind, Op, Paint, Press, Rgba, Shape, ShapeId, StyleId, Tool,
+    Typesetter, Weight,
 };
 use kirie_ui::{Palette, Scheme};
 
 use self::closing::{Answer, Closing};
-use self::viewport::Viewport;
+use self::viewport::{Viewport, Zoom};
 use crate::controls;
+use crate::drawing::Drawing;
 use crate::picker::{self, Picker, Target};
+use crate::selection::{Release, Selection};
 use crate::swatches::Swatches;
 use crate::typing::{self, Typing};
 
 /// How close to a mark a click picks it, in screen pixels.
 const MARK_REACH: f64 = 6.0;
+/// How close to a crop handle a press grabs it, in screen pixels.
+const HANDLE_REACH: f32 = 8.0;
 
 /// An image open for editing.
 #[derive(Debug, Clone)]
@@ -36,6 +41,8 @@ pub struct Loaded {
     pub image: RgbaImage,
     pub document: Document,
     pub path: Option<PathBuf>,
+    /// A new document, not a project: it takes the drawing options last used.
+    pub fresh: bool,
 }
 
 impl Loaded {
@@ -45,6 +52,7 @@ impl Loaded {
             image,
             document,
             path,
+            fresh: true,
         }
     }
 }
@@ -72,12 +80,19 @@ pub fn load(path: &Path) -> Result<Loaded, String> {
             image: project.image,
             document: project.document,
             path: Some(path.to_path_buf()),
+            fresh: false,
         });
     }
     let image = ::image::open(path)
         .map_err(|error| fail(&error))?
         .to_rgba8();
     Ok(Loaded::image(image, Some(path.to_path_buf())))
+}
+
+/// The image pixel `at` falls in.
+#[allow(clippy::cast_possible_truncation)]
+fn pixel(at: kurbo::Point) -> (i64, i64) {
+    (at.x.floor() as i64, at.y.floor() as i64)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -99,6 +114,20 @@ pub enum Message {
     },
     ZoomFit,
     ZoomActual,
+    /// Zooms to the next level in, or out, around the middle of the canvas.
+    ZoomIn,
+    ZoomOut,
+    ZoomTo(Zoom),
+    /// Starts cropping, or keeps the crop when already cropping.
+    Crop,
+    CropDone,
+    /// Keeps the whole image.
+    CropReset,
+    CropCancel,
+    /// The image point under the pointer, if it is over the canvas.
+    Hover(Option<kurbo::Point>),
+    /// The canvas has a new size.
+    Canvas(Size),
     Modifiers(keyboard::Modifiers),
     PickTool(Tool),
     PickStyle(StyleId),
@@ -112,6 +141,7 @@ pub enum Message {
     Brightness(controls::BrightnessEvent),
     Spot(kirie_annotate::SpotShape),
     Look(controls::TextEvent),
+    Frame(frame::Event),
     ToggleScheme,
     TextEdit(iced::widget::text_editor::Action),
     TextDone,
@@ -137,7 +167,35 @@ pub enum Message {
     SystemScheme(Scheme),
     /// Hides the window and opens the overlay; the capture comes back over D-Bus.
     Capture,
+    /// The window's size and state, taken just before it closes for a capture.
+    Hide(Placement),
+    /// Window `id`, placed so, is to be opened anew to come to the front.
+    Remap(window::Id, Placement),
     CaptureEnded(Result<(), String>),
+}
+
+/// How big the window is, to open it again the same way.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Placement {
+    size: Size,
+    maximized: bool,
+}
+
+impl Default for Placement {
+    fn default() -> Self {
+        Self {
+            size: Size::new(1280.0, 840.0),
+            maximized: false,
+        }
+    }
+}
+
+/// The crop being drawn, in image coordinates.
+#[derive(Debug, Clone, Copy)]
+struct Cropping {
+    selection: Selection,
+    /// The crop before the last press, kept when that press turns out to be a click.
+    before: Selection,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +206,9 @@ struct Toast {
 }
 
 pub struct Editor {
+    /// The window, unless it is closed while a screenshot is taken.
+    window: Option<window::Id>,
+    placement: Placement,
     palette: Palette,
     image: Option<(RgbaImage, image::Handle)>,
     path: Option<PathBuf>,
@@ -158,6 +219,11 @@ pub struct Editor {
     /// An image to open once the question about unsaved changes is answered.
     then_open: Option<Box<Loaded>>,
     viewport: Viewport,
+    cropping: Option<Cropping>,
+    /// The canvas's size, for the zoom level when the image is fitted.
+    canvas: Size,
+    /// The image point under the pointer.
+    hover: Option<kurbo::Point>,
     tool: Tool,
     paint: Paint,
     swatches: Swatches,
@@ -190,20 +256,26 @@ impl std::fmt::Debug for Editor {
 impl Editor {
     pub fn boot(loaded: Option<Loaded>) -> (Self, Task<Message>) {
         let swatches = Swatches::load();
+        let drawing = Drawing::load();
+        let blank = drawing.styled(Document::new(1, 1, 1.0));
+        let placement = Placement::default();
+        let (id, opened) = window::open(settings(placement));
         let mut editor = Self {
+            window: Some(id),
+            placement,
             palette: Palette::DARK,
             image: None,
             path: None,
-            history: History::new(Document::new(1, 1, 1.0)),
-            kept: Document::new(1, 1, 1.0),
+            history: History::new(blank.clone()),
+            kept: blank,
             closing: Closing::No,
             then_open: None,
             viewport: Viewport::fitted(),
+            cropping: None,
+            canvas: Size::ZERO,
+            hover: None,
             tool: Tool::Arrow,
-            paint: Paint {
-                color: swatches.first(StyleId::default()),
-                ..Paint::default()
-            },
+            paint: drawing.paint_for(Some(Tool::Arrow), &swatches),
             swatches,
             picker: None,
             draft: None,
@@ -221,25 +293,35 @@ impl Editor {
         if let Some(loaded) = loaded {
             editor.open(loaded);
         }
-        (editor, take_drops())
+        (editor, opened.then(take_drops))
     }
 
     fn open(&mut self, mut loaded: Loaded) {
-        if let Some(path) = loaded.path.take_if(|path| crate::save::is_handoff(path)) {
-            let _ = std::fs::remove_file(path);
-        }
+        let handoff = loaded
+            .path
+            .take_if(|path| crate::save::is_handoff(path))
+            .map(std::fs::remove_file)
+            .is_some();
         let handle = image::Handle::from_rgba(
             loaded.image.width(),
             loaded.image.height(),
             loaded.image.as_raw().clone(),
         );
-        let before = self.document().style;
-        self.kept = loaded.document.clone();
-        self.history = History::new(loaded.document);
-        self.follow_style(before);
+        // The overlay may have changed the options since, in a process of its own.
+        let drawing = Drawing::load();
+        let document = match (loaded.fresh, handoff) {
+            (true, _) => drawing.framed(drawing.styled(loaded.document)),
+            (false, true) => drawing.framed(loaded.document),
+            (false, false) => loaded.document,
+        };
+        self.paint = drawing.paint_for(Some(self.tool), &self.swatches);
+        self.kept = document.clone();
+        self.history = History::new(document);
+        self.follow_style(drawing.style);
         self.image = Some((loaded.image, handle));
         self.path = loaded.path;
         self.viewport = Viewport::fitted();
+        self.cropping = None;
         self.draft = None;
         self.picked = None;
         self.typing = None;
@@ -260,7 +342,68 @@ impl Editor {
         })
     }
 
-    pub fn title(&self) -> String {
+    /// What the canvas shows, in image coordinates: all of the image while cropping, else
+    /// what gets saved, the kept part in its frame.
+    fn content(&self) -> kurbo::Rect {
+        if self.cropping.is_some() {
+            let size = self.image_size();
+            kurbo::Rect::new(0.0, 0.0, f64::from(size.width), f64::from(size.height))
+        } else {
+            self.document().canvas()
+        }
+    }
+
+    /// What the canvas draws on: like [`Self::content`], but grown as marks being drawn reach
+    /// beyond it, before they are done and the view settles on them.
+    fn shown_canvas(&self) -> kurbo::Rect {
+        if self.cropping.is_some() {
+            self.content()
+        } else {
+            self.document().canvas_with(&self.drafts())
+        }
+    }
+
+    /// The marks being drawn, moved, reshaped or typed, as they will be once done.
+    fn drafts(&self) -> Vec<Shape> {
+        let document = self.document();
+        let mut drafts = Vec::new();
+        match &self.draft {
+            Some(Draft::Moving { ids, by, .. }) => {
+                drafts.extend(
+                    ids.iter()
+                        .filter_map(|id| document.shape(*id))
+                        .map(|shape| Shape {
+                            kind: shape.kind.translated(*by),
+                            ..shape.clone()
+                        }),
+                );
+            }
+            Some(draft) => {
+                drafts.extend(draft.edited().cloned());
+                drafts.extend(draft.preview().map(|kind| Shape {
+                    id: document.next_id(),
+                    kind,
+                    paint: self.paint,
+                    style: None,
+                    rotation: 0.0,
+                }));
+            }
+            None => {}
+        }
+        drafts.extend(
+            self.typing
+                .as_ref()
+                .map(|typing| typing.preview(document, self.paint)),
+        );
+        drafts
+    }
+
+    /// The crop being drawn, while cropping.
+    fn crop(&self) -> Option<iced::Rectangle> {
+        self.cropping.and_then(|cropping| cropping.selection.rect())
+    }
+
+    pub fn title(&self, _: window::Id) -> String {
         match self.path.as_deref().and_then(Path::file_name) {
             Some(name) => format!("{} — Kirie", name.to_string_lossy()),
             None => "Kirie".to_owned(),
@@ -271,19 +414,17 @@ impl Editor {
         match message {
             Message::Pointer(pointer, scale) => return self.pointer(pointer, scale),
             Message::Pan(by) => self.viewport = self.viewport.panned(by),
-            Message::Zoom {
-                factor,
-                anchor,
-                canvas,
-            } => {
-                self.viewport = self
-                    .viewport
-                    .zoomed(factor, anchor, self.image_size(), canvas);
-            }
-            Message::ZoomFit => self.viewport = Viewport::fitted(),
-            Message::ZoomActual => self.viewport = Viewport::actual_size(),
+            Message::Zoom { .. }
+            | Message::ZoomFit
+            | Message::ZoomActual
+            | Message::ZoomIn
+            | Message::ZoomOut
+            | Message::ZoomTo(_) => self.zoom(&message),
+            Message::Hover(at) => self.hover = at,
+            Message::Canvas(size) => self.canvas = size,
             Message::Modifiers(modifiers) => self.modifiers = modifiers,
             Message::PickTool(tool) => {
+                self.keep_crop();
                 self.commit_text();
                 self.tool = tool;
                 self.paint.color = controls::tool_color(
@@ -305,7 +446,8 @@ impl Editor {
             | Message::ToggleFill
             | Message::Brightness(_)
             | Message::Spot(_)
-            | Message::Look(_) => return self.restyle(message),
+            | Message::Look(_)
+            | Message::Frame(_) => return self.restyle(message),
             Message::SystemScheme(scheme) => self.follow(Some(scheme)),
             Message::ToggleScheme => self.follow(None),
             Message::TextEdit(action) => {
@@ -322,6 +464,13 @@ impl Editor {
                 }
             }
             Message::Escape if self.closing == Closing::Asking => self.closing = Closing::No,
+            Message::Escape | Message::CropCancel if self.cropping.is_some() => {
+                self.cropping = None;
+                self.viewport = Viewport::fitted();
+            }
+            Message::Crop | Message::CropDone | Message::CropReset | Message::CropCancel => {
+                self.crop_message(&message);
+            }
             Message::Escape => {
                 if self.picker.take().is_none()
                     && self.typing.take().is_none()
@@ -342,22 +491,11 @@ impl Editor {
             | Message::CloseRequested
             | Message::Close(_) => return self.finish(message),
             Message::Opened(Ok(loaded)) => return self.replace(loaded),
-            Message::Ipc(crate::ipc::Request::Open(path)) => {
-                return Task::perform(load_async(path), Message::Opened);
-            }
-            Message::Ipc(crate::ipc::Request::Present) => return present(),
-            Message::Capture => {
-                return window::oldest()
-                    .then(|id| id.map_or_else(Task::none, |id| window::minimize(id, true)))
-                    .chain(Task::perform(capture(), Message::CaptureEnded));
-            }
-            Message::CaptureEnded(result) => {
-                let shown = present();
-                return match result {
-                    Ok(()) => shown,
-                    Err(error) => shown.chain(self.toast(Err(error))),
-                };
-            }
+            Message::Ipc(_)
+            | Message::Capture
+            | Message::Remap(..)
+            | Message::Hide(_)
+            | Message::CaptureEnded(_) => return self.windowing(message),
             Message::Opened(Err(error)) => return self.toast(Err(error)),
             Message::ToastExpired(id) => {
                 if self.toast.as_ref().is_some_and(|toast| toast.id == id) {
@@ -366,6 +504,59 @@ impl Editor {
             }
         }
         Task::none()
+    }
+
+    fn zoom(&mut self, message: &Message) {
+        let content = self.content();
+        let middle = Point::new(self.canvas.width / 2.0, self.canvas.height / 2.0);
+        let scale = self.viewport.scale(content, self.canvas);
+        self.viewport = match *message {
+            Message::Zoom {
+                factor,
+                anchor,
+                canvas,
+            } => self.viewport.zoomed(factor, anchor, content, canvas),
+            Message::ZoomFit | Message::ZoomTo(Zoom::Fit) => Viewport::fitted(),
+            Message::ZoomActual => Viewport::actual_size(),
+            Message::ZoomIn | Message::ZoomOut => {
+                let level = viewport::step(scale, matches!(message, Message::ZoomIn));
+                self.viewport.zoomed_to(level, middle, content, self.canvas)
+            }
+            #[allow(clippy::cast_precision_loss)]
+            Message::ZoomTo(Zoom::Percent(percent)) => {
+                self.viewport
+                    .zoomed_to(percent as f32 / 100.0, middle, content, self.canvas)
+            }
+            _ => self.viewport,
+        };
+    }
+
+    /// Taking a screenshot from the editor, and bringing its window to the front.
+    fn windowing(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Ipc(crate::ipc::Request::Open(path)) => self
+                .raise()
+                .chain(Task::perform(load_async(path), Message::Opened)),
+            Message::Ipc(crate::ipc::Request::Present) => self.raise(),
+            Message::Ipc(crate::ipc::Request::Resume) if self.window.is_none() => self.raise(),
+            Message::Capture => self
+                .window
+                .map_or_else(Task::none, |id| placement(id).map(Message::Hide)),
+            Message::Remap(id, placement) if self.window == Some(id) => {
+                self.placement = placement;
+                self.reopen(Some(id))
+            }
+            Message::Hide(placement) => {
+                let Some(id) = self.window.take() else {
+                    return Task::none();
+                };
+                self.placement = placement;
+                window::close(id).chain(Task::perform(capture(), Message::CaptureEnded))
+            }
+            Message::CaptureEnded(Err(error)) => self.raise().chain(self.toast(Err(error))),
+            // The overlay asks for the window back when it is done, through `Resume` or `Open`.
+            _ => Task::none(),
+        }
     }
 
     /// What became of an export, and closing the window.
@@ -395,8 +586,17 @@ impl Editor {
         }
     }
 
-    /// Changes to the style, colors, weight, fill and text look.
+    /// Changes to the style, colors, weight, fill, text look and frame, kept for the next time.
     fn restyle(&mut self, message: Message) -> Task<Message> {
+        let settled = settled(&message);
+        let task = self.change_style(message);
+        if settled {
+            self.remember_drawing();
+        }
+        task
+    }
+
+    fn change_style(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::PickStyle(style) => {
                 let before = self.document().style;
@@ -420,7 +620,18 @@ impl Editor {
             Message::Picker(event) => return self.edit_color(event),
             Message::Weight(controls::WeightEvent::Done)
             | Message::Brightness(controls::BrightnessEvent::Done)
-            | Message::Look(controls::TextEvent::SizeDone) => self.sliding = false,
+            | Message::Look(controls::TextEvent::SizeDone)
+            | Message::Frame(frame::Event::MarginDone) => self.sliding = false,
+            Message::Frame(event) => {
+                let document = self.document();
+                let op = Op::SetFrame(event.apply(document.frame, document.unit));
+                if let frame::Event::Margin(_) = event {
+                    self.history.apply_gradually(op, self.sliding);
+                    self.sliding = true;
+                } else {
+                    self.history.apply(op);
+                }
+            }
             Message::Brightness(controls::BrightnessEvent::Slide(brightness)) => {
                 self.history
                     .apply_gradually(Op::SetSpotlightBrightness(brightness), self.sliding);
@@ -443,6 +654,16 @@ impl Editor {
             _ => {}
         }
         Task::none()
+    }
+
+    /// Keeps the drawing options for the next image, and the next session.
+    fn remember_drawing(&self) {
+        let drawing = Drawing::load().with_marks(self.paint, self.document());
+        if self.image.is_some() {
+            drawing.with_frame(self.document()).save();
+        } else {
+            drawing.save();
+        }
     }
 
     fn edit_color(&mut self, event: picker::Event) -> Task<Message> {
@@ -504,8 +725,75 @@ impl Editor {
         }
     }
 
+    fn crop_message(&mut self, message: &Message) {
+        match message {
+            Message::Crop if self.cropping.is_some() => self.keep_crop(),
+            Message::Crop if self.image.is_some() => {
+                self.commit_text();
+                self.draft = None;
+                self.picked = None;
+                let selection = Selection::selected(to_rectangle(self.document().visible()));
+                self.cropping = Some(Cropping {
+                    selection,
+                    before: selection,
+                });
+                self.viewport = Viewport::fitted();
+            }
+            Message::CropDone => self.keep_crop(),
+            Message::CropReset => {
+                let whole = iced::Rectangle::new(Point::ORIGIN, self.image_size());
+                if let Some(cropping) = &mut self.cropping {
+                    cropping.selection = Selection::selected(whole);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Ends cropping, keeping the crop drawn, in whole pixels; all of the image is no crop.
+    fn keep_crop(&mut self) {
+        let Some(cropping) = self.cropping.take() else {
+            return;
+        };
+        self.viewport = Viewport::fitted();
+        let Some(rect) = cropping.selection.rect() else {
+            return;
+        };
+        let crop = kept(rect, self.image_size());
+        if crop != self.document().crop {
+            self.history.apply(Op::Crop(crop));
+        }
+    }
+
+    /// Follows the pointer while cropping.
+    fn crop_pointer(&mut self, pointer: Pointer, scale: f32) {
+        let bounds = iced::Rectangle::new(Point::ORIGIN, self.image_size());
+        let Some(cropping) = &mut self.cropping else {
+            return;
+        };
+        let reach = HANDLE_REACH / scale.max(0.01);
+        match pointer {
+            Pointer::Pressed(at) => {
+                cropping.before = cropping.selection;
+                cropping.selection = cropping.selection.press(to_point(at), reach);
+            }
+            Pointer::Moved(at) => {
+                cropping.selection = cropping.selection.drag_to(to_point(at), bounds);
+            }
+            Pointer::Released(at) => {
+                let (selection, release) = cropping.selection.release(to_point(at));
+                cropping.selection = match release {
+                    Release::Click(_) => cropping.before,
+                    _ if selection.rect().is_none() => cropping.before,
+                    _ => selection,
+                };
+            }
+        }
+    }
+
     /// Undoes or redoes a step; the drawing color follows the style there.
     fn travel(&mut self, undo: bool) {
+        self.cropping = None;
         let before = self.document().style;
         if undo {
             self.history.undo();
@@ -578,6 +866,13 @@ impl Editor {
 
     fn pointer(&mut self, pointer: Pointer, scale: f32) -> Task<Message> {
         if self.image.is_none() {
+            return Task::none();
+        }
+        if let Pointer::Moved(at) = pointer {
+            self.hover = Some(at);
+        }
+        if self.cropping.is_some() {
+            self.crop_pointer(pointer, scale);
             return Task::none();
         }
         match pointer {
@@ -659,6 +954,7 @@ impl Editor {
     }
 
     fn export(&mut self, export: Export) -> Task<Message> {
+        self.keep_crop();
         self.commit_text();
         let Some((image, _)) = &self.image else {
             return Task::none();
@@ -719,6 +1015,8 @@ impl Editor {
         let quiet = self.typing.is_some() || self.picker.is_some() || self.closing != Closing::No;
         let keys = if quiet {
             event::listen_with(typing_key)
+        } else if self.cropping.is_some() {
+            event::listen_with(crop_key)
         } else {
             event::listen_with(key)
         };
@@ -730,7 +1028,7 @@ impl Editor {
         ])
     }
 
-    pub fn theme(&self) -> iced::Theme {
+    pub fn theme(&self, _: window::Id) -> iced::Theme {
         match self.palette.scheme {
             Scheme::Dark => iced::Theme::Dark,
             Scheme::Light => iced::Theme::Light,
@@ -744,24 +1042,52 @@ async fn load_async(path: PathBuf) -> Result<Loaded, String> {
         .map_err(|error| error.to_string())?
 }
 
-/// Opens what is dropped on the editor's window, once it is open.
-fn take_drops() -> Task<Message> {
-    window::oldest()
-        .then(|id| id.map_or_else(Task::none, |id| window::run(id, crate::drops::display)))
-        .then(|display| {
-            display.map_or_else(Task::none, |display| {
-                Task::run(crate::drops::drops(display), Message::Dropped)
-            })
-        })
-}
-
-/// Raises and focuses the editor window.
-fn present() -> Task<Message> {
-    window::oldest().then(|id| {
-        id.map_or_else(Task::none, |id| {
-            Task::batch([window::minimize(id, false), window::gain_focus(id)])
+/// Opens what is dropped on the editor's windows, from when window `id` is open.
+fn take_drops(id: window::Id) -> Task<Message> {
+    window::run(id, crate::drops::display).then(|display| {
+        display.map_or_else(Task::none, |display| {
+            Task::run(crate::drops::drops(display), Message::Dropped)
         })
     })
+}
+
+impl Editor {
+    /// Brings the window to the front. On Wayland a window cannot raise itself, but
+    /// compositors put a newly mapped one in front, so the window is opened anew.
+    fn raise(&mut self) -> Task<Message> {
+        match self.window {
+            Some(id) => placement(id).map(move |placement| Message::Remap(id, placement)),
+            None => self.reopen(None),
+        }
+    }
+
+    /// Opens the window as it was placed, closing `old` first.
+    fn reopen(&mut self, old: Option<window::Id>) -> Task<Message> {
+        let closed = old.map_or_else(Task::none, window::close);
+        let (id, opened) = window::open(settings(self.placement));
+        self.window = Some(id);
+        closed.chain(opened.discard())
+    }
+}
+
+/// The size and state of window `id`.
+fn placement(id: window::Id) -> Task<Placement> {
+    window::is_maximized(id)
+        .then(move |maximized| window::size(id).map(move |size| Placement { size, maximized }))
+}
+
+fn settings(placement: Placement) -> window::Settings {
+    window::Settings {
+        size: placement.size,
+        maximized: placement.maximized,
+        min_size: Some(Size::new(760.0, 520.0)),
+        exit_on_close_request: false,
+        platform_specific: window::settings::PlatformSpecific {
+            application_id: crate::APP_ID.to_owned(),
+            ..window::settings::PlatformSpecific::default()
+        },
+        ..window::Settings::default()
+    }
 }
 
 /// Runs the overlay in its own process, after the window has had time to hide.
@@ -785,6 +1111,17 @@ async fn capture() -> Result<(), String> {
     .map_err(|error| error.to_string())?
 }
 
+/// Whether a change is not one step of a slider drag, whose last step follows.
+fn settled(message: &Message) -> bool {
+    !matches!(
+        message,
+        Message::Weight(controls::WeightEvent::Slide(_))
+            | Message::Brightness(controls::BrightnessEvent::Slide(_))
+            | Message::Look(controls::TextEvent::Size(_))
+            | Message::Frame(frame::Event::Margin(_))
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Export {
     Copy,
@@ -804,6 +1141,44 @@ fn typing_key(event: Event, _: event::Status, _: window::Id) -> Option<Message> 
         }) => Some(Message::Escape),
         _ => None,
     }
+}
+
+/// The crop that keeps `rect` of an image of `size`, in whole pixels: none for all of it.
+fn kept(rect: iced::Rectangle, size: Size) -> Option<kurbo::Rect> {
+    let rect = kurbo::Rect::new(
+        f64::from(rect.x),
+        f64::from(rect.y),
+        f64::from(rect.x + rect.width),
+        f64::from(rect.y + rect.height),
+    )
+    .round();
+    let whole = kurbo::Rect::new(0.0, 0.0, f64::from(size.width), f64::from(size.height));
+    (rect != whole && rect.area() >= 1.0).then_some(rect)
+}
+
+/// Enter keeps the crop; every other key works as usual.
+fn crop_key(event: Event, status: event::Status, id: window::Id) -> Option<Message> {
+    if let Event::Keyboard(keyboard::Event::KeyPressed {
+        key: keyboard::Key::Named(keyboard::key::Named::Enter),
+        ..
+    }) = event
+    {
+        return Some(Message::CropDone);
+    }
+    key(event, status, id)
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn to_point(at: kurbo::Point) -> Point {
+    Point::new(at.x as f32, at.y as f32)
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn to_rectangle(rect: kurbo::Rect) -> iced::Rectangle {
+    iced::Rectangle::new(
+        Point::new(rect.x0 as f32, rect.y0 as f32),
+        Size::new(rect.width() as f32, rect.height() as f32),
+    )
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -832,6 +1207,9 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("s") if command => Some(Message::Save),
         keyboard::Key::Character("0") if command => Some(Message::ZoomFit),
         keyboard::Key::Character("1") if command => Some(Message::ZoomActual),
+        keyboard::Key::Character("=" | "+") if command => Some(Message::ZoomIn),
+        keyboard::Key::Character("-") if command => Some(Message::ZoomOut),
+        keyboard::Key::Character("c") if !command => Some(Message::Crop),
         keyboard::Key::Character(c) if !command => c
             .chars()
             .next()
@@ -844,7 +1222,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
 /// Opens the editor window, with `loaded` in it if given.
 pub fn run(loaded: Option<Loaded>) -> iced::Result {
     let loaded = std::sync::Mutex::new(loaded);
-    iced::application(
+    iced::daemon(
         move || Editor::boot(loaded.lock().ok().and_then(|mut loaded| loaded.take())),
         Editor::update,
         Editor::view,
@@ -853,15 +1231,24 @@ pub fn run(loaded: Option<Loaded>) -> iced::Result {
     .title(Editor::title)
     .theme(Editor::theme)
     .subscription(Editor::subscription)
-    .window(window::Settings {
-        size: Size::new(1280.0, 840.0),
-        min_size: Some(Size::new(760.0, 520.0)),
-        exit_on_close_request: false,
-        platform_specific: window::settings::PlatformSpecific {
-            application_id: crate::APP_ID.to_owned(),
-            ..window::settings::PlatformSpecific::default()
-        },
-        ..window::Settings::default()
-    })
     .run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crops_keep_whole_pixels_and_all_of_the_image_is_no_crop() {
+        let size = Size::new(200.0, 100.0);
+        let part = iced::Rectangle::new(Point::new(10.4, 20.6), Size::new(50.2, 30.0));
+        assert_eq!(
+            kept(part, size),
+            Some(kurbo::Rect::new(10.0, 21.0, 61.0, 51.0))
+        );
+        let all = iced::Rectangle::new(Point::new(0.2, -0.3), Size::new(199.9, 100.1));
+        assert_eq!(kept(all, size), None);
+        let sliver = iced::Rectangle::new(Point::new(5.0, 5.0), Size::new(0.3, 40.0));
+        assert_eq!(kept(sliver, size), None);
+    }
 }

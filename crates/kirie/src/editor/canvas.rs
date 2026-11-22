@@ -2,13 +2,16 @@
 //! in image coordinates.
 
 use iced::mouse::{self, Interaction, ScrollDelta};
-use iced::widget::canvas::{self, Action, Event, Frame, Geometry};
+use iced::widget::canvas::{self, Action, Event, Frame, Geometry, Path, Stroke};
 use iced::{Color, Point, Rectangle, Renderer, Size, Theme, Vector};
 use kirie_annotate::{Draft, Shape, Tool};
 
-use super::{Editor, MARK_REACH, Message, Pointer};
-use crate::paint::{ImageSource, Marks, Painter, draw_grips};
+use super::{Editor, MARK_REACH, Message, Pointer, pixel};
+use crate::paint::{ImageSource, Marks, Painter, color_of, draw_grips};
+use crate::selection::Handle;
 
+/// The radius of a crop handle, in screen pixels.
+const CROP_HANDLE: f32 = 5.0;
 /// Mouse wheel steps per doubling of the zoom.
 const WHEEL_STEPS: f32 = 6.0;
 const LINE: f32 = 40.0;
@@ -25,8 +28,17 @@ pub(super) struct State {
 }
 
 impl Board<'_> {
-    fn image(&self) -> Size {
-        self.editor.image_size()
+    fn content(&self) -> kurbo::Rect {
+        self.editor.content()
+    }
+
+    /// Whether a press started a gesture whose moves and release matter.
+    fn gesture(&self) -> bool {
+        self.editor.draft.is_some()
+            || self
+                .editor
+                .cropping
+                .is_some_and(|cropping| cropping.selection.dragging())
     }
 }
 
@@ -45,7 +57,7 @@ impl canvas::Program<Message> for Board<'_> {
             state.last = Some(at);
         }
         let canvas = bounds.size();
-        let to_image = |at: Point| self.editor.viewport.image_point(at, self.image(), canvas);
+        let to_image = |at: Point| self.editor.viewport.image_point(at, self.content(), canvas);
         let publish = |message| Some(Action::publish(message).and_capture());
         match event {
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
@@ -85,22 +97,26 @@ impl canvas::Program<Message> for Board<'_> {
                     scale(self.editor, canvas),
                 ))
             }
-            Event::Mouse(mouse::Event::CursorMoved { .. }) if self.editor.draft.is_some() => {
+            Event::Mouse(mouse::Event::CursorMoved { .. }) if self.gesture() => {
                 let at = cursor.position_from(bounds.position())?;
                 publish(Message::Pointer(
                     Pointer::Moved(to_image(at)),
                     scale(self.editor, canvas),
                 ))
             }
-            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
-                if self.editor.draft.is_some() =>
-            {
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) if self.gesture() => {
                 let at = cursor.position_from(bounds.position()).or(state.last)?;
                 publish(Message::Pointer(
                     Pointer::Released(to_image(at)),
                     scale(self.editor, canvas),
                 ))
             }
+            Event::Mouse(mouse::Event::CursorMoved { .. } | mouse::Event::CursorLeft) => {
+                let hover = local.map(to_image);
+                (hover.map(pixel) != self.editor.hover.map(pixel))
+                    .then(|| Action::publish(Message::Hover(hover)))
+            }
+            _ if canvas != self.editor.canvas => Some(Action::publish(Message::Canvas(canvas))),
             _ => None,
         }
     }
@@ -118,9 +134,16 @@ impl canvas::Program<Message> for Board<'_> {
         let Some((image, _)) = &editor.image else {
             return vec![frame.into_geometry()];
         };
-        let transform = editor.viewport.transform(self.image(), bounds.size());
-        if let Some(picked) = self.draw_marks(&mut frame, image, transform) {
-            let pixel = 1.0 / f64::from(editor.viewport.scale(self.image(), bounds.size()));
+        let transform = editor.viewport.transform(self.content(), bounds.size());
+        if let Some(crop) = editor.crop() {
+            self.draw_marks(&mut frame, image, transform);
+            draw_crop(&mut frame, crop, transform, bounds.size(), editor);
+            return vec![frame.into_geometry()];
+        }
+        let kept = to_rectangle(transform.transform_rect_bbox(editor.shown_canvas()));
+        let picked = frame.with_clip(kept, |frame| self.draw_marks(frame, image, transform));
+        if let Some(picked) = picked {
+            let pixel = 1.0 / f64::from(editor.viewport.scale(self.content(), bounds.size()));
             let bounds = editor.document().bounds(&picked);
             draw_grips(
                 &mut frame,
@@ -149,12 +172,18 @@ impl canvas::Program<Message> for Board<'_> {
         if self.editor.image.is_none() {
             return Interaction::default();
         }
+        let at = self
+            .editor
+            .viewport
+            .image_point(local, self.content(), bounds.size());
+        if let Some(cropping) = &self.editor.cropping {
+            let reach = super::HANDLE_REACH / scale(self.editor, bounds.size());
+            return crate::selection::interaction(
+                cropping.selection.hit(super::to_point(at), reach),
+            );
+        }
         match self.editor.tool {
             Tool::Select => {
-                let at = self
-                    .editor
-                    .viewport
-                    .image_point(local, self.image(), bounds.size());
                 let reach = MARK_REACH / f64::from(scale(self.editor, bounds.size()));
                 crate::cursor::select(
                     self.editor.document(),
@@ -240,36 +269,162 @@ impl canvas::Program<Message> for Backdrop<'_> {
             return vec![frame.into_geometry()];
         };
         let image = editor.image_size();
-        let transform = editor.viewport.transform(image, bounds.size());
-        let scale = editor.viewport.scale(image, bounds.size());
-        let area = transform.transform_rect_bbox(editor.document().visible());
-        #[allow(clippy::cast_possible_truncation)]
-        let area = Rectangle::new(
-            Point::new(area.x0 as f32, area.y0 as f32),
-            Size::new(area.width() as f32, area.height() as f32),
+        let content = editor.content();
+        let transform = editor.viewport.transform(content, bounds.size());
+        let scale = editor.viewport.scale(content, bounds.size());
+        let canvas = editor.shown_canvas();
+        let area = to_rectangle(transform.transform_rect_bbox(canvas));
+        let document = editor.document();
+        let shown = if editor.cropping.is_some() {
+            content
+        } else {
+            document.visible()
+        };
+        let kept = to_rectangle(transform.transform_rect_bbox(shown));
+        if shown == canvas {
+            frame.fill_rectangle(
+                area.position() + Vector::new(0.0, 6.0),
+                area.size(),
+                Color::BLACK.scale_alpha(0.25),
+            );
+        } else {
+            let on_screen = area
+                .intersection(&Rectangle::with_size(bounds.size()))
+                .unwrap_or(area);
+            match document.frame.background {
+                Some(color) => {
+                    frame.fill_rectangle(on_screen.position(), on_screen.size(), color_of(color));
+                }
+                None => checker(&mut frame, area, on_screen),
+            }
+            if document.frame.shadow {
+                #[allow(clippy::cast_possible_truncation)]
+                let radius = document.shadow_radius() as f32;
+                soft_shadow(&mut frame, kept, radius * scale);
+            }
+        }
+        let picture = Rectangle::new(
+            transform_point(transform, kurbo::Point::ORIGIN),
+            Size::new(image.width * scale, image.height * scale),
         );
-        frame.fill_rectangle(
-            area.position() + Vector::new(0.0, 6.0),
-            area.size(),
-            Color::BLACK.scale_alpha(0.25),
-        );
-        frame.draw_image(
-            Rectangle::new(
-                transform_point(transform, kurbo::Point::ORIGIN),
-                Size::new(image.width * scale, image.height * scale),
-            ),
-            canvas::Image::new(handle.clone()).filter_method(if scale >= 2.0 {
-                iced::widget::image::FilterMethod::Nearest
-            } else {
-                iced::widget::image::FilterMethod::Linear
-            }),
-        );
+        let filter = if scale >= 2.0 {
+            iced::widget::image::FilterMethod::Nearest
+        } else {
+            iced::widget::image::FilterMethod::Linear
+        };
+        frame.with_clip(kept, |frame| {
+            frame.draw_image(
+                picture,
+                canvas::Image::new(handle.clone()).filter_method(filter),
+            );
+        });
         vec![frame.into_geometry()]
     }
 }
 
 fn scale(editor: &Editor, canvas: Size) -> f32 {
-    editor.viewport.scale(editor.image_size(), canvas)
+    editor.viewport.scale(editor.content(), canvas)
+}
+
+/// A checkerboard over the part `shown` of `area`, which shows that it stays transparent.
+fn checker(frame: &mut Frame, area: Rectangle, shown: Rectangle) {
+    const CELL: f32 = 8.0;
+    frame.fill_rectangle(
+        shown.position(),
+        shown.size(),
+        Color::from_rgb8(0xf2, 0xf2, 0xf2),
+    );
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let cells = |from: f32, to: f32, origin: f32| {
+        let first = ((from - origin) / CELL).floor().max(0.0) as u32;
+        let last = ((to - origin) / CELL).ceil().max(0.0) as u32;
+        first..last
+    };
+    let dark = Path::new(|path| {
+        for row in cells(shown.y, shown.y + shown.height, area.y) {
+            for column in cells(shown.x, shown.x + shown.width, area.x) {
+                if (row + column) % 2 == 1 {
+                    #[allow(clippy::cast_precision_loss)]
+                    let cell = Rectangle::new(
+                        Point::new(area.x + column as f32 * CELL, area.y + row as f32 * CELL),
+                        Size::new(CELL, CELL),
+                    );
+                    if let Some(cell) = cell.intersection(&shown) {
+                        path.rectangle(cell.position(), cell.size());
+                    }
+                }
+            }
+        }
+    });
+    frame.fill(&dark, Color::from_rgb8(0xd9, 0xd9, 0xd9));
+}
+
+/// A soft shadow under `picture`, `radius` screen pixels deep, built up from wider and fainter
+/// rounded rectangles.
+fn soft_shadow(frame: &mut Frame, picture: Rectangle, radius: f32) {
+    const STEPS: u8 = 8;
+    if radius < 1.0 {
+        return;
+    }
+    for step in 1..=STEPS {
+        let spread = radius * f32::from(step) / f32::from(STEPS);
+        let at = Point::new(picture.x - spread, picture.y - spread + radius * 0.4);
+        let size = Size::new(picture.width + spread * 2.0, picture.height + spread * 2.0);
+        frame.fill(
+            &Path::rounded_rectangle(at, size, spread.into()),
+            Color::BLACK.scale_alpha(0.4 / f32::from(STEPS)),
+        );
+    }
+}
+
+/// Dims what the crop leaves out, and outlines the crop with its handles.
+fn draw_crop(
+    frame: &mut Frame,
+    crop: Rectangle,
+    transform: kurbo::Affine,
+    canvas: Size,
+    editor: &Editor,
+) {
+    let crop = to_rectangle(transform.transform_rect_bbox(kurbo::Rect::new(
+        f64::from(crop.x),
+        f64::from(crop.y),
+        f64::from(crop.x + crop.width),
+        f64::from(crop.y + crop.height),
+    )));
+    let outside = Path::new(|path| {
+        path.rectangle(Point::ORIGIN, canvas);
+        path.rectangle(crop.position(), crop.size());
+    });
+    frame.fill(
+        &outside,
+        canvas::Fill {
+            style: canvas::Style::Solid(Color::BLACK.scale_alpha(0.55)),
+            rule: canvas::fill::Rule::EvenOdd,
+        },
+    );
+    let accent = editor.palette.accent;
+    frame.stroke(
+        &Path::rectangle(crop.position(), crop.size()),
+        Stroke::default().with_color(accent).with_width(1.5),
+    );
+    let dragging = editor
+        .cropping
+        .is_some_and(|cropping| cropping.selection.dragging());
+    if !dragging {
+        for handle in Handle::ALL {
+            let dot = Path::circle(handle.position(crop), CROP_HANDLE);
+            frame.fill(&dot, Color::WHITE);
+            frame.stroke(&dot, Stroke::default().with_color(accent).with_width(1.5));
+        }
+    }
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn to_rectangle(rect: kurbo::Rect) -> Rectangle {
+    Rectangle::new(
+        Point::new(rect.x0 as f32, rect.y0 as f32),
+        Size::new(rect.width() as f32, rect.height() as f32),
+    )
 }
 
 #[allow(clippy::cast_possible_truncation)]

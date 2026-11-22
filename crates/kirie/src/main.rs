@@ -3,6 +3,7 @@ mod clipboard;
 mod controls;
 mod cursor;
 mod dialog;
+mod drawing;
 mod drops;
 mod editor;
 mod extension;
@@ -11,8 +12,11 @@ mod notify;
 mod overlay;
 mod paint;
 mod picker;
+mod region;
 mod save;
+mod selection;
 mod shortcuts;
+mod store;
 mod swatches;
 mod typing;
 mod update;
@@ -221,7 +225,11 @@ fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
     } else {
         overlay::Host::Window
     };
-    match overlay::run(frames, windows, primary, host).map_err(anyhow::Error::msg)? {
+    let outcome = overlay::run(frames, windows, primary, host);
+    if edit && !matches!(outcome, Ok(overlay::Outcome::Edit(_))) {
+        block_on(ipc::resume())?;
+    }
+    match outcome.map_err(anyhow::Error::msg)? {
         overlay::Outcome::Saved(path) => {
             println!("{}", path.display());
             block_on(notify::show("Screenshot saved", &save::pretty(&path)))?;
