@@ -1,16 +1,24 @@
+<h1 align="center">Kirie</h1>
+
 <p align="center">
-  <img src="packaging/icons/hicolor/scalable/apps/dev.samuelba.Kirie.svg" width="96" alt="Kirie">
+  <img src="packaging/icons/hicolor/scalable/apps/dev.samuelba.Kirie.svg" width="96" alt="Kirie logo">
 </p>
 
-# Kirie
+<p align="center">
+  <a href="https://github.com/samuelba/kirie/actions/workflows/ci.yml"><img src="https://github.com/samuelba/kirie/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/samuelba/kirie/releases/latest"><img src="https://img.shields.io/github/v/release/samuelba/kirie" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/samuelba/kirie" alt="License"></a>
+</p>
 
 Kirie (切り絵, Japanese paper-cut art) is a screenshot and annotation tool for Wayland. Cut a
 piece out of your screen, mark it up right there or later in the editor, and copy or save it.
 
 It runs on GNOME, COSMIC, KDE Plasma and the layer-shell compositors (sway, Hyprland, niri,
-Wayfire). X11 is not supported.
+Wayfire). X11 is not supported. More at [samuelba.dev/kirie](https://samuelba.dev/kirie).
 
-> Kirie is in early development. There is no release yet.
+![The overlay: a region of the screen cut out, with a box, a step number, an arrow and text drawn on it, and the toolbar under the selection](docs/screenshots/overlay.webp)
+
+![The editor: one of each mark on a screenshot, with the style, color, weight, fill, shadow and frame settings on the right](docs/screenshots/editor.webp)
 
 ## Install
 
@@ -115,6 +123,10 @@ cargo fmt --all --check && cargo clippy --workspace --all-targets && cargo test 
 
 Smoke tests run Kirie under a headless compositor: `scripts/sway-smoke.sh` (needs sway) and
 `scripts/gnome-smoke.sh` (needs gnome-shell, runs an isolated session with the extension).
+
+For screenshots of Kirie itself, `KIRIE_OVERLAY_DEMO=1 kirie capture` opens the overlay with a
+selection and a few marks, and `KIRIE_EDITOR_DEMO=1 kirie edit picture.png` puts one of each mark
+on every image the editor opens (close a running editor first, or the image goes to that one).
 
 ## License
 
