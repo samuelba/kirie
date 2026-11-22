@@ -6,6 +6,7 @@ mod ipc;
 mod overlay;
 mod paint;
 mod save;
+mod shortcuts;
 
 use std::path::PathBuf;
 
@@ -44,6 +45,9 @@ enum Command {
     },
     /// Open an image in the editor.
     Edit { path: PathBuf },
+    /// Set up a keyboard shortcut for screenshots.
+    #[command(subcommand)]
+    Shortcuts(Shortcuts),
     /// Install or remove the companion GNOME Shell extension.
     #[command(subcommand, name = "gnome-extension")]
     GnomeExtension(GnomeExtension),
@@ -53,6 +57,12 @@ enum Command {
     /// Offers a PNG from stdin on the clipboard until something else is copied.
     #[command(name = "serve-clipboard", hide = true)]
     ServeClipboard,
+}
+
+#[derive(Debug, Subcommand)]
+enum Shortcuts {
+    /// Bind Shift+Print to `kirie capture` on this desktop.
+    Install,
 }
 
 #[derive(Debug, Subcommand)]
@@ -96,6 +106,7 @@ fn main() -> anyhow::Result<()> {
         }) => capture_region(cursor, edit),
         Some(Command::Debug(Debug::Globals)) => print_globals(),
         Some(Command::ServeClipboard) => clipboard::serve(),
+        Some(Command::Shortcuts(Shortcuts::Install)) => shortcuts::install(),
         Some(Command::GnomeExtension(GnomeExtension::Install)) => extension::install(),
         Some(Command::GnomeExtension(GnomeExtension::Uninstall)) => extension::uninstall(),
         None => edit(None),

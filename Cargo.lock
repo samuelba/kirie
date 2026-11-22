@@ -1724,12 +1724,15 @@ dependencies = [
  "kirie-capture",
  "kirie-ui",
  "kurbo 0.11.3",
+ "ron",
+ "serde",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "winit-common",
  "winit-core",
  "wl-clipboard-rs",
+ "xkbcommon",
  "zbus",
 ]
 
