@@ -1,7 +1,7 @@
 //! What each screen's surface shows: the frozen image, the marks, and the floating toolbar
 //! next to the selection, or wherever it was dragged by its grip.
 
-use iced::widget::{Space, column, container, image, mouse_area, pin, row, stack, svg};
+use iced::widget::{Space, column, container, image, mouse_area, pin, row, stack, svg, text};
 use iced::{Element, Length, Point, Rectangle, Size, mouse, window};
 use kirie_annotate::Tool;
 use kirie_ui::icon::Icon;
@@ -14,7 +14,9 @@ use crate::picker::{self, Picker};
 
 pub const TEXT_INPUT: &str = "kirie-text";
 /// Room the toolbar takes; used to keep it on screen.
-const TOOLBAR: iced::Size = iced::Size::new(970.0, 92.0);
+const TOOLBAR: iced::Size = iced::Size::new(1020.0, 92.0);
+/// How much wider "Back to the editor" is than "Copy" on the primary button.
+const BACK_TO_EDITOR: f32 = 96.0;
 const GAP: f32 = 12.0;
 /// A swatch and the space after it.
 const SWATCH: f32 = 30.0;
@@ -95,7 +97,15 @@ impl Overlay {
             0.0
         };
         let text = if self.texting() { TEXT_CONTROLS } else { 0.0 };
-        iced::Size::new(TOOLBAR.width + extra + text, TOOLBAR.height + picker)
+        let label = if self.primary == Action::Edit {
+            BACK_TO_EDITOR
+        } else {
+            0.0
+        };
+        iced::Size::new(
+            TOOLBAR.width + extra + text + label,
+            TOOLBAR.height + picker,
+        )
     }
 
     fn toolbar(&self) -> Element<'_, Message> {
@@ -128,29 +138,15 @@ impl Overlay {
             ),
         ]
         .spacing(2);
-        let actions = row![
-            icon_button(
-                Icon::Edit,
-                "Open in the editor (Ctrl+E)",
-                palette,
-                false,
-                Some(Message::Finish(Action::Edit))
-            ),
-            icon_button(
-                Icon::Save,
-                "Save to Pictures",
-                palette,
-                false,
-                Some(Message::Finish(Action::Save))
-            ),
-            primary_button(Icon::Copy, "Copy", palette, Message::Finish(Action::Copy)),
-            icon_button(Icon::Close, "Cancel", palette, false, Some(Message::Escape)),
+        let main = row![
+            tools,
+            divider(palette),
+            history,
+            divider(palette),
+            self.actions()
         ]
-        .spacing(space::XS)
+        .spacing(space::S)
         .align_y(iced::Alignment::Center);
-        let main = row![tools, divider(palette), history, divider(palette), actions]
-            .spacing(space::S)
-            .align_y(iced::Alignment::Center);
 
         let properties = self.properties();
 
@@ -185,6 +181,50 @@ impl Overlay {
         container(content)
             .padding(space::S)
             .style(floating(palette))
+            .into()
+    }
+
+    /// Edit, save, copy and cancel; the action Enter takes is the primary button.
+    fn actions(&self) -> Element<'_, Message> {
+        let palette = self.palette;
+        let save = icon_button(
+            Icon::Save,
+            "Save to Pictures (Ctrl+S)",
+            palette,
+            false,
+            Some(Message::Finish(Action::Save)),
+        );
+        let edit = Message::Finish(Action::Edit);
+        let copy = Message::Finish(Action::Copy);
+        let actions = match self.primary {
+            Action::Edit => row![
+                save,
+                icon_button(Icon::Copy, "Copy (Ctrl+C)", palette, false, Some(copy)),
+                primary_button(Icon::Edit, "Back to the editor", palette, edit),
+            ],
+            Action::Copy | Action::Save => row![
+                icon_button(
+                    Icon::Edit,
+                    "Open in the editor (Ctrl+E)",
+                    palette,
+                    false,
+                    Some(edit)
+                ),
+                save,
+                primary_button(Icon::Copy, "Copy", palette, copy),
+            ],
+        };
+        actions
+            .push(enter_key(palette))
+            .push(icon_button(
+                Icon::Close,
+                "Cancel (Esc)",
+                palette,
+                false,
+                Some(Message::Escape),
+            ))
+            .spacing(space::XS)
+            .align_y(iced::Alignment::Center)
             .into()
     }
 
@@ -263,6 +303,21 @@ impl Overlay {
         }
         properties.into()
     }
+}
+
+/// A key cap that says Enter does what the button before it does.
+fn enter_key<'a>(palette: kirie_ui::Palette) -> Element<'a, Message> {
+    container(text("Enter").size(11).color(palette.muted))
+        .padding([1.0, space::XS + 1.0])
+        .style(move |_| container::Style {
+            border: iced::Border {
+                color: palette.border,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
 }
 
 /// Where a toolbar of `size` goes, in desktop coordinates, and the screen it is on: where it
