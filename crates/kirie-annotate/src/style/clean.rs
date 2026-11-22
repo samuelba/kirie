@@ -186,7 +186,7 @@ mod tests {
     fn context() -> Context {
         Context {
             paint: Paint {
-                weight: Weight::Medium,
+                weight: Weight::MEDIUM,
                 ..Paint::default()
             },
             unit: 1.0,

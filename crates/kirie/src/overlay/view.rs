@@ -14,12 +14,12 @@ use crate::picker::{self, Picker};
 
 pub const TEXT_INPUT: &str = "kirie-text";
 /// Room the toolbar takes; used to keep it on screen.
-const TOOLBAR: iced::Size = iced::Size::new(800.0, 92.0);
+const TOOLBAR: iced::Size = iced::Size::new(930.0, 92.0);
 const GAP: f32 = 12.0;
 /// A swatch and the space after it.
 const SWATCH: f32 = 30.0;
 /// How much wider the text controls are than the weight and fill controls they replace.
-const TEXT_CONTROLS: f32 = 260.0;
+const TEXT_CONTROLS: f32 = 130.0;
 /// Custom swatches that fit in [`TOOLBAR`] before it grows.
 const ROOM_FOR_CUSTOM: usize = 4;
 
@@ -218,7 +218,13 @@ impl Overlay {
                 .push(controls::text_layout(paint.text, palette, Message::Look));
         } else {
             properties = properties
-                .push(controls::weights(paint, palette, Message::PickWeight))
+                .push({
+                    let (presets, slider) =
+                        controls::weights(paint, palette, 72.0, Message::Weight);
+                    row![presets, slider]
+                        .spacing(space::S)
+                        .align_y(iced::Alignment::Center)
+                })
                 .push(divider(palette))
                 .push(icon_button(
                     Icon::Fill,

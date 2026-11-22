@@ -12,7 +12,8 @@ use crate::document::Document;
 
 pub const EXTENSION: &str = "kirie";
 const FORMAT: &str = "kirie";
-const VERSION: u32 = 1;
+/// 2: weights are widths, and text has a look of its own.
+const VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Project {

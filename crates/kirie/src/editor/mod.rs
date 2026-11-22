@@ -104,7 +104,7 @@ pub enum Message {
     /// Opens the color picker on a swatch, or to add one.
     EditColor(Target),
     Picker(picker::Event),
-    PickWeight(Weight),
+    Weight(crate::controls::WeightEvent),
     ToggleFill,
     Look(controls::TextEvent),
     ToggleScheme,
@@ -273,7 +273,7 @@ impl Editor {
             | Message::PickColor(_)
             | Message::EditColor(_)
             | Message::Picker(_)
-            | Message::PickWeight(_)
+            | Message::Weight(_)
             | Message::ToggleFill
             | Message::Look(_) => return self.restyle(message),
             Message::SystemScheme(scheme) => self.follow(Some(scheme)),
@@ -351,9 +351,15 @@ impl Editor {
                 self.picker = Some(Picker::new(target, &self.swatches, self.paint.color));
             }
             Message::Picker(event) => return self.edit_color(event),
-            Message::PickWeight(weight) => self.repaint(|paint| paint.weight = weight),
+            Message::Weight(controls::WeightEvent::Done)
+            | Message::Look(controls::TextEvent::SizeDone) => self.sliding = false,
+            Message::Weight(controls::WeightEvent::Pick(weight)) => {
+                self.repaint(|paint| paint.weight = weight);
+            }
+            Message::Weight(controls::WeightEvent::Slide(width)) => {
+                self.repaint_gradually(|paint| paint.weight = Weight::new(width), true);
+            }
             Message::ToggleFill => self.repaint(|paint| paint.filled = !paint.filled),
-            Message::Look(controls::TextEvent::SizeDone) => self.sliding = false,
             Message::Look(event) => {
                 self.repaint_gradually(
                     |paint| paint.text = event.apply(paint.text),

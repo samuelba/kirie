@@ -338,11 +338,10 @@ impl Editor {
         .spacing(space::S)
         .align_y(Alignment::Center);
         content
-            .push(section(
-                palette,
-                "Weight",
-                controls::weights(paint, palette, Message::PickWeight),
-            ))
+            .push(section(palette, "Weight", {
+                let (presets, slider) = controls::weights(paint, palette, 150.0, Message::Weight);
+                column![presets, slider].spacing(space::S).into()
+            }))
             .push(section(palette, "Fill", fill.into()))
     }
 }

@@ -48,32 +48,69 @@ impl Rgba {
     }
 }
 
-/// How heavy a mark is; each style turns it into a width.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-pub enum Weight {
-    Thin,
-    #[default]
-    Medium,
-    Thick,
-}
+/// How heavy a mark is: its stroke width in logical pixels before the style and the image
+/// scale apply.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct Weight(f64);
 
 impl Weight {
-    /// The stroke width in logical pixels before the style and the image scale apply.
-    pub const fn base(self) -> f64 {
-        match self {
-            Weight::Thin => 2.0,
-            Weight::Medium => 4.0,
-            Weight::Thick => 7.0,
+    pub const THIN: Weight = Weight(2.0);
+    pub const MEDIUM: Weight = Weight(4.0);
+    pub const THICK: Weight = Weight(7.0);
+    pub const MIN: f64 = 1.0;
+    pub const MAX: f64 = 24.0;
+
+    pub fn new(width: f64) -> Self {
+        if width.is_finite() {
+            Self(width.clamp(Self::MIN, Self::MAX))
+        } else {
+            Self::MEDIUM
         }
     }
 
-    /// The text size a weight gave before text had a size of its own.
-    const fn legacy_text_size(self) -> f64 {
-        match self {
-            Weight::Thin => 16.0,
-            Weight::Medium => 22.0,
-            Weight::Thick => 32.0,
+    pub const fn base(self) -> f64 {
+        self.0
+    }
+
+    /// The text size a weight gave before text had a size of its own: 16, 22 and 32 for the
+    /// thin, medium and thick weights there were then.
+    fn legacy_text_size(self) -> f64 {
+        if self.0 <= 4.0 {
+            16.0 + (self.0 - 2.0) * 3.0
+        } else {
+            22.0 + (self.0 - 4.0) * 10.0 / 3.0
         }
+    }
+}
+
+impl Default for Weight {
+    fn default() -> Self {
+        Self::MEDIUM
+    }
+}
+
+impl<'de> Deserialize<'de> for Weight {
+    /// A width, or the name of one of the three weights older projects knew.
+    fn deserialize<D: serde::Deserializer<'de>>(from: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Stored {
+            Width(f64),
+            Named(Named),
+        }
+        #[derive(Deserialize)]
+        enum Named {
+            Thin,
+            Medium,
+            Thick,
+        }
+        Ok(match Stored::deserialize(from)? {
+            Stored::Width(width) => Self::new(width),
+            Stored::Named(Named::Thin) => Self::THIN,
+            Stored::Named(Named::Medium) => Self::MEDIUM,
+            Stored::Named(Named::Thick) => Self::THICK,
+        })
     }
 }
 
@@ -133,7 +170,7 @@ impl Default for Paint {
     fn default() -> Self {
         Self {
             color: PALETTE[0],
-            weight: Weight::Medium,
+            weight: Weight::MEDIUM,
             filled: false,
             text: TextLook::default(),
         }
@@ -429,10 +466,33 @@ mod tests {
     }
 
     #[test]
+    fn weights_keep_any_width_within_bounds() {
+        assert!((Weight::new(5.5).base() - 5.5).abs() < f64::EPSILON);
+        assert!((Weight::new(0.0).base() - Weight::MIN).abs() < f64::EPSILON);
+        assert!((Weight::new(99.0).base() - Weight::MAX).abs() < f64::EPSILON);
+        assert_eq!(Weight::new(f64::NAN), Weight::MEDIUM);
+        for (old, weight) in [
+            ("Thin", Weight::THIN),
+            ("Medium", Weight::MEDIUM),
+            ("Thick", Weight::THICK),
+        ] {
+            assert_eq!(ron::from_str::<Weight>(old).unwrap(), weight);
+        }
+        assert_eq!(ron::to_string(&Weight::new(5.5)).unwrap(), "5.5");
+        assert_eq!(ron::from_str::<Weight>("5.5").unwrap(), Weight::new(5.5));
+        assert_eq!(
+            ron::from_str::<Weight>("50").unwrap(),
+            Weight::new(Weight::MAX)
+        );
+        assert!((Weight::MEDIUM.legacy_text_size() - 22.0).abs() < 1e-9);
+        assert!((Weight::THICK.legacy_text_size() - 32.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn weights_grow() {
-        assert!(Weight::Thin.base() < Weight::Medium.base());
-        assert!(Weight::Medium.base() < Weight::Thick.base());
-        assert_eq!(Weight::default(), Weight::Medium);
+        assert!(Weight::THIN.base() < Weight::MEDIUM.base());
+        assert!(Weight::MEDIUM.base() < Weight::THICK.base());
+        assert_eq!(Weight::default(), Weight::MEDIUM);
         assert!(!Paint::default().filled);
     }
 

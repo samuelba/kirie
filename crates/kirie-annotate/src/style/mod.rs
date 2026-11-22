@@ -669,7 +669,7 @@ mod tests {
         assert!(values.iter().any(|v| *v < 0.0) && values.iter().any(|v| *v > 0.0));
         let context = Context {
             paint: Paint {
-                weight: Weight::Thick,
+                weight: Weight::THICK,
                 ..Paint::default()
             },
             unit: 2.0,

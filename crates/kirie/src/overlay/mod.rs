@@ -67,7 +67,7 @@ pub enum Message {
     /// Opens the color picker on a swatch, or to add one.
     EditColor(Target),
     Picker(picker::Event),
-    PickWeight(Weight),
+    Weight(crate::controls::WeightEvent),
     ToggleFill,
     Look(crate::controls::TextEvent),
     TextEdit(iced::widget::text_editor::Action),
@@ -376,7 +376,7 @@ impl Overlay {
             | Message::PickColor(_)
             | Message::EditColor(_)
             | Message::Picker(_)
-            | Message::PickWeight(_)
+            | Message::Weight(_)
             | Message::ToggleFill
             | Message::Look(_) => {
                 self.restyle(message);
@@ -451,14 +451,16 @@ impl Overlay {
                     }
                 }
             }
-            Message::PickWeight(weight) => {
+            Message::Weight(crate::controls::WeightEvent::Done)
+            | Message::Look(crate::controls::TextEvent::SizeDone) => self.sliding = false,
+            Message::Weight(crate::controls::WeightEvent::Pick(weight)) => {
                 self.repaint(|paint| paint.weight = weight);
+            }
+            Message::Weight(crate::controls::WeightEvent::Slide(width)) => {
+                self.repaint_gradually(|paint| paint.weight = Weight::new(width), true);
             }
             Message::ToggleFill => {
                 self.repaint(|paint| paint.filled = !paint.filled);
-            }
-            Message::Look(crate::controls::TextEvent::SizeDone) => {
-                self.sliding = false;
             }
             Message::Look(event) => {
                 self.repaint_gradually(

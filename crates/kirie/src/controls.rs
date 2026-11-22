@@ -93,20 +93,57 @@ pub fn colors<'a, Message: Clone + 'a>(
         .align_y(iced::Alignment::Center)
 }
 
+/// A change to the weight.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WeightEvent {
+    Pick(Weight),
+    Slide(f64),
+    /// The slider was let go.
+    Done,
+}
+
+/// The three usual weights, and a slider for any other; `width` is the slider's.
 pub fn weights<'a, Message: Clone + 'a>(
     paint: Paint,
     palette: Palette,
-    on_pick: impl Fn(Weight) -> Message,
-) -> Element<'a, Message> {
-    row([
-        ("S", Weight::Thin),
-        ("M", Weight::Medium),
-        ("L", Weight::Thick),
+    width: f32,
+    on: impl Fn(WeightEvent) -> Message + 'a,
+) -> (Element<'a, Message>, Element<'a, Message>) {
+    let presets = row([
+        ("S", Weight::THIN),
+        ("M", Weight::MEDIUM),
+        ("L", Weight::THICK),
     ]
     .into_iter()
-    .map(|(label, weight)| pill(label, paint.weight == weight, palette, on_pick(weight))))
+    .map(|(label, weight)| {
+        pill(
+            label,
+            paint.weight == weight,
+            palette,
+            on(WeightEvent::Pick(weight)),
+        )
+    }))
     .spacing(2)
-    .into()
+    .into();
+    let done = on(WeightEvent::Done);
+    let slider = row![
+        container(value_slider(
+            Weight::MIN..=Weight::MAX,
+            paint.weight.base(),
+            palette,
+            move |width| on(WeightEvent::Slide(width)),
+            done,
+        ))
+        .width(width),
+        text(format!("{:.1} px", paint.weight.base()))
+            .size(12)
+            .color(palette.muted)
+            .width(42),
+    ]
+    .spacing(space::S)
+    .align_y(iced::Alignment::Center)
+    .into();
+    (presets, slider)
 }
 
 /// A change to how text looks.

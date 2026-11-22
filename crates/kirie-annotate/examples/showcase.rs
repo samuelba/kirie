@@ -45,7 +45,7 @@ fn marks(x: f64) -> Vec<(Kind, Paint)> {
                 to: p(380.0, 110.0),
             },
             Paint {
-                weight: Weight::Thin,
+                weight: Weight::THIN,
                 ..plain
             },
         ),
@@ -71,7 +71,7 @@ fn marks(x: f64) -> Vec<(Kind, Paint)> {
                     .collect(),
             },
             Paint {
-                weight: Weight::Thick,
+                weight: Weight::THICK,
                 ..plain
             },
         ),
@@ -104,7 +104,7 @@ fn marks(x: f64) -> Vec<(Kind, Paint)> {
                 number: 2,
             },
             Paint {
-                weight: Weight::Thick,
+                weight: Weight::THICK,
                 ..plain
             },
         ),
@@ -149,7 +149,7 @@ fn main() {
             },
             paint: Paint {
                 color: kirie_annotate::Rgba::rgb(0x16, 0x18, 0x1d),
-                weight: Weight::Thin,
+                weight: Weight::THIN,
                 filled: false,
                 text: kirie_annotate::TextLook {
                     size: 16.0,
