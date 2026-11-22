@@ -10,6 +10,7 @@ mod overlay;
 mod paint;
 mod save;
 mod shortcuts;
+mod update;
 
 use std::path::PathBuf;
 
@@ -48,6 +49,9 @@ enum Command {
     },
     /// Open an image in the editor.
     Edit { path: PathBuf },
+    /// Install the latest release, after checking its signature.
+    #[command(name = "self-update")]
+    SelfUpdate,
     /// Set up a keyboard shortcut for screenshots.
     #[command(subcommand)]
     Shortcuts(Shortcuts),
@@ -110,6 +114,7 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Debug(Debug::Globals)) => print_globals(),
         Some(Command::ServeClipboard) => clipboard::serve(),
         Some(Command::Shortcuts(Shortcuts::Install)) => shortcuts::install(),
+        Some(Command::SelfUpdate) => update::run(),
         Some(Command::GnomeExtension(GnomeExtension::Install)) => extension::install(),
         Some(Command::GnomeExtension(GnomeExtension::Uninstall)) => extension::uninstall(),
         None => edit(None),

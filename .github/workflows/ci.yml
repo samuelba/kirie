@@ -108,8 +108,9 @@ jobs:
         run: for file in scripts/*.sh; do bash -n "$file"; done
       - name: The installer is POSIX sh
         run: shellcheck --shell=sh scripts/install.sh
-      - name: The installer trusts the release key
+      - name: The installer and the updater trust the release key
         run: |
           [ -f packaging/minisign.pub ] || exit 0
           key="$(sed -n 2p packaging/minisign.pub)"
           grep -qx "public_key=\"$key\"" scripts/install.sh
+          grep -q "const RELEASE_KEY: &str = \"$key\";" crates/kirie/src/update.rs
