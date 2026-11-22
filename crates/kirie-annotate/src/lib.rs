@@ -12,7 +12,7 @@ pub mod style;
 pub mod text;
 pub mod tools;
 
-pub use document::{Document, History, Op};
+pub use document::{Document, Frame, History, Op};
 pub use primitive::{Align, Effect, FillRule, Font, Primitive};
 pub use shape::{
     HIGHLIGHT, Kind, PALETTE, Paint, Rgba, Shape, ShapeId, SpotShape, TextLook, Weight,

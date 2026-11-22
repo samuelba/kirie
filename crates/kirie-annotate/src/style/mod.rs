@@ -150,6 +150,36 @@ fn text_size(shape: &Shape, font: Font, unit: f64) -> f64 {
     shape.paint.text.size * unit * font.scale()
 }
 
+/// Where `primitive` puts paint, roughly: its outline grown by its stroke.
+pub fn reach(primitive: &Primitive) -> Option<Rect> {
+    use kurbo::Shape as _;
+    match primitive {
+        Primitive::Fill { path, .. } | Primitive::Cover { path, .. } => Some(path.bounding_box()),
+        Primitive::Stroke { path, width, .. } => {
+            Some(path.bounding_box().inflate(width / 2.0, width / 2.0))
+        }
+        Primitive::Text {
+            at,
+            text,
+            size,
+            font,
+            halo,
+            centered,
+            ..
+        } => {
+            let measured = crate::text::measure(text, *font, *size);
+            let origin = if *centered {
+                *at - Vec2::new(measured.width / 2.0, measured.height / 2.0)
+            } else {
+                *at
+            };
+            let halo = if halo.is_some() { size * 0.08 } else { 0.0 };
+            Some(Rect::from_origin_size(origin, measured).inflate(halo, halo))
+        }
+        Primitive::Effect { rect, .. } => Some(rect.abs()),
+    }
+}
+
 /// What one mark draws on `stage`.
 pub fn primitives(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Vec<Primitive> {
     let drawn = unturned(shape, style, unit, stage);

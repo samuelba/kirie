@@ -33,9 +33,14 @@ const SHIFT: i32 = 12;
 /// Blurs the region with three box blurs, close to a Gaussian of `radius`, over a mosaic of
 /// cells as wide as `radius`: nothing finer than a cell survives to be sharpened back.
 pub fn blur(pixels: &mut [u8], stride: usize, region: Region, radius: f64) {
+    pixelate(pixels, stride, region, radius);
+    soften(pixels, stride, region, radius);
+}
+
+/// Softens the region with three box blurs, close to a Gaussian of `radius`.
+pub fn soften(pixels: &mut [u8], stride: usize, region: Region, radius: f64) {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let box_radius = ((radius.max(1.0) * 0.6).round() as usize).max(1);
-    pixelate(pixels, stride, region, radius);
     let mut work = extract(pixels, stride, region);
     let mut scratch = work.clone();
     for _ in 0..3 {

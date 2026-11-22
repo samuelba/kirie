@@ -2,6 +2,7 @@
 
 mod canvas;
 mod closing;
+mod frame;
 mod view;
 mod viewport;
 
@@ -131,6 +132,7 @@ pub enum Message {
     Brightness(controls::BrightnessEvent),
     Spot(kirie_annotate::SpotShape),
     Look(controls::TextEvent),
+    Frame(frame::Event),
     ToggleScheme,
     TextEdit(iced::widget::text_editor::Action),
     TextDone,
@@ -324,13 +326,13 @@ impl Editor {
     }
 
     /// What the canvas shows, in image coordinates: all of the image while cropping, else
-    /// what is kept.
+    /// what gets saved, the kept part in its frame.
     fn content(&self) -> kurbo::Rect {
         if self.cropping.is_some() {
             let size = self.image_size();
             kurbo::Rect::new(0.0, 0.0, f64::from(size.width), f64::from(size.height))
         } else {
-            self.document().visible()
+            self.document().canvas()
         }
     }
 
@@ -385,7 +387,8 @@ impl Editor {
             | Message::ToggleFill
             | Message::Brightness(_)
             | Message::Spot(_)
-            | Message::Look(_) => return self.restyle(message),
+            | Message::Look(_)
+            | Message::Frame(_) => return self.restyle(message),
             Message::SystemScheme(scheme) => self.follow(Some(scheme)),
             Message::ToggleScheme => self.follow(None),
             Message::TextEdit(action) => {
@@ -524,7 +527,18 @@ impl Editor {
             Message::Picker(event) => return self.edit_color(event),
             Message::Weight(controls::WeightEvent::Done)
             | Message::Brightness(controls::BrightnessEvent::Done)
-            | Message::Look(controls::TextEvent::SizeDone) => self.sliding = false,
+            | Message::Look(controls::TextEvent::SizeDone)
+            | Message::Frame(frame::Event::MarginDone) => self.sliding = false,
+            Message::Frame(event) => {
+                let document = self.document();
+                let op = Op::SetFrame(event.apply(document.frame, document.unit));
+                if let frame::Event::Margin(_) = event {
+                    self.history.apply_gradually(op, self.sliding);
+                    self.sliding = true;
+                } else {
+                    self.history.apply(op);
+                }
+            }
             Message::Brightness(controls::BrightnessEvent::Slide(brightness)) => {
                 self.history
                     .apply_gradually(Op::SetSpotlightBrightness(brightness), self.sliding);

@@ -61,6 +61,7 @@ icons! {
     Shadow => "shadow",
     Grip => "grip-vertical",
     Crop => "crop",
+    Expand => "expand",
 }
 
 impl Icon {

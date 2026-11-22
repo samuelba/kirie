@@ -7,7 +7,7 @@ use iced::{Color, Point, Rectangle, Renderer, Size, Theme, Vector};
 use kirie_annotate::{Draft, Shape, Tool};
 
 use super::{Editor, MARK_REACH, Message, Pointer, pixel};
-use crate::paint::{ImageSource, Marks, Painter, draw_grips};
+use crate::paint::{ImageSource, Marks, Painter, color_of, draw_grips};
 use crate::selection::Handle;
 
 /// The radius of a crop handle, in screen pixels.
@@ -278,6 +278,29 @@ impl canvas::Program<Message> for Backdrop<'_> {
             area.size(),
             Color::BLACK.scale_alpha(0.25),
         );
+        let document = editor.document();
+        let shown = if editor.cropping.is_some() {
+            content
+        } else {
+            document.visible()
+        };
+        let kept = to_rectangle(transform.transform_rect_bbox(shown));
+        if shown != content {
+            let on_screen = area
+                .intersection(&Rectangle::with_size(bounds.size()))
+                .unwrap_or(area);
+            match document.frame.background {
+                Some(color) => {
+                    frame.fill_rectangle(on_screen.position(), on_screen.size(), color_of(color));
+                }
+                None => checker(&mut frame, area, on_screen),
+            }
+            if document.frame.shadow {
+                #[allow(clippy::cast_possible_truncation)]
+                let radius = (document.frame.margin * 0.4).min(24.0 * document.unit) as f32;
+                soft_shadow(&mut frame, kept, radius * scale);
+            }
+        }
         let picture = Rectangle::new(
             transform_point(transform, kurbo::Point::ORIGIN),
             Size::new(image.width * scale, image.height * scale),
@@ -287,7 +310,7 @@ impl canvas::Program<Message> for Backdrop<'_> {
         } else {
             iced::widget::image::FilterMethod::Linear
         };
-        frame.with_clip(area, |frame| {
+        frame.with_clip(kept, |frame| {
             frame.draw_image(
                 picture,
                 canvas::Image::new(handle.clone()).filter_method(filter),
@@ -299,6 +322,57 @@ impl canvas::Program<Message> for Backdrop<'_> {
 
 fn scale(editor: &Editor, canvas: Size) -> f32 {
     editor.viewport.scale(editor.content(), canvas)
+}
+
+/// A checkerboard over the part `shown` of `area`, which shows that it stays transparent.
+fn checker(frame: &mut Frame, area: Rectangle, shown: Rectangle) {
+    const CELL: f32 = 8.0;
+    frame.fill_rectangle(
+        shown.position(),
+        shown.size(),
+        Color::from_rgb8(0xf2, 0xf2, 0xf2),
+    );
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let cells = |from: f32, to: f32, origin: f32| {
+        let first = ((from - origin) / CELL).floor().max(0.0) as u32;
+        let last = ((to - origin) / CELL).ceil().max(0.0) as u32;
+        first..last
+    };
+    let dark = Path::new(|path| {
+        for row in cells(shown.y, shown.y + shown.height, area.y) {
+            for column in cells(shown.x, shown.x + shown.width, area.x) {
+                if (row + column) % 2 == 1 {
+                    #[allow(clippy::cast_precision_loss)]
+                    let cell = Rectangle::new(
+                        Point::new(area.x + column as f32 * CELL, area.y + row as f32 * CELL),
+                        Size::new(CELL, CELL),
+                    );
+                    if let Some(cell) = cell.intersection(&shown) {
+                        path.rectangle(cell.position(), cell.size());
+                    }
+                }
+            }
+        }
+    });
+    frame.fill(&dark, Color::from_rgb8(0xd9, 0xd9, 0xd9));
+}
+
+/// A soft shadow under `picture`, `radius` screen pixels deep, built up from wider and fainter
+/// rounded rectangles.
+fn soft_shadow(frame: &mut Frame, picture: Rectangle, radius: f32) {
+    const STEPS: u8 = 8;
+    if radius < 1.0 {
+        return;
+    }
+    for step in 1..=STEPS {
+        let spread = radius * f32::from(step) / f32::from(STEPS);
+        let at = Point::new(picture.x - spread, picture.y - spread + radius * 0.4);
+        let size = Size::new(picture.width + spread * 2.0, picture.height + spread * 2.0);
+        frame.fill(
+            &Path::rounded_rectangle(at, size, spread.into()),
+            Color::BLACK.scale_alpha(0.4 / f32::from(STEPS)),
+        );
+    }
 }
 
 /// Dims what the crop leaves out, and outlines the crop with its handles.

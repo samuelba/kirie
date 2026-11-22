@@ -25,6 +25,9 @@ pub struct Document {
     pub spotlight_brightness: f64,
     /// The part of the image that is kept, if cropped.
     pub crop: Option<Rect>,
+    /// What is around the picture when it is saved.
+    #[serde(default)]
+    pub frame: Frame,
     shapes: Vec<Arc<Shape>>,
     next_id: u64,
 }
@@ -71,6 +74,28 @@ pub enum Op {
     SetShadow(bool),
     SetSpotlightBrightness(f64),
     Crop(Option<Rect>),
+    SetFrame(Frame),
+}
+
+/// What is around the picture when it is saved: room, what fills it, and a shadow.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct Frame {
+    /// Room around the picture, in image pixels.
+    pub margin: f64,
+    /// What fills the room around the picture; none leaves it transparent.
+    pub background: Option<Rgba>,
+    /// The picture casts a soft shadow on the room around it.
+    pub shadow: bool,
+    /// The saved image grows to take in the marks beyond the picture.
+    pub overflow: bool,
+}
+
+impl Frame {
+    /// The widest margin, in logical pixels.
+    pub const MAX_MARGIN: f64 = 200.0;
+    /// How far beyond the picture marks are taken in, in logical pixels, so a stray mark far
+    /// away cannot make a saved image too large to hold.
+    pub const MAX_OVERFLOW: f64 = 500.0;
 }
 
 fn casts_shadows() -> bool {
@@ -110,6 +135,7 @@ impl Document {
             shadow: true,
             spotlight_brightness: Self::SPOTLIGHT_BRIGHTNESS,
             crop: None,
+            frame: Frame::default(),
             shapes: Vec::new(),
             next_id: 1,
         }
@@ -168,6 +194,32 @@ impl Document {
             .max()
             .unwrap_or(0)
             + 1
+    }
+
+    /// What the saved image covers, in whole pixels: the image area kept and, when the frame
+    /// takes them in, the marks beyond it, with the frame's margin around.
+    pub fn canvas(&self) -> Rect {
+        let visible = self.visible();
+        let reach = if self.frame.overflow {
+            crate::style::render_list(self)
+                .iter()
+                .filter_map(crate::style::reach)
+                .fold(visible, |all, drawn| all.union(drawn))
+                .intersect(visible.inflate(
+                    Frame::MAX_OVERFLOW * self.unit,
+                    Frame::MAX_OVERFLOW * self.unit,
+                ))
+        } else {
+            visible
+        };
+        let margin = self.frame.margin;
+        let area = reach.inflate(margin, margin);
+        Rect::new(
+            area.x0.floor(),
+            area.y0.floor(),
+            area.x1.ceil(),
+            area.y1.ceil(),
+        )
     }
 
     /// The image area kept: the crop, or the whole image.
@@ -276,6 +328,17 @@ impl Document {
                 next.crop = crop
                     .map(|rect| self.clamp(rect))
                     .filter(|r| r.area() >= 1.0);
+            }
+            Op::SetFrame(frame) => {
+                let most = Frame::MAX_MARGIN * self.unit;
+                next.frame = Frame {
+                    margin: if frame.margin.is_finite() {
+                        frame.margin.clamp(0.0, most)
+                    } else {
+                        0.0
+                    },
+                    ..frame
+                };
             }
         }
         next
@@ -555,6 +618,48 @@ mod tests {
         let colors: Vec<Rgba> = inked.shapes().map(|shape| shape.paint.color).collect();
         assert_eq!(colors, [red.1, teal, red.0]);
         assert_eq!(inked.shape(own).unwrap().style, Some(StyleId::Clean));
+    }
+
+    #[test]
+    fn the_canvas_takes_in_the_margin_and_marks_beyond_the_picture() {
+        let doc = Document::new(100, 50, 1.0).apply(Op::Add {
+            kind: Kind::Line {
+                from: kurbo::Point::new(50.0, 25.0),
+                to: kurbo::Point::new(150.0, 25.0),
+            },
+            paint: Paint::default(),
+        });
+        assert_eq!(doc.canvas(), Rect::new(0.0, 0.0, 100.0, 50.0));
+        let framed = doc.apply(Op::SetFrame(Frame {
+            margin: 10.4,
+            ..Frame::default()
+        }));
+        assert_eq!(framed.canvas(), Rect::new(-11.0, -11.0, 111.0, 61.0));
+        let taken_in = doc.apply(Op::SetFrame(Frame {
+            overflow: true,
+            ..Frame::default()
+        }));
+        let canvas = taken_in.canvas();
+        assert!(canvas.x1 >= 150.0, "{canvas:?}");
+        assert!(canvas.x0.abs() < f64::EPSILON && (canvas.y1 - 50.0).abs() < f64::EPSILON);
+        let far = doc
+            .apply(Op::Add {
+                kind: Kind::Line {
+                    from: kurbo::Point::new(50.0, 25.0),
+                    to: kurbo::Point::new(30000.0, 20000.0),
+                },
+                paint: Paint::default(),
+            })
+            .apply(Op::SetFrame(Frame {
+                overflow: true,
+                ..Frame::default()
+            }));
+        assert_eq!(far.canvas(), Rect::new(0.0, 0.0, 600.0, 550.0));
+        let huge = doc.apply(Op::SetFrame(Frame {
+            margin: f64::INFINITY,
+            ..Frame::default()
+        }));
+        assert!(huge.frame.margin.abs() < f64::EPSILON);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! The editor window: a header bar, the tool rail, the canvas and the inspector.
 
-use iced::widget::{Space, column, container, row, rule, stack, svg, text};
+use iced::widget::{Space, column, container, row, rule, scrollable, stack, svg, text};
 use iced::{Alignment, Background, Border, Element, Length, Padding};
 use kirie_annotate::{StyleId, Tool};
 use kirie_ui::icon::Icon;
@@ -307,6 +307,14 @@ impl Editor {
             .paint_sections()
             .push(rule::horizontal(1))
             .push(section(palette, "View", zoom.into()));
+        if self.image.is_some() {
+            let document = self.document();
+            content = content.push(section(
+                palette,
+                "Frame",
+                super::frame::view(document.frame, document.unit, palette, Message::Frame),
+            ));
+        }
         if self.picked.is_some() {
             content = content.push(icon_button(
                 Icon::Delete,
@@ -316,12 +324,13 @@ impl Editor {
                 Some(Message::Delete),
             ));
         }
-        container(content)
-            .width(INSPECTOR)
-            .height(Length::Fill)
-            .padding(Padding::new(space::L))
-            .style(panel(palette))
-            .into()
+        container(scrollable(
+            container(content).padding(Padding::new(space::L)),
+        ))
+        .width(INSPECTOR)
+        .height(Length::Fill)
+        .style(panel(palette))
+        .into()
     }
 
     /// The tool, where the pointer is on the image, the zoom and the image's size.
@@ -364,21 +373,21 @@ impl Editor {
                 ""
             };
             #[allow(clippy::cast_possible_truncation)]
-            let kept = self
-                .crop()
-                .map(|crop| (crop.width.round() as i64, crop.height.round() as i64))
-                .or_else(|| {
-                    self.document()
-                        .crop
-                        .map(|crop| (crop.width() as i64, crop.height() as i64))
-                });
-            let size = match kept {
-                Some((width, height)) => format!(
-                    "{width} × {height} of {} × {} px",
-                    image.width(),
-                    image.height()
-                ),
-                None => format!("{} × {} px", image.width(), image.height()),
+            let saved = self.crop().map_or_else(
+                || {
+                    let canvas = self.document().canvas();
+                    (canvas.width() as i64, canvas.height() as i64)
+                },
+                |crop| (crop.width.round() as i64, crop.height.round() as i64),
+            );
+            let whole = (i64::from(image.width()), i64::from(image.height()));
+            let size = if saved == whole {
+                format!("{} × {} px", whole.0, whole.1)
+            } else {
+                format!(
+                    "{} × {} px, from {} × {}",
+                    saved.0, saved.1, whole.0, whole.1
+                )
             };
             bar = bar
                 .push(muted(format!("{zoom:.0}%{fitted}")))
