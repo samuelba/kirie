@@ -16,6 +16,8 @@ serde.workspace = true
 thiserror.workspace = true
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
 cosmic-text = { version = "0.15", default-features = false, features = ["std", "swash"] }
+ron = "0.12"
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 [lints]
 workspace = true

@@ -4,6 +4,7 @@
 pub mod document;
 pub mod effects;
 pub mod primitive;
+pub mod project;
 pub mod render;
 pub mod shape;
 pub mod style;
