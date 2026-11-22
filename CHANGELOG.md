@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1](https://github.com/samuelba/kirie/compare/v0.1.0...v0.1.1) (2026-11-22)
+
+
+### Bug Fixes
+
+* **update:** trust the release signing key ([a6f1c11](https://github.com/samuelba/kirie/commit/a6f1c11ed919b47b44aa5b2cec09f5377e1e620c))
+* **update:** trust the release signing key ([3c4f7eb](https://github.com/samuelba/kirie/commit/3c4f7eb771471ee4b64fd033678390b652683617))
+
 ## 0.1.0 (2026-11-22)
 
 
