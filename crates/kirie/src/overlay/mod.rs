@@ -123,6 +123,8 @@ struct Typing {
 }
 
 pub struct Overlay {
+    /// The windows on screen, topmost first, with their titles.
+    windows: Vec<(Rectangle, String)>,
     captures: Vec<Frame>,
     screens: Vec<Screen>,
     surfaces: HashMap<window::Id, usize>,
@@ -183,6 +185,7 @@ fn to_kurbo(point: Point) -> kurbo::Point {
 impl Overlay {
     pub fn boot(
         frames: Vec<Frame>,
+        windows: Vec<kirie_capture::windows::Window>,
         primary: Action,
         host: Host,
         outcome: Arc<Mutex<Outcome>>,
@@ -242,7 +245,12 @@ impl Overlay {
             (desktop.y + desktop.height).max(1.0) as u32,
             1.0,
         );
+        let windows = windows
+            .into_iter()
+            .map(|window| (area(window.rect), window.title))
+            .collect();
         let overlay = Self {
+            windows,
             captures: frames,
             screens,
             surfaces,
@@ -477,6 +485,14 @@ impl Overlay {
         task
     }
 
+    /// The topmost window under `at`.
+    fn window_at(&self, at: Point) -> Option<Rectangle> {
+        self.windows
+            .iter()
+            .find(|(area, _)| area.contains(at))
+            .map(|(area, _)| *area)
+    }
+
     /// Whether `at` is on a grip of the picked mark.
     fn on_grip(&self, at: kurbo::Point) -> bool {
         self.tool == Some(Tool::Select)
@@ -495,10 +511,19 @@ impl Overlay {
             Pointer::Released(at) => {
                 let (selection, release) = self.selection.release(at);
                 self.selection = selection;
-                if let Release::Click(at) = release
-                    && let Some(screen) = self.screens.iter().find(|s| s.area.contains(at))
-                {
-                    self.selection = Selection::selected(screen.area);
+                if let Release::Click(at) = release {
+                    let picked = self
+                        .window_at(at)
+                        .and_then(|window| window.intersection(&self.desktop))
+                        .or_else(|| {
+                            self.screens
+                                .iter()
+                                .find(|screen| screen.area.contains(at))
+                                .map(|screen| screen.area)
+                        });
+                    if let Some(area) = picked {
+                        self.selection = Selection::selected(area);
+                    }
                 }
             }
         }
@@ -742,19 +767,24 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
 
 /// Shows the overlay until the user is done: layer-shell surfaces on every screen where the
 /// compositor has layer-shell, else one fullscreen window.
-pub fn run(frames: Vec<Frame>, primary: Action, host: Host) -> Result<Outcome, String> {
+pub fn run(
+    frames: Vec<Frame>,
+    windows: Vec<kirie_capture::windows::Window>,
+    primary: Action,
+    host: Host,
+) -> Result<Outcome, String> {
     use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
 
     let outcome = Arc::new(Mutex::new(Outcome::Cancelled));
     let shared = outcome.clone();
-    let frames = Mutex::new(Some(frames));
+    let start = Mutex::new(Some((frames, windows)));
     let boot = move || {
-        let frames = frames
+        let (frames, windows) = start
             .lock()
             .ok()
-            .and_then(|mut frames| frames.take())
+            .and_then(|mut start| start.take())
             .unwrap_or_default();
-        Overlay::boot(frames, primary, host, shared.clone())
+        Overlay::boot(frames, windows, primary, host, shared.clone())
     };
     let style = |_: &Overlay, _: &iced::Theme| iced::theme::Style {
         background_color: iced::Color::TRANSPARENT,

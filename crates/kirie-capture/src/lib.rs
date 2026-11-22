@@ -6,6 +6,7 @@ pub mod pixels;
 pub mod portal;
 pub mod shell;
 pub mod wayland;
+pub mod windows;
 
 pub use geometry::{Frame, Output, Rect, Transform};
 

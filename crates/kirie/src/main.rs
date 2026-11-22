@@ -192,7 +192,11 @@ fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
     } else {
         Cursor::Hidden
     };
-    let (_, frames) = block_on(kirie_capture::capture(cursor))??;
+    let (frames, windows) = block_on(async {
+        let frames = kirie_capture::capture(cursor).await;
+        (frames, kirie_capture::windows::windows().await)
+    })?;
+    let (_, frames) = frames?;
     let primary = if edit {
         overlay::Action::Edit
     } else {
@@ -207,7 +211,7 @@ fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
     } else {
         overlay::Host::Window
     };
-    match overlay::run(frames, primary, host).map_err(anyhow::Error::msg)? {
+    match overlay::run(frames, windows, primary, host).map_err(anyhow::Error::msg)? {
         overlay::Outcome::Saved(path) => {
             println!("{}", path.display());
             block_on(notify::show("Screenshot saved", &save::pretty(&path)))?;

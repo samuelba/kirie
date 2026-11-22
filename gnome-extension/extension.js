@@ -21,6 +21,9 @@ const INTERFACE = `
     <method name="Screens">
       <arg name="screens" type="a(uiiiis)" direction="out"/>
     </method>
+    <method name="Windows">
+      <arg name="windows" type="a(siiii)" direction="out"/>
+    </method>
     <method name="SetClipboard">
       <arg name="mime" type="s" direction="in"/>
       <arg name="data" type="ay" direction="in"/>
@@ -69,6 +72,7 @@ export default class KirieExtension extends Extension {
             Capture: (edit, cursor) => this._launch(edit, cursor),
             ScreensAsync: (params, invocation) => this._screens(invocation),
             SetClipboardAsync: (params, invocation) => this._setClipboard(params, invocation),
+            WindowsAsync: (params, invocation) => this._windows(invocation),
         });
         this._exported.export(Gio.DBus.session, OBJECT_PATH);
         this._nameId = Gio.bus_own_name_on_connection(
@@ -164,6 +168,22 @@ export default class KirieExtension extends Extension {
         St.Clipboard.get_default().set_content(
             St.ClipboardType.CLIPBOARD, mime, new GLib.Bytes(data));
         invocation.return_value(null);
+    }
+
+    /** The windows on the active workspace, topmost first, for picking one in the overlay. */
+    _windows(invocation) {
+        if (!this._trusted(invocation))
+            return;
+        const workspace = global.workspace_manager.get_active_workspace();
+        const windows = global.display.sort_windows_by_stacking(workspace.list_windows())
+            .reverse()
+            .filter(window => !window.minimized &&
+                window.get_window_type() === Meta.WindowType.NORMAL)
+            .map(window => {
+                const rect = window.get_frame_rect();
+                return [window.get_title() ?? '', rect.x, rect.y, rect.width, rect.height];
+            });
+        invocation.return_value(new GLib.Variant('(a(siiii))', [windows]));
     }
 
     _screens(invocation) {

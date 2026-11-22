@@ -97,6 +97,7 @@ impl canvas::Program<Message> for Surface<'_> {
         } else {
             if let Some(at) = cursor.position_in(bounds) {
                 draw_crosshair(&mut frame, at, bounds.size());
+                self.draw_window_under(&mut frame, self.to_desktop(at));
             }
             self.draw_hint(&mut frame, bounds.size());
         }
@@ -239,9 +240,52 @@ impl Surface<'_> {
         });
     }
 
+    /// Outlines the window under the pointer, which a click takes.
+    fn draw_window_under(&self, frame: &mut Frame, at: Point) {
+        let Some((area, title)) = self
+            .overlay
+            .windows
+            .iter()
+            .find(|(area, _)| area.contains(at))
+        else {
+            return;
+        };
+        let palette = self.overlay.palette;
+        let local = self.to_local(*area);
+        frame.fill_rectangle(
+            local.position(),
+            local.size(),
+            palette.accent.scale_alpha(0.12),
+        );
+        frame.stroke(
+            &Path::rectangle(local.position(), local.size()),
+            Stroke::default().with_color(palette.accent).with_width(2.0),
+        );
+        if title.is_empty() {
+            return;
+        }
+        let label: String = title.chars().take(60).collect();
+        let size = Size::new(label_width(&label), LABEL_SIZE + space::S * 2.0);
+        let at = Point::new(local.x + space::S, local.y + space::S);
+        pill(frame, at, size, palette.surface[1].scale_alpha(0.92));
+        frame.fill_text(Text {
+            content: label,
+            position: Point::new(at.x + size.width / 2.0, at.y + size.height / 2.0),
+            color: palette.text,
+            size: Pixels(LABEL_SIZE),
+            align_x: alignment::Horizontal::Center.into(),
+            align_y: alignment::Vertical::Center,
+            ..Text::default()
+        });
+    }
+
     fn draw_hint(&self, frame: &mut Frame, size: Size) {
         let palette = self.overlay.palette;
-        let hint = "Drag to cut a region  ·  Click to take the screen  ·  Esc to cancel";
+        let hint = if self.overlay.windows.is_empty() {
+            "Drag to cut a region  ·  Click to take the screen  ·  Esc to cancel"
+        } else {
+            "Drag to cut a region  ·  Click to take a window or the screen  ·  Esc to cancel"
+        };
         let pill_size = Size::new(label_width(hint), LABEL_SIZE + space::M * 2.0);
         let at = Point::new(
             (size.width - pill_size.width) / 2.0,

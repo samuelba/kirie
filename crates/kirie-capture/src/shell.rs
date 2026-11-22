@@ -19,6 +19,26 @@ trait Shell {
     fn capture(&self, edit: bool, cursor: bool) -> zbus::Result<()>;
     fn screens(&self) -> zbus::Result<Vec<(u32, i32, i32, i32, i32, String)>>;
     fn set_clipboard(&self, mime: &str, data: &[u8]) -> zbus::Result<()>;
+    fn windows(&self) -> zbus::Result<Vec<(String, i32, i32, i32, i32)>>;
+}
+
+/// The windows on the active workspace, topmost first, from GNOME Shell.
+pub async fn windows() -> Result<Vec<crate::windows::Window>, CaptureError> {
+    let failed = |error: zbus::Error| CaptureError::Shell(error.to_string());
+    let connection = zbus::Connection::session().await.map_err(failed)?;
+    let windows = ShellProxy::new(&connection)
+        .await
+        .map_err(failed)?
+        .windows()
+        .await
+        .map_err(failed)?;
+    Ok(windows
+        .into_iter()
+        .map(|(title, x, y, width, height)| crate::windows::Window {
+            title,
+            rect: Rect::new(x, y, width, height),
+        })
+        .collect())
 }
 
 /// Puts a PNG on the clipboard through GNOME Shell, which keeps it after Kirie exits.
