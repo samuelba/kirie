@@ -48,6 +48,22 @@ jobs:
       - run: cargo nextest run --workspace --locked --no-tests=pass
       - run: cargo build --workspace --release --locked
 
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup component add llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev
+      # The Wayland clients need a compositor; the headless sway job covers them.
+      - run: >-
+          cargo llvm-cov nextest --locked --fail-under-lines 80
+          --package kirie-annotate --package kirie-capture --package kirie-ui
+          --ignore-filename-regex 'kirie-capture/src/wayland'
+
   smoke:
     name: Headless sway
     runs-on: ubuntu-24.04

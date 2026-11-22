@@ -254,12 +254,18 @@ impl Overlay {
         .into()
     }
 
-    #[expect(clippy::unused_self, reason = "iced passes the state to every subscription")]
+    #[expect(
+        clippy::unused_self,
+        reason = "iced passes the state to every subscription"
+    )]
     pub fn subscription(&self) -> Subscription<Message> {
         event::listen_with(key)
     }
 
-    #[expect(clippy::unused_self, reason = "the overlay is always dark over a dimmed screen")]
+    #[expect(
+        clippy::unused_self,
+        reason = "the overlay is always dark over a dimmed screen"
+    )]
     pub fn theme(&self, _: window::Id) -> iced::Theme {
         iced::Theme::Dark
     }

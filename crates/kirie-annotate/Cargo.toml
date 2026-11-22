@@ -1,0 +1,21 @@
+[package]
+name = "kirie-annotate"
+description = "Annotation documents, tools, styles and rendering for Kirie"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+image.workspace = true
+kurbo = { version = "0.11", features = ["serde"] }
+serde.workspace = true
+thiserror.workspace = true
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
+cosmic-text = { version = "0.15", default-features = false, features = ["std", "swash"] }
+
+[lints]
+workspace = true
