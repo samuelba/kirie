@@ -43,9 +43,19 @@ impl Loaded {
     }
 }
 
+/// Files larger than this are not opened.
+const MAX_FILE: u64 = 512 * 1024 * 1024;
+
 /// Reads an image or a `.kirie` project.
 pub fn load(path: &Path) -> Result<Loaded, String> {
     let fail = |error: &dyn std::fmt::Display| format!("cannot open {}: {error}", path.display());
+    let meta = std::fs::metadata(path).map_err(|error| fail(&error))?;
+    if !meta.is_file() {
+        return Err(fail(&"it is not a file"));
+    }
+    if meta.len() > MAX_FILE {
+        return Err(fail(&"it is too large"));
+    }
     let is_project = path
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case(project::EXTENSION));

@@ -137,6 +137,12 @@ expected_sha256() { # DIR BUNDLE
         sums="SHA256SUMS"
         say "Signature checked." >&2
     else
+        if [ -z "$public_key" ]; then
+            say "WARNING: this installer has no release key, so the download is only checked against" >&2
+        else
+            say "WARNING: install minisign or rsign to check the release's signature; the download is" >&2
+        fi
+        say "         the checksums published next to it, not against a signature." >&2
         fetch "$repo/releases/download/v$version/$sums" "$1/$sums" ||
             die "cannot download the checksums. Nothing was installed."
     fi
@@ -146,7 +152,7 @@ expected_sha256() { # DIR BUNDLE
 # The Exec key of a desktop entry. Paths with characters that need escaping are refused.
 desktop_exec() {
     case "$1" in
-        *[\"\`\$\\]*) die "cannot write a desktop entry for $1 (it contains \", \`, \$ or \\)" ;;
+        *[\"\`\$\\%\&\|]*) die "cannot write a desktop entry for $1 (it contains \", \`, \$, \\, %, & or |)" ;;
         *[!A-Za-z0-9/._+-]*) printf '"%s"' "$1" ;;
         *) printf '%s' "$1" ;;
     esac
@@ -202,6 +208,9 @@ esac
 
 if [ -n "${KIRIE_VERSION:-}" ]; then
     version="${KIRIE_VERSION#v}"
+    case "$version" in
+        *[!0-9A-Za-z.+-]*) die "KIRIE_VERSION must look like 0.2.0" ;;
+    esac
 else
     version="$(latest_version)"
 fi

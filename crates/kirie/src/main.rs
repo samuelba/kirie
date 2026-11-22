@@ -118,6 +118,12 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn capture_to_file(path: &std::path::Path, cursor: bool) -> anyhow::Result<()> {
+    // A Kirie the GNOME Shell extension started may read the screens without asking; it only
+    // ever shows them in the overlay, never writes them where its arguments say.
+    anyhow::ensure!(
+        !kirie_capture::shell::launched(),
+        "capturing to a file is not available from the GNOME Shell extension"
+    );
     let cursor = if cursor {
         Cursor::Shown
     } else {
@@ -175,17 +181,8 @@ fn block_on<T>(future: impl Future<Output = T>) -> anyhow::Result<T> {
 
 fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
     // With Kirie's GNOME Shell extension, the extension starts a trusted Kirie for the capture.
-    if !kirie_capture::shell::launched() {
-        let mut args = vec!["region"];
-        if cursor {
-            args.push("--cursor");
-        }
-        if edit {
-            args.push("--edit");
-        }
-        if block_on(kirie_capture::shell::capture(&args))? {
-            return Ok(());
-        }
+    if !kirie_capture::shell::launched() && block_on(kirie_capture::shell::capture(edit, cursor))? {
+        return Ok(());
     }
     let cursor = if cursor {
         Cursor::Shown

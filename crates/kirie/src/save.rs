@@ -45,29 +45,58 @@ pub fn pretty(path: &Path) -> String {
     }
 }
 
-/// Where the overlay leaves a capture for the editor: private to the user, gone on logout.
+/// Where the overlay leaves a capture for the editor: the user's private runtime folder, else
+/// the user's cache folder; never a shared temporary folder.
 pub fn handoff_dir() -> PathBuf {
     std::env::var_os("XDG_RUNTIME_DIR")
-        .map_or_else(std::env::temp_dir, PathBuf::from)
+        .map(PathBuf::from)
+        .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.cache_dir().to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."))
         .join("kirie")
 }
 
+/// Whether `path` is a capture the overlay handed over: a `Kirie_*.kirie` regular file directly
+/// inside the hand-off folder, after resolving `..` and links. Only those are deleted once read.
 pub fn is_handoff(path: &Path) -> bool {
-    path.starts_with(handoff_dir())
+    let (Ok(path), Ok(dir)) = (path.canonicalize(), handoff_dir().canonicalize()) else {
+        return false;
+    };
+    #[expect(
+        clippy::case_sensitive_file_extension_comparisons,
+        reason = "only names exactly as Kirie writes them are ever deleted"
+    )]
+    let named = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("Kirie_") && name.ends_with(".kirie"));
+    named
+        && path.parent() == Some(dir.as_path())
+        && std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_file())
 }
 
-/// Writes a project for the editor to pick up.
+/// Writes a project for the editor to pick up, readable by the user alone.
 pub fn save_handoff(project: &kirie_annotate::project::Project) -> Result<PathBuf, String> {
+    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+
     let dir = handoff_dir();
-    std::fs::create_dir_all(&dir)
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)
         .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("cannot protect {}: {error}", dir.display()))?;
     let path = named(
         &dir,
         &jiff::Zoned::now(),
         kirie_annotate::project::EXTENSION,
         Path::exists,
     );
-    let file = std::fs::File::create(&path)
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
         .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
     kirie_annotate::project::save(project, std::io::BufWriter::new(file))
         .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
@@ -144,9 +173,28 @@ mod tests {
     }
 
     #[test]
-    fn handoffs_live_in_their_own_folder() {
-        assert!(is_handoff(&handoff_dir().join("x.kirie")));
-        assert!(!is_handoff(Path::new("/elsewhere/x.kirie")));
+    fn handoffs_are_only_kirie_files_in_the_handoff_folder() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let project = kirie_annotate::project::Project {
+            image: RgbaImage::new(2, 2),
+            document: kirie_annotate::Document::new(2, 2, 1.0),
+        };
+        let path = save_handoff(&project).unwrap();
+        assert!(is_handoff(&path));
+        let sneaky = handoff_dir()
+            .join("..")
+            .join("kirie")
+            .join(path.file_name().unwrap());
+        assert!(
+            is_handoff(&sneaky),
+            "the same file through .. is still the hand-off"
+        );
+        assert!(!is_handoff(&handoff_dir().join("../../etc/passwd")));
+        assert!(!is_handoff(Path::new("/elsewhere/Kirie_x.kirie")));
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "only the user may read it");
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

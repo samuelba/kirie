@@ -15,7 +15,8 @@ const INTERFACE = `
 <node>
   <interface name="${BUS_NAME}">
     <method name="Capture">
-      <arg name="args" type="as" direction="in"/>
+      <arg name="edit" type="b" direction="in"/>
+      <arg name="cursor" type="b" direction="in"/>
     </method>
     <method name="Screens">
       <arg name="screens" type="a(uiiiis)" direction="out"/>
@@ -63,9 +64,9 @@ export default class KirieExtension extends Extension {
             this._settings,
             Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
             Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
-            () => this._launch([]));
+            () => this._launch(false, false));
         this._exported = Gio.DBusExportedObject.wrapJSObject(INTERFACE, {
-            Capture: args => this._launch(args),
+            Capture: (edit, cursor) => this._launch(edit, cursor),
             ScreensAsync: (params, invocation) => this._screens(invocation),
             SetClipboardAsync: (params, invocation) => this._setClipboard(params, invocation),
         });
@@ -83,17 +84,47 @@ export default class KirieExtension extends Extension {
         this._settings = null;
     }
 
-    _launch(args) {
+    /**
+     * The command that starts Kirie: `kirie` from PATH, or the configured binary, which must be
+     * a single absolute path to a file named kirie that only this user can change. Anything else
+     * would let whoever can write the setting run a program with the extension's trust.
+     */
+    _command() {
         const configured = this._settings.get_strv('command');
-        const command = configured.length > 0 ? configured : ['kirie'];
-        if (!GLib.find_program_in_path(command[0])) {
+        if (configured.length === 0)
+            return GLib.find_program_in_path('kirie');
+        if (configured.length !== 1 || !GLib.path_is_absolute(configured[0]) ||
+            GLib.path_get_basename(configured[0]) !== 'kirie')
+            return null;
+        try {
+            const info = Gio.File.new_for_path(configured[0]).query_info(
+                'standard::type,unix::uid,unix::mode', Gio.FileQueryInfoFlags.NONE, null);
+            const regular = info.get_file_type() === Gio.FileType.REGULAR;
+            const owned = info.get_attribute_uint32('unix::uid') === new Gio.Credentials().get_unix_user();
+            const private_ = (info.get_attribute_uint32('unix::mode') & 0o022) === 0;
+            return regular && owned && private_ ? configured[0] : null;
+        } catch {
+            return null;
+        }
+    }
+
+    _launch(edit, cursor) {
+        // One capture at a time, so nothing can pile up Kirie processes.
+        if (this._clients.size > 0)
+            return;
+        const program = this._command();
+        if (!program) {
             Main.notifyError('Kirie is not installed',
-                `“${command[0]}” was not found. Install Kirie to take screenshots with it.`);
+                'The extension cannot find the kirie program. Reinstall Kirie to take screenshots with it.');
             return;
         }
         const launcher = new Gio.SubprocessLauncher({flags: Gio.SubprocessFlags.NONE});
         launcher.setenv('KIRIE_SHELL_LAUNCHED', '1', true);
-        const argv = [...command, 'capture', ...args.filter(arg => typeof arg === 'string')];
+        const argv = [program, 'capture', 'region'];
+        if (cursor)
+            argv.push('--cursor');
+        if (edit)
+            argv.push('--edit');
         let spawned;
         try {
             spawned = spawnClient(launcher, argv);
@@ -149,6 +180,7 @@ export default class KirieExtension extends Extension {
     async _capture() {
         const dir = GLib.build_filenamev([GLib.get_user_runtime_dir(), 'kirie']);
         GLib.mkdir_with_parents(dir, 0o700);
+        GLib.chmod(dir, 0o700);
         const screens = [];
         for (const monitor of Main.layoutManager.monitors) {
             const path = GLib.build_filenamev([dir, `shell-${monitor.index}.png`]);

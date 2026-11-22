@@ -77,6 +77,14 @@ if call --dest dev.samuelba.Kirie.Shell --object-path /dev/samuelba/Kirie/Shell 
 fi
 grep -o 'AccessDenied[^)]*' "$dev/out/denied.txt" | head -n 1
 
+echo "2b. callers cannot pass their own arguments"
+if call --dest dev.samuelba.Kirie.Shell --object-path /dev/samuelba/Kirie/Shell \
+    --method dev.samuelba.Kirie.Shell.Capture "['all', '--output', '/tmp/stolen.png']" 2>/dev/null; then
+    echo "FAIL: Capture took free-form arguments" >&2
+    exit 1
+fi
+echo "refused"
+
 echo "3. kirie capture goes through the extension"
 "$root/target/debug/kirie" capture
 sleep 5
