@@ -5,6 +5,7 @@ pub mod geometry;
 pub mod pixels;
 pub mod portal;
 pub mod shell;
+mod stacking;
 pub mod wayland;
 pub mod windows;
 

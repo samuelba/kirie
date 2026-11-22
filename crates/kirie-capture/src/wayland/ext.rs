@@ -28,32 +28,70 @@ pub(super) fn capture(
     queue: &mut EventQueue<State>,
     cursor: Cursor,
 ) -> Result<(), CaptureError> {
-    let bind_error = |error| CaptureError::Protocol(format!("{error}"));
-    let sources: ExtOutputImageCaptureSourceManagerV1 =
-        list.bind(handle, 1..=1, ()).map_err(bind_error)?;
-    let manager: ExtImageCopyCaptureManagerV1 = list.bind(handle, 1..=1, ()).map_err(bind_error)?;
+    let manager: ExtOutputImageCaptureSourceManagerV1 = list
+        .bind(handle, 1..=1, ())
+        .map_err(|error| CaptureError::Protocol(format!("{error}")))?;
+    let sources = state
+        .outputs
+        .iter()
+        .filter_map(|output| output.wl.as_ref())
+        .map(|wl| manager.create_source(wl, handle, ()))
+        .collect();
+    let copied = copy(list, shm, handle, state, queue, cursor, sources);
+    manager.destroy();
+    copied
+}
+
+/// Copies each source into a buffer of its own, in `state.pending` by the sources' order.
+pub(super) fn copy(
+    list: &GlobalList,
+    shm: &WlShm,
+    handle: &QueueHandle<State>,
+    state: &mut State,
+    queue: &mut EventQueue<State>,
+    cursor: Cursor,
+    sources: Vec<ExtImageCaptureSourceV1>,
+) -> Result<(), CaptureError> {
+    let manager: ExtImageCopyCaptureManagerV1 = list
+        .bind(handle, 1..=1, ())
+        .map_err(|error| CaptureError::Protocol(format!("{error}")))?;
     let options = match cursor {
         Cursor::Hidden => ext_image_copy_capture_manager_v1::Options::empty(),
         Cursor::Shown => ext_image_copy_capture_manager_v1::Options::PaintCursors,
     };
-    let mut sessions = Vec::new();
-    for (index, wl) in state
-        .outputs
-        .iter()
+    let sessions: Vec<_> = sources
+        .into_iter()
         .enumerate()
-        .filter_map(|(index, output)| Some((index, output.wl.as_ref()?)))
-    {
-        let source = sources.create_source(wl, handle, ());
-        sessions.push((
-            manager.create_session(&source, options, handle, index),
-            source,
-        ));
-    }
+        .map(|(index, source)| {
+            (
+                manager.create_session(&source, options, handle, index),
+                source,
+            )
+        })
+        .collect();
     state.pending = (0..sessions.len()).map(|_| Pending::default()).collect();
+    let copied = start_and_wait(shm, handle, state, queue, &sessions);
+    for (session, source) in sessions {
+        session.destroy();
+        source.destroy();
+    }
+    manager.destroy();
+    queue
+        .flush()
+        .map_err(|error| CaptureError::Protocol(error.to_string()))?;
+    copied
+}
+
+fn start_and_wait(
+    shm: &WlShm,
+    handle: &QueueHandle<State>,
+    state: &mut State,
+    queue: &mut EventQueue<State>,
+    sessions: &[(ExtImageCopyCaptureSessionV1, ExtImageCaptureSourceV1)],
+) -> Result<(), CaptureError> {
     wait(state, queue, |pending| {
         pending.constraints_done || pending.finished.is_some()
     })?;
-
     for (index, (session, _)) in sessions.iter().enumerate() {
         let pending = &mut state.pending[index];
         if pending.finished.is_some() {
@@ -74,18 +112,7 @@ pub(super) fn capture(
         frame.capture();
         pending.buffer = Some(buffer);
     }
-    wait(state, queue, |pending| pending.finished.is_some())?;
-
-    for (session, source) in sessions {
-        session.destroy();
-        source.destroy();
-    }
-    manager.destroy();
-    sources.destroy();
-    queue
-        .flush()
-        .map_err(|error| CaptureError::Protocol(error.to_string()))?;
-    Ok(())
+    wait(state, queue, |pending| pending.finished.is_some())
 }
 
 impl Dispatch<ExtImageCopyCaptureSessionV1, usize> for State {

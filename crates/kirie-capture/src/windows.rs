@@ -1,5 +1,5 @@
 //! Where the windows on screen are, so the overlay can pick one. Wayland gives clients no way to
-//! ask, so this asks whoever knows: Kirie's GNOME Shell extension, sway or Hyprland.
+//! ask, so this asks whoever knows: Kirie's GNOME Shell extension, COSMIC, sway or Hyprland.
 
 use std::io::{Read as _, Write as _};
 use std::os::unix::net::UnixStream;
@@ -17,21 +17,49 @@ pub struct Window {
     pub rect: Rect,
 }
 
-/// The windows on the visible workspaces, topmost first; empty where nobody can tell.
-pub async fn windows() -> Vec<Window> {
+/// Finding the windows, begun with [`start`] while the screens are captured.
+#[derive(Debug)]
+pub enum Lookup {
+    /// Kirie's GNOME Shell extension, asked once the capture is done.
+    Shell,
+    Cosmic(Box<crate::wayland::Toplevels>),
+    Found(Vec<Window>),
+}
+
+/// Starts finding the windows on the visible workspaces. It blocks, so run it beside the capture.
+pub fn start() -> Lookup {
     if crate::shell::launched() {
-        return crate::shell::windows().await.unwrap_or_default();
+        // The extension's Wayland connection is the overlay's; no other one is made.
+        return Lookup::Shell;
     }
     let found = if let Some(socket) = std::env::var_os("SWAYSOCK") {
         sway(&PathBuf::from(socket))
     } else if let Ok(signature) = std::env::var("HYPRLAND_INSTANCE_SIGNATURE") {
         hyprland(&signature)
     } else {
-        Ok(Vec::new())
+        match crate::wayland::toplevels() {
+            Ok(toplevels) => return Lookup::Cosmic(Box::new(toplevels)),
+            Err(crate::CaptureError::Unsupported) => Ok(Vec::new()),
+            Err(error) => Err(std::io::Error::other(error)),
+        }
     };
-    found
-        .inspect_err(|error| tracing::debug!(%error, "cannot list the windows"))
-        .unwrap_or_default()
+    Lookup::Found(
+        found
+            .inspect_err(|error| tracing::debug!(%error, "cannot list the windows"))
+            .unwrap_or_default(),
+    )
+}
+
+impl Lookup {
+    /// The windows, topmost first, with `frames` the screens as captured meanwhile; empty
+    /// where nobody can tell.
+    pub async fn finish(self, frames: &[crate::Frame]) -> Vec<Window> {
+        match self {
+            Lookup::Shell => crate::shell::windows().await.unwrap_or_default(),
+            Lookup::Cosmic(toplevels) => toplevels.windows(frames),
+            Lookup::Found(windows) => windows,
+        }
+    }
 }
 
 fn connect(path: &std::path::Path) -> std::io::Result<UnixStream> {

@@ -206,11 +206,13 @@ fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
     } else {
         Cursor::Hidden
     };
-    let (frames, windows) = block_on(async {
-        let frames = kirie_capture::capture(cursor).await;
-        (frames, kirie_capture::windows::windows().await)
-    })?;
-    let (_, frames) = frames?;
+    let lookup = std::thread::spawn(kirie_capture::windows::start);
+    let (_, frames) = block_on(kirie_capture::capture(cursor))??;
+    let lookup = lookup.join().unwrap_or_else(|_| {
+        tracing::warn!("finding the windows failed; clicks take whole screens");
+        kirie_capture::windows::Lookup::Found(Vec::new())
+    });
+    let windows = block_on(lookup.finish(&frames))?;
     let primary = if edit {
         overlay::Action::Edit
     } else {

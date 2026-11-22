@@ -1,6 +1,6 @@
 //! The `wl_shm` pixel formats Kirie reads, turned into RGBA.
 
-use image::RgbaImage;
+use image::{Rgba, RgbaImage};
 
 /// A `wl_shm` format Kirie can read. Values are the `wl_shm.format` codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,24 +89,8 @@ pub fn to_rgba(
     bytes: &[u8],
     y_invert: bool,
 ) -> Result<RgbaImage, PixelError> {
+    check(width, height, stride, bytes.len())?;
     let row = width as usize * 4;
-    if (stride as usize) < row {
-        return Err(PixelError::Stride { width, stride });
-    }
-    let needed = if height == 0 {
-        0
-    } else {
-        stride as usize * (height as usize - 1) + row
-    };
-    if bytes.len() < needed {
-        return Err(PixelError::TooShort {
-            width,
-            height,
-            stride,
-            needed,
-            got: bytes.len(),
-        });
-    }
     let mut out = Vec::with_capacity(row * height as usize);
     for y in 0..height as usize {
         let source = if y_invert { height as usize - 1 - y } else { y };
@@ -124,10 +108,93 @@ pub fn to_rgba(
     Ok(RgbaImage::from_raw(width, height, out).expect("the buffer has width × height pixels"))
 }
 
+/// Whether `len` bytes hold a `width`×`height` buffer with rows `stride` bytes apart.
+fn check(width: u32, height: u32, stride: u32, len: usize) -> Result<(), PixelError> {
+    let row = width as usize * 4;
+    if (stride as usize) < row {
+        return Err(PixelError::Stride { width, stride });
+    }
+    let needed = if height == 0 {
+        0
+    } else {
+        stride as usize * (height as usize - 1) + row
+    };
+    if len < needed {
+        return Err(PixelError::TooShort {
+            width,
+            height,
+            stride,
+            needed,
+            got: len,
+        });
+    }
+    Ok(())
+}
+
+/// A 32-bit buffer read in place, a pixel at a time, for when only a few of its pixels matter.
+#[derive(Debug, Clone, Copy)]
+pub struct View<'a> {
+    format: ShmFormat,
+    width: u32,
+    height: u32,
+    stride: u32,
+    bytes: &'a [u8],
+    y_invert: bool,
+}
+
+impl<'a> View<'a> {
+    pub fn new(
+        format: ShmFormat,
+        width: u32,
+        height: u32,
+        stride: u32,
+        bytes: &'a [u8],
+        y_invert: bool,
+    ) -> Result<Self, PixelError> {
+        check(width, height, stride, bytes.len())?;
+        Ok(Self {
+            format,
+            width,
+            height,
+            stride,
+            bytes,
+            y_invert,
+        })
+    }
+
+    pub const fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// The pixel at (`x`, `y`) as RGBA, as [`to_rgba`] would convert it.
+    pub fn get(&self, x: u32, y: u32) -> Option<Rgba<u8>> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        let row = if self.y_invert {
+            self.height - 1 - y
+        } else {
+            y
+        };
+        let start = row as usize * self.stride as usize + x as usize * 4;
+        let pixel = self.bytes.get(start..start + 4)?;
+        let (red, blue) = if self.format.swaps_red_and_blue() {
+            (pixel[2], pixel[0])
+        } else {
+            (pixel[0], pixel[2])
+        };
+        let alpha = if self.format.has_alpha() {
+            pixel[3]
+        } else {
+            255
+        };
+        Some(Rgba([red, pixel[1], blue, alpha]))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::Rgba;
 
     #[test]
     fn formats_round_trip_through_wayland_codes() {
@@ -197,5 +264,26 @@ mod tests {
                 .dimensions(),
             (0, 0)
         );
+    }
+
+    #[test]
+    fn views_read_the_pixels_to_rgba_converts() {
+        let bytes = [1, 2, 3, 4, 9, 9, 5, 6, 7, 8, 9, 9];
+        for format in [
+            ShmFormat::Argb8888,
+            ShmFormat::Xrgb8888,
+            ShmFormat::Abgr8888,
+            ShmFormat::Xbgr8888,
+        ] {
+            for y_invert in [false, true] {
+                let image = to_rgba(format, 1, 2, 6, &bytes, y_invert).unwrap();
+                let view = View::new(format, 1, 2, 6, &bytes, y_invert).unwrap();
+                assert_eq!(view.get(0, 0).as_ref(), Some(image.get_pixel(0, 0)));
+                assert_eq!(view.get(0, 1).as_ref(), Some(image.get_pixel(0, 1)));
+                assert_eq!(view.get(1, 0), None);
+                assert_eq!(view.get(0, 2), None);
+            }
+        }
+        assert!(View::new(ShmFormat::Argb8888, 2, 2, 8, &[0; 10], false).is_err());
     }
 }
