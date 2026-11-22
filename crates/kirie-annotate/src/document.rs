@@ -34,6 +34,12 @@ pub enum Op {
         id: ShapeId,
         kind: Kind,
     },
+    /// A new outline and turn for a mark, as resizing or rotating it makes.
+    Reshape {
+        id: ShapeId,
+        kind: Kind,
+        rotation: f64,
+    },
     Repaint {
         ids: Vec<ShapeId>,
         paint: Paint,
@@ -92,7 +98,7 @@ impl Document {
     pub fn hit(&self, point: kurbo::Point, reach: f64) -> Option<ShapeId> {
         self.shapes()
             .rev()
-            .find(|shape| shape.kind.distance(point) <= reach)
+            .find(|shape| shape.distance(point) <= reach)
             .map(|shape| shape.id)
     }
 
@@ -150,11 +156,17 @@ impl Document {
                     kind,
                     paint,
                     style: None,
+                    rotation: 0.0,
                 }));
                 next.next_id += 1;
             }
             Op::Replace { id, kind } => next.map(&[id], |shape| Shape {
                 kind: kind.clone(),
+                ..shape.clone()
+            }),
+            Op::Reshape { id, kind, rotation } => next.map(&[id], |shape| Shape {
+                kind: kind.clone(),
+                rotation,
                 ..shape.clone()
             }),
             Op::Repaint { ids, paint } => next.map(&ids, |shape| Shape {

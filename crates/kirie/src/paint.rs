@@ -8,7 +8,9 @@ use iced::widget::canvas::{self, Frame, Path, Stroke, fill};
 use iced::widget::image;
 use iced::{Color, Point, Rectangle, Size};
 use kirie_annotate::effects::{self, Region};
-use kirie_annotate::{Effect, FillRule, Primitive, Rgba, Typesetter};
+use kirie_annotate::{
+    Document, Draft, Effect, FillRule, Primitive, Rgba, Shape, ShapeId, Typesetter, edit, style,
+};
 use kirie_capture::{Frame as Capture, geometry};
 use kurbo::{Affine, BezPath, PathEl};
 
@@ -62,6 +64,17 @@ pub struct Painter<'a> {
     pub source: &'a dyn PixelSource,
     pub typesetter: &'a RefCell<Typesetter>,
     pub patches: &'a RefCell<HashMap<PatchKey, image::Handle>>,
+}
+
+/// The marks to draw: the document's, changed by the draft in progress, and a new one.
+pub struct Marks<'a> {
+    pub document: &'a Document,
+    pub draft: Option<&'a Draft>,
+    /// A mark not in the document yet: the one being drawn, or text being typed.
+    pub preview: Option<Shape>,
+    pub picked: Option<ShapeId>,
+    /// The image area a spotlight dims around.
+    pub visible: kurbo::Rect,
 }
 
 /// Patches made for marks that are gone are dropped once there are this many.
@@ -126,6 +139,46 @@ impl Painter<'_> {
                 }
             }
         }
+    }
+
+    /// Draws every mark; returns the picked one as it is shown, for its grips.
+    pub fn draw_marks(
+        &self,
+        frame: &mut Frame,
+        marks: Marks<'_>,
+        transform: Affine,
+    ) -> Option<Shape> {
+        let document = marks.document;
+        let moving = match marks.draft {
+            Some(Draft::Moving { ids, by, .. }) => Some((ids.as_slice(), *by)),
+            _ => None,
+        };
+        let edited = marks.draft.and_then(Draft::edited);
+        let mut picked = None;
+        let shapes = document.shapes().cloned().chain(marks.preview);
+        for shape in shapes {
+            let shape = match (moving, edited) {
+                (Some((ids, by)), _) if ids.contains(&shape.id) => Shape {
+                    kind: shape.kind.translated(by),
+                    ..shape
+                },
+                (_, Some(edited)) if edited.id == shape.id => edited.clone(),
+                _ => shape,
+            };
+            let draft = shape.id == document.next_id();
+            for primitive in style::primitives(&shape, document.style, document.unit, marks.visible)
+            {
+                if draft {
+                    self.draw_draft(frame, &primitive, transform);
+                } else {
+                    self.draw(frame, &primitive, transform);
+                }
+            }
+            if marks.picked == Some(shape.id) {
+                picked = Some(shape);
+            }
+        }
+        picked
     }
 
     /// Draws a mark still being drawn: like `draw`, but an effect shows as a light veil, so a
@@ -204,6 +257,60 @@ impl Painter<'_> {
         }
         patches.insert(key, handle.clone());
         Some((handle, bounds))
+    }
+}
+
+/// The outline and grips of a picked mark; `pixel` is one screen pixel in mark coordinates.
+pub fn draw_grips(frame: &mut Frame, shape: &Shape, transform: Affine, pixel: f64, accent: Color) {
+    #[allow(clippy::cast_possible_truncation)]
+    let at = |point: kurbo::Point| {
+        let point = transform * point;
+        Point::new(point.x as f32, point.y as f32)
+    };
+    let turn = shape.turn();
+    let bounds = shape.kind.bounds();
+    let corners = [
+        kurbo::Point::new(bounds.x0, bounds.y0),
+        kurbo::Point::new(bounds.x1, bounds.y0),
+        kurbo::Point::new(bounds.x1, bounds.y1),
+        kurbo::Point::new(bounds.x0, bounds.y1),
+    ];
+    let outline = Path::new(|path| {
+        path.move_to(at(turn * corners[0]));
+        for corner in &corners[1..] {
+            path.line_to(at(turn * *corner));
+        }
+        path.close();
+    });
+    frame.stroke(
+        &outline,
+        Stroke {
+            line_dash: canvas::LineDash {
+                segments: &[6.0, 4.0],
+                offset: 0,
+            },
+            ..Stroke::default().with_color(accent).with_width(1.0)
+        },
+    );
+    for (grip, point) in edit::grips(shape, pixel) {
+        let center = at(point);
+        if grip == edit::Grip::Rotate {
+            let top = at(turn * kurbo::Point::new(bounds.center().x, bounds.y0));
+            frame.stroke(
+                &Path::line(top, center),
+                Stroke::default().with_color(accent).with_width(1.0),
+            );
+            let knob = Path::circle(center, 5.0);
+            frame.fill(&knob, accent);
+            frame.stroke(
+                &knob,
+                Stroke::default().with_color(Color::WHITE).with_width(1.5),
+            );
+        } else {
+            let knob = Path::rectangle(center - iced::Vector::new(4.0, 4.0), Size::new(8.0, 8.0));
+            frame.fill(&knob, Color::WHITE);
+            frame.stroke(&knob, Stroke::default().with_color(accent).with_width(1.5));
+        }
     }
 }
 

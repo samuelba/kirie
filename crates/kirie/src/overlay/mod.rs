@@ -67,6 +67,7 @@ pub enum Message {
     TextDone,
     Undo,
     Redo,
+    Delete,
     Escape,
     Finish(Action),
     /// Enter: the action the overlay was opened for.
@@ -136,6 +137,8 @@ pub struct Overlay {
     draft: Option<Draft>,
     /// The tool the current pointer gesture draws with, if it draws at all.
     drawing: Option<Tool>,
+    /// The mark the select tool picked, whose grips are showing.
+    picked: Option<kirie_annotate::ShapeId>,
     typing: Option<Typing>,
     busy: bool,
     /// What Enter does.
@@ -253,6 +256,7 @@ impl Overlay {
             history: History::new(document),
             draft: None,
             drawing: None,
+            picked: None,
             typing: None,
             busy: false,
             primary,
@@ -279,7 +283,7 @@ impl Overlay {
             Size::new(area.width * 0.6, area.height * 0.5),
         );
         self.selection = Selection::selected(region);
-        self.tool = Some(Tool::Arrow);
+        self.tool = Some(Tool::Select);
         let point = |x: f32, y: f32| {
             kurbo::Point::new(
                 f64::from(region.x + region.width * x),
@@ -308,6 +312,15 @@ impl Overlay {
                 paint: self.paint,
             });
         }
+        let first = self.document().shapes().next().cloned();
+        if let Some(first) = first {
+            self.history.apply(Op::Reshape {
+                id: first.id,
+                kind: first.kind,
+                rotation: -0.12,
+            });
+            self.picked = Some(first.id);
+        }
         self
     }
 
@@ -328,6 +341,9 @@ impl Overlay {
             }
             Message::PickTool(tool) => {
                 self.commit_text();
+                if tool != Some(Tool::Select) {
+                    self.picked = None;
+                }
                 self.tool = tool;
                 self.paint.color =
                     crate::controls::tool_color(tool, self.paint.color, self.style());
@@ -367,6 +383,12 @@ impl Overlay {
             }
             Message::Redo => {
                 self.history.redo();
+                Task::none()
+            }
+            Message::Delete => {
+                if let Some(id) = self.picked.take() {
+                    self.history.apply(Op::Remove { ids: vec![id] });
+                }
                 Task::none()
             }
             Message::Escape => self.escape(),
@@ -417,7 +439,10 @@ impl Overlay {
         if self.busy {
             return Task::none();
         }
-        if self.typing.take().is_some() || self.draft.take().is_some() {
+        if self.typing.take().is_some()
+            || self.draft.take().is_some()
+            || self.picked.take().is_some()
+        {
             return Task::none();
         }
         if self.tool.take().is_some() {
@@ -433,7 +458,8 @@ impl Overlay {
         self.pointer = Some(at);
         // A gesture stays with what its press started, whatever happens on the way.
         if let Pointer::Pressed(at) = pointer {
-            let inside = self.selection.hit(at, HANDLE_REACH) == Some(selection::Hit::Inside);
+            let inside = self.selection.hit(at, HANDLE_REACH) == Some(selection::Hit::Inside)
+                || self.on_grip(to_kurbo(at));
             self.drawing = match self.tool {
                 Some(tool) if inside => Some(tool),
                 _ => None,
@@ -449,6 +475,17 @@ impl Overlay {
             self.drawing = None;
         }
         task
+    }
+
+    /// Whether `at` is on a grip of the picked mark.
+    fn on_grip(&self, at: kurbo::Point) -> bool {
+        self.tool == Some(Tool::Select)
+            && self
+                .picked
+                .and_then(|id| self.document().shape(id))
+                .is_some_and(|shape| {
+                    kirie_annotate::edit::grip_at(shape, at, MARK_REACH, 1.0).is_some()
+                })
     }
 
     fn select(&mut self, pointer: Pointer) {
@@ -477,9 +514,15 @@ impl Overlay {
                     self.document(),
                     self.paint,
                     MARK_REACH,
+                    self.picked,
                 );
                 match press {
-                    Press::Draft(draft) => self.draft = Some(draft),
+                    Press::Draft(draft) => {
+                        if let Draft::Moving { ids, .. } = &draft {
+                            self.picked = ids.first().copied();
+                        }
+                        self.draft = Some(draft);
+                    }
                     Press::Done(op) => self.history.apply(op),
                     Press::TypeAt(at) => {
                         self.typing = Some(Typing {
@@ -488,7 +531,7 @@ impl Overlay {
                         });
                         return iced::widget::operation::focus(view::TEXT_INPUT);
                     }
-                    Press::Nothing => {}
+                    Press::Nothing => self.picked = None,
                 }
             }
             Pointer::Moved(at) => {
@@ -676,6 +719,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
     match key.as_ref() {
         keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
         keyboard::Key::Named(Named::Enter) => Some(Message::Accept),
+        keyboard::Key::Named(Named::Delete | Named::Backspace) => Some(Message::Delete),
         keyboard::Key::Named(Named::ArrowLeft) => Some(Message::Nudge(Vector::new(-step, 0.0))),
         keyboard::Key::Named(Named::ArrowRight) => Some(Message::Nudge(Vector::new(step, 0.0))),
         keyboard::Key::Named(Named::ArrowUp) => Some(Message::Nudge(Vector::new(0.0, -step))),

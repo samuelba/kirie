@@ -6,11 +6,11 @@ use iced::widget::canvas::{self, Action, Event, Frame, Geometry, Path, Stroke, T
 use iced::{Color, Pixels, Point, Rectangle, Renderer, Size, Theme, Vector, alignment};
 use kirie_ui::{radius, space};
 
-use kirie_annotate::{Shape, Tool, style};
+use kirie_annotate::{Shape, Tool};
 
 use super::selection::{Handle, Hit};
 use super::{HANDLE_REACH, MARK_REACH, Message, Overlay, Pointer, to_kurbo};
-use crate::paint::{Captures, Painter};
+use crate::paint::{Captures, Marks, Painter, draw_grips};
 
 const HANDLE_RADIUS: f32 = 4.5;
 const LABEL_SIZE: f32 = 13.0;
@@ -168,11 +168,7 @@ impl Surface<'_> {
         };
         let transform =
             kurbo::Affine::translate((-f64::from(self.area.x), -f64::from(self.area.y)));
-        let moving = match &overlay.draft {
-            Some(kirie_annotate::Draft::Moving { ids, by, .. }) => Some((ids.as_slice(), *by)),
-            _ => None,
-        };
-        let draft = overlay
+        let preview = overlay
             .draft
             .as_ref()
             .and_then(kirie_annotate::Draft::preview)
@@ -181,23 +177,21 @@ impl Surface<'_> {
                 kind,
                 paint: overlay.paint,
                 style: None,
+                rotation: 0.0,
             });
-        for shape in document.shapes().cloned().chain(draft) {
-            let shape = match moving {
-                Some((ids, by)) if ids.contains(&shape.id) => Shape {
-                    kind: shape.kind.translated(by),
-                    ..shape
-                },
-                _ => shape,
-            };
-            let draft = shape.id == document.next_id();
-            for primitive in style::primitives(&shape, document.style, document.unit, visible) {
-                if draft {
-                    painter.draw_draft(frame, &primitive, transform);
-                } else {
-                    painter.draw(frame, &primitive, transform);
-                }
-            }
+        let picked = painter.draw_marks(
+            frame,
+            Marks {
+                document,
+                draft: overlay.draft.as_ref(),
+                preview,
+                picked: overlay.picked,
+                visible,
+            },
+            transform,
+        );
+        if let Some(picked) = picked {
+            draw_grips(frame, &picked, transform, 1.0, overlay.palette.accent);
         }
     }
 

@@ -83,6 +83,30 @@ pub fn render_list(document: &Document) -> Vec<Primitive> {
 
 /// What one mark draws. `visible` is the image area shown, which a spotlight dims around.
 pub fn primitives(shape: &Shape, style: StyleId, unit: f64, visible: Rect) -> Vec<Primitive> {
+    let drawn = unturned(shape, style, unit, visible);
+    if shape.rotation == 0.0 {
+        return drawn;
+    }
+    let turn = shape.turn();
+    drawn
+        .into_iter()
+        .map(|primitive| match primitive {
+            Primitive::Fill { path, color, rule } => Primitive::Fill {
+                path: turn * path,
+                color,
+                rule,
+            },
+            Primitive::Stroke { path, color, width } => Primitive::Stroke {
+                path: turn * path,
+                color,
+                width,
+            },
+            other => other,
+        })
+        .collect()
+}
+
+fn unturned(shape: &Shape, style: StyleId, unit: f64, visible: Rect) -> Vec<Primitive> {
     let context = Context {
         paint: shape.paint,
         unit,
@@ -343,6 +367,7 @@ mod tests {
                             ..Paint::default()
                         },
                         style: None,
+                        rotation: 0.0,
                     };
                     let visible = Rect::new(0.0, 0.0, 100.0, 100.0);
                     let drawn = primitives(&shape, style, 1.0, visible);
@@ -375,6 +400,7 @@ mod tests {
             },
             paint: Paint::default(),
             style: Some(StyleId::Sketch),
+            rotation: 0.0,
         };
         let drawn = primitives(&shape, StyleId::Clean, 1.0, Rect::ZERO);
         assert!(drawn.iter().any(|primitive| matches!(

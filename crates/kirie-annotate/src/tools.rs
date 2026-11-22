@@ -4,7 +4,7 @@
 use kurbo::{Point, Rect, Vec2};
 
 use crate::document::{Document, Op};
-use crate::shape::{Kind, Paint, ShapeId};
+use crate::shape::{Kind, Paint, Shape, ShapeId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Tool {
@@ -122,6 +122,12 @@ pub enum Draft {
         start: Point,
         by: Vec2,
     },
+    /// A grip of a picked mark being dragged.
+    Editing {
+        grip: crate::edit::Grip,
+        origin: Box<Shape>,
+        current: Box<Shape>,
+    },
 }
 
 /// What a press with a tool starts.
@@ -140,7 +146,26 @@ const MIN_DRAG: f64 = 3.0;
 /// Freehand points closer than this are dropped.
 const MIN_STEP: f64 = 1.5;
 
-pub fn press(tool: Tool, at: Point, document: &Document, paint: Paint, reach: f64) -> Press {
+/// What a press with `tool` at `at` starts. `reach` is how near a mark or grip must be, and
+/// `picked` the mark whose grips are showing.
+pub fn press(
+    tool: Tool,
+    at: Point,
+    document: &Document,
+    paint: Paint,
+    reach: f64,
+    picked: Option<ShapeId>,
+) -> Press {
+    if tool == Tool::Select
+        && let Some(shape) = picked.and_then(|id| document.shape(id))
+        && let Some(grip) = crate::edit::grip_at(shape, at, reach, reach / 6.0)
+    {
+        return Press::Draft(Draft::Editing {
+            grip,
+            origin: Box::new(shape.clone()),
+            current: Box::new(shape.clone()),
+        });
+    }
     match tool {
         Tool::Select => document.hit(at, reach).map_or(Press::Nothing, |id| {
             Press::Draft(Draft::Moving {
@@ -201,6 +226,22 @@ impl Draft {
                 start,
                 by: at - start,
             },
+            Draft::Editing { grip, origin, .. } => {
+                let current = Box::new(crate::edit::drag(&origin, grip, at, constrain));
+                Draft::Editing {
+                    grip,
+                    origin,
+                    current,
+                }
+            }
+        }
+    }
+
+    /// The picked mark as an edit has it now, shown in place of the mark.
+    pub fn edited(&self) -> Option<&Shape> {
+        match self {
+            Draft::Editing { current, .. } => Some(current),
+            _ => None,
         }
     }
 
@@ -216,7 +257,7 @@ impl Draft {
                     points: points.clone(),
                 }),
             },
-            Draft::Moving { .. } => None,
+            Draft::Moving { .. } | Draft::Editing { .. } => None,
         }
     }
 
@@ -226,6 +267,14 @@ impl Draft {
             Draft::Span { start, end, .. } if start.distance(end) < MIN_DRAG => None,
             Draft::Moving { by, .. } if by.hypot() < f64::EPSILON => None,
             Draft::Moving { ids, by, .. } => Some(Op::Move { ids, by }),
+            Draft::Editing {
+                origin, current, ..
+            } if origin == current => None,
+            Draft::Editing { current, .. } => Some(Op::Reshape {
+                id: current.id,
+                kind: current.kind,
+                rotation: current.rotation,
+            }),
             draft => draft.preview().map(|kind| Op::Add { kind, paint }),
         }
     }
@@ -283,7 +332,7 @@ mod tests {
     }
 
     fn drawn(tool: Tool, from: Point, to: Point) -> Option<Op> {
-        match press(tool, from, &doc(), Paint::default(), 4.0) {
+        match press(tool, from, &doc(), Paint::default(), 4.0, None) {
             Press::Draft(draft) => draft.drag(to, false).finish(Paint::default()),
             other => panic!("{tool:?} started {other:?}"),
         }
@@ -357,7 +406,14 @@ mod tests {
 
     #[test]
     fn strokes_collect_points_and_highlighters_straighten() {
-        let mut draft = match press(Tool::Pen, Point::ORIGIN, &doc(), Paint::default(), 4.0) {
+        let mut draft = match press(
+            Tool::Pen,
+            Point::ORIGIN,
+            &doc(),
+            Paint::default(),
+            4.0,
+            None,
+        ) {
             Press::Draft(draft) => draft,
             other => panic!("{other:?}"),
         };
@@ -400,6 +456,7 @@ mod tests {
             &document,
             Paint::default(),
             4.0,
+            None,
         )
         else {
             panic!()
@@ -411,7 +468,7 @@ mod tests {
     fn text_asks_for_words() {
         let at = Point::new(3.0, 4.0);
         assert_eq!(
-            press(Tool::Text, at, &doc(), Paint::default(), 4.0),
+            press(Tool::Text, at, &doc(), Paint::default(), 4.0, None),
             Press::TypeAt(at)
         );
     }
@@ -431,13 +488,19 @@ mod tests {
                 Point::new(150.0, 150.0),
                 &document,
                 paint,
-                4.0
+                4.0,
+                None
             ),
             Press::Nothing
         );
-        let Press::Draft(draft) =
-            press(Tool::Select, Point::new(20.0, 20.0), &document, paint, 4.0)
-        else {
+        let Press::Draft(draft) = press(
+            Tool::Select,
+            Point::new(20.0, 20.0),
+            &document,
+            paint,
+            4.0,
+            None,
+        ) else {
             panic!()
         };
         assert_eq!(draft.preview(), None);
@@ -451,6 +514,48 @@ mod tests {
                 by: Vec2::new(10.0, 5.0)
             })
         );
+    }
+
+    #[test]
+    fn grips_of_the_picked_mark_reshape_it() {
+        let document = doc().apply(Op::Add {
+            kind: Kind::Rectangle {
+                rect: Rect::new(10.0, 10.0, 50.0, 50.0),
+            },
+            paint: Paint::default(),
+        });
+        let paint = Paint::default();
+        let Press::Draft(draft) = press(
+            Tool::Select,
+            Point::new(50.0, 50.0),
+            &document,
+            paint,
+            4.0,
+            Some(ShapeId(1)),
+        ) else {
+            panic!()
+        };
+        let draft = draft.drag(Point::new(80.0, 70.0), false);
+        assert_eq!(
+            draft.edited().map(|shape| shape.kind.bounds()),
+            Some(Rect::new(10.0, 10.0, 80.0, 70.0))
+        );
+        let Some(Op::Reshape { kind, rotation, .. }) = draft.finish(paint) else {
+            panic!()
+        };
+        assert_eq!(kind.bounds(), Rect::new(10.0, 10.0, 80.0, 70.0));
+        assert!(rotation.abs() < f64::EPSILON);
+        let Press::Draft(untouched) = press(
+            Tool::Select,
+            Point::new(10.0, 10.0),
+            &document,
+            paint,
+            4.0,
+            Some(ShapeId(1)),
+        ) else {
+            panic!()
+        };
+        assert_eq!(untouched.finish(paint), None);
     }
 
     #[test]

@@ -140,6 +140,25 @@ pub struct Shape {
     pub paint: Paint,
     /// Overrides the document's style for this mark.
     pub style: Option<StyleId>,
+    /// Turn in radians around the centre of the mark's bounds; only boxes and ellipses turn.
+    #[serde(default)]
+    pub rotation: f64,
+}
+
+impl Shape {
+    /// The turn about the mark's centre, as an affine map.
+    pub fn turn(&self) -> kurbo::Affine {
+        if self.rotation == 0.0 {
+            kurbo::Affine::IDENTITY
+        } else {
+            kurbo::Affine::rotate_about(self.rotation, self.kind.bounds().center())
+        }
+    }
+
+    /// How far `point` is from the mark, taking its turn into account.
+    pub fn distance(&self, point: Point) -> f64 {
+        self.kind.distance(self.turn().inverse() * point)
+    }
 }
 
 impl Kind {

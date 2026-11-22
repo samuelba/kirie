@@ -387,6 +387,7 @@ impl Editor {
                     self.document(),
                     self.paint,
                     reach,
+                    self.picked,
                 ) {
                     Press::Draft(draft) => {
                         if let Draft::Moving { ids, .. } = &draft {

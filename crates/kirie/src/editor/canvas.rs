@@ -2,12 +2,12 @@
 //! in image coordinates.
 
 use iced::mouse::{self, Interaction, ScrollDelta};
-use iced::widget::canvas::{self, Action, Event, Frame, Geometry, Path, Stroke};
+use iced::widget::canvas::{self, Action, Event, Frame, Geometry};
 use iced::{Color, Point, Rectangle, Renderer, Size, Theme, Vector};
-use kirie_annotate::{Draft, Kind, Shape, Tool, style};
+use kirie_annotate::{Draft, Kind, Shape, Tool};
 
 use super::{Editor, MARK_REACH, Message, Pointer};
-use crate::paint::{ImageSource, Painter};
+use crate::paint::{ImageSource, Marks, Painter, draw_grips};
 
 /// Mouse wheel steps per doubling of the zoom.
 const WHEEL_STEPS: f32 = 6.0;
@@ -148,25 +148,9 @@ impl canvas::Program<Message> for Board<'_> {
             ),
         );
 
-        let picked_bounds = self.draw_marks(&mut frame, image, transform);
-        if let Some(picked) = picked_bounds {
-            let outline = transform.transform_rect_bbox(picked.inflate(6.0, 6.0));
-            #[allow(clippy::cast_possible_truncation)]
-            frame.stroke(
-                &Path::rectangle(
-                    Point::new(outline.x0 as f32, outline.y0 as f32),
-                    Size::new(outline.width() as f32, outline.height() as f32),
-                ),
-                Stroke {
-                    line_dash: canvas::LineDash {
-                        segments: &[6.0, 4.0],
-                        offset: 0,
-                    },
-                    ..Stroke::default()
-                        .with_color(editor.palette.accent)
-                        .with_width(1.5)
-                },
-            );
+        if let Some(picked) = self.draw_marks(&mut frame, image, transform) {
+            let pixel = 1.0 / f64::from(editor.viewport.scale(self.image(), bounds.size()));
+            draw_grips(&mut frame, &picked, transform, pixel, editor.palette.accent);
         }
         vec![frame.into_geometry()]
     }
@@ -206,13 +190,13 @@ impl canvas::Program<Message> for Board<'_> {
 }
 
 impl Board<'_> {
-    /// Draws the marks and the one in progress; returns the picked mark's bounds.
+    /// Draws the marks and the one in progress; returns the picked mark as shown.
     fn draw_marks(
         &self,
         frame: &mut Frame,
         image: &::image::RgbaImage,
         transform: kurbo::Affine,
-    ) -> Option<kurbo::Rect> {
+    ) -> Option<Shape> {
         let editor = self.editor;
         let document = editor.document();
         let source = ImageSource(image);
@@ -220,10 +204,6 @@ impl Board<'_> {
             source: &source,
             typesetter: &editor.typesetter,
             patches: &editor.patches,
-        };
-        let moving = match &editor.draft {
-            Some(Draft::Moving { ids, by, .. }) => Some((ids.as_slice(), *by)),
-            _ => None,
         };
         let preview = editor
             .draft
@@ -244,30 +224,19 @@ impl Board<'_> {
                 kind,
                 paint: editor.paint,
                 style: None,
+                rotation: 0.0,
             });
-        let visible = document.visible();
-        let mut picked_bounds = None;
-        for shape in document.shapes().cloned().chain(preview) {
-            let shape = match moving {
-                Some((ids, by)) if ids.contains(&shape.id) => Shape {
-                    kind: shape.kind.translated(by),
-                    ..shape
-                },
-                _ => shape,
-            };
-            if editor.picked == Some(shape.id) {
-                picked_bounds = Some(shape.kind.bounds());
-            }
-            let draft = shape.id == document.next_id();
-            for primitive in style::primitives(&shape, document.style, document.unit, visible) {
-                if draft {
-                    painter.draw_draft(frame, &primitive, transform);
-                } else {
-                    painter.draw(frame, &primitive, transform);
-                }
-            }
-        }
-        picked_bounds
+        painter.draw_marks(
+            frame,
+            Marks {
+                document,
+                draft: editor.draft.as_ref(),
+                preview,
+                picked: editor.picked,
+                visible: document.visible(),
+            },
+            transform,
+        )
     }
 }
 

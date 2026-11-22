@@ -2,6 +2,7 @@
 //! paths, and a renderer that draws them, shared by the on-screen overlay and the editor.
 
 pub mod document;
+pub mod edit;
 pub mod effects;
 pub mod primitive;
 pub mod project;
