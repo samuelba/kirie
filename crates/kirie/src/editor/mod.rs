@@ -1,6 +1,7 @@
 //! App mode: a window to mark up any image or screenshot, keep it editable, and export it.
 
 mod canvas;
+mod closing;
 mod view;
 mod viewport;
 
@@ -19,6 +20,7 @@ use kirie_annotate::{
 };
 use kirie_ui::{Palette, Scheme};
 
+use self::closing::{Answer, Closing};
 use self::viewport::Viewport;
 use crate::controls;
 use crate::picker::{self, Picker, Target};
@@ -121,6 +123,10 @@ pub enum Message {
     Save,
     SaveProject,
     Done(Result<String, String>),
+    /// The image left the editor, saved or copied, as this document had it.
+    Exported(String, Box<Document>),
+    CloseRequested,
+    Close(Answer),
     Opened(Result<Loaded, String>),
     ToastExpired(u64),
     Ipc(crate::ipc::Request),
@@ -143,6 +149,11 @@ pub struct Editor {
     image: Option<(RgbaImage, image::Handle)>,
     path: Option<PathBuf>,
     history: History,
+    /// The document as last opened, saved or copied, to tell unsaved changes.
+    kept: Document,
+    closing: Closing,
+    /// An image to open once the question about unsaved changes is answered.
+    then_open: Option<Box<Loaded>>,
     viewport: Viewport,
     tool: Tool,
     paint: Paint,
@@ -181,6 +192,9 @@ impl Editor {
             image: None,
             path: None,
             history: History::new(Document::new(1, 1, 1.0)),
+            kept: Document::new(1, 1, 1.0),
+            closing: Closing::No,
+            then_open: None,
             viewport: Viewport::fitted(),
             tool: Tool::Arrow,
             paint: Paint {
@@ -216,6 +230,7 @@ impl Editor {
             loaded.image.height(),
             loaded.image.as_raw().clone(),
         );
+        self.kept = loaded.document.clone();
         self.history = History::new(loaded.document);
         self.image = Some((loaded.image, handle));
         self.path = loaded.path;
@@ -223,6 +238,9 @@ impl Editor {
         self.draft = None;
         self.picked = None;
         self.typing = None;
+        self.sliding = false;
+        self.closing = Closing::No;
+        self.then_open = None;
         self.patches.borrow_mut().clear();
     }
 
@@ -297,6 +315,7 @@ impl Editor {
                     self.history.apply(Op::Remove { ids: vec![id] });
                 }
             }
+            Message::Escape if self.closing == Closing::Asking => self.closing = Closing::No,
             Message::Escape => {
                 if self.picker.take().is_none()
                     && self.typing.take().is_none()
@@ -311,11 +330,11 @@ impl Editor {
             | Message::Save
             | Message::SaveProject => return self.files(&message),
             Message::Done(Ok(text)) if text.is_empty() => {}
-            Message::Done(result) => return self.toast(result),
-            Message::Opened(Ok(loaded)) => {
-                self.open(loaded);
-                return present();
-            }
+            Message::Done(_)
+            | Message::Exported(..)
+            | Message::CloseRequested
+            | Message::Close(_) => return self.finish(message),
+            Message::Opened(Ok(loaded)) => return self.replace(loaded),
             Message::Ipc(crate::ipc::Request::Open(path)) => {
                 return Task::perform(load_async(path), Message::Opened);
             }
@@ -340,6 +359,33 @@ impl Editor {
             }
         }
         Task::none()
+    }
+
+    /// What became of an export, and closing the window.
+    fn finish(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Done(result) => {
+                if result.is_err() {
+                    self.closing = Closing::No;
+                    self.then_open = None;
+                }
+                self.toast(result)
+            }
+            Message::Exported(text, kept) => {
+                self.kept = *kept;
+                if self.closing == Closing::Saving {
+                    self.closing = Closing::No;
+                    let Some(next) = self.then_open.take() else {
+                        return iced::exit();
+                    };
+                    self.open(*next);
+                }
+                self.toast(Ok(text))
+            }
+            Message::CloseRequested => self.close_requested(),
+            Message::Close(answer) => self.answer(answer),
+            _ => Task::none(),
+        }
     }
 
     /// Changes to the style, colors, weight, fill and text look.
@@ -554,13 +600,19 @@ impl Editor {
         let Some((image, _)) = &self.image else {
             return Task::none();
         };
+        let kept = Box::new(self.document().clone());
+        let exported = move |done: Result<String, String>| match done {
+            Ok(text) => Message::Exported(text, kept),
+            Err(error) => Message::Done(Err(error)),
+        };
+        let saved = |path: std::path::PathBuf| format!("Saved {}", crate::save::pretty(&path));
         if export == Export::Project {
             let project = Project {
                 image: image.clone(),
                 document: self.document().clone(),
             };
-            return Task::perform(crate::save::save_project(project), |saved| {
-                Message::Done(saved.map(|path| format!("Saved {}", crate::save::pretty(&path))))
+            return Task::perform(crate::save::save_project(project), move |done| {
+                exported(done.map(saved))
             });
         }
         let rendered = kirie_annotate::render::render(
@@ -570,15 +622,20 @@ impl Editor {
         );
         let picture = match rendered {
             Ok(picture) => picture,
-            Err(error) => return self.toast(Err(error.to_string())),
+            Err(error) => {
+                self.closing = Closing::No;
+                return self.toast(Err(error.to_string()));
+            }
         };
         match export {
-            Export::Copy => Task::perform(crate::clipboard::copy(picture), |copied| {
-                Message::Done(copied.map(|()| "Copied to the clipboard".to_owned()))
+            Export::Copy => Task::perform(crate::clipboard::copy(picture), move |copied| {
+                exported(copied.map(|()| "Copied to the clipboard".to_owned()))
             }),
-            Export::Save | Export::Project => Task::perform(crate::save::save(picture), |saved| {
-                Message::Done(saved.map(|path| format!("Saved {}", crate::save::pretty(&path))))
-            }),
+            Export::Save | Export::Project => {
+                Task::perform(crate::save::save(picture), move |done| {
+                    exported(done.map(saved))
+                })
+            }
         }
     }
 
@@ -596,7 +653,8 @@ impl Editor {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let keys = if self.typing.is_some() || self.picker.is_some() {
+        let quiet = self.typing.is_some() || self.picker.is_some() || self.closing != Closing::No;
+        let keys = if quiet {
             event::listen_with(typing_key)
         } else {
             event::listen_with(key)
@@ -605,6 +663,7 @@ impl Editor {
             keys,
             Subscription::run(crate::ipc::requests).map(Message::Ipc),
             Subscription::run(crate::appearance::changes).map(Message::SystemScheme),
+            window::close_requests().map(|_| Message::CloseRequested),
         ])
     }
 
@@ -723,6 +782,7 @@ pub fn run(loaded: Option<Loaded>) -> iced::Result {
     .window(window::Settings {
         size: Size::new(1280.0, 840.0),
         min_size: Some(Size::new(760.0, 520.0)),
+        exit_on_close_request: false,
         platform_specific: window::settings::PlatformSpecific {
             application_id: crate::APP_ID.to_owned(),
             ..window::settings::PlatformSpecific::default()

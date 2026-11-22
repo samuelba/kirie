@@ -21,15 +21,18 @@ impl Editor {
     pub fn view(&self) -> Element<'_, Message> {
         let palette = self.palette;
         let body = row![self.rail(), self.center(), self.inspector()];
-        container(column![self.header(), body.height(Length::Fill)])
+        let window = container(column![self.header(), body.height(Length::Fill)])
             .width(Length::Fill)
             .height(Length::Fill)
             .style(move |_| container::Style {
                 background: Some(Background::Color(palette.background)),
                 text_color: Some(palette.text),
                 ..container::Style::default()
-            })
-            .into()
+            });
+        match self.closing_dialog() {
+            Some(dialog) => stack![window, dialog].into(),
+            None => window.into(),
+        }
     }
 
     fn header(&self) -> Element<'_, Message> {

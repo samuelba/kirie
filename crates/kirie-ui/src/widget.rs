@@ -116,6 +116,33 @@ pub fn primary_button<'a, Message: Clone + 'a>(
     .into()
 }
 
+/// A labeled button for a choice beside the main one.
+pub fn secondary_button<'a, Message: Clone + 'a>(
+    label: &'a str,
+    palette: Palette,
+    on_press: Message,
+) -> Element<'a, Message> {
+    button(container(text(label).size(14)).center_y(Length::Fill))
+        .height(CONTROL)
+        .padding([0.0, space::M])
+        .on_press(on_press)
+        .style(move |_, status| button::Style {
+            background: Some(Background::Color(match status {
+                button::Status::Hovered => palette.surface[2],
+                _ => palette.surface[1],
+            })),
+            text_color: palette.text,
+            border: Border {
+                color: palette.border,
+                width: 1.0,
+                radius: radius::CONTROL.into(),
+            },
+            shadow: Shadow::default(),
+            snap: true,
+        })
+        .into()
+}
+
 /// A round color choice, ringed when selected.
 pub fn swatch<'a, Message: Clone + 'a>(
     color: Color,
