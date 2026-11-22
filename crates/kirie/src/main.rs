@@ -56,8 +56,8 @@ enum Command {
         #[arg(long)]
         edit: bool,
     },
-    /// Open an image in the editor.
-    Edit { path: PathBuf },
+    /// Open the editor, with an image if one is given.
+    Edit { path: Option<PathBuf> },
     /// Install the latest release, after checking its signature.
     #[command(name = "self-update")]
     SelfUpdate,
@@ -127,7 +127,7 @@ fn main() -> anyhow::Result<()> {
         Some(Command::GnomeExtension(GnomeExtension::Install)) => extension::install(),
         Some(Command::GnomeExtension(GnomeExtension::Uninstall)) => extension::uninstall(),
         None => edit(None),
-        Some(Command::Edit { path }) => edit(Some(&path)),
+        Some(Command::Edit { path }) => edit(path.as_deref()),
         Some(Command::Capture { .. }) => {
             anyhow::bail!("this capture mode is not implemented yet")
         }
@@ -267,4 +267,46 @@ fn print_globals() -> anyhow::Result<()> {
         println!("{interface}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every command line the desktop entry starts, as a launcher runs it with no files.
+    fn desktop_commands() -> Vec<Vec<&'static str>> {
+        include_str!("../../../packaging/dev.samuelba.Kirie.desktop")
+            .lines()
+            .filter_map(|line| line.strip_prefix("Exec="))
+            .map(|exec| {
+                exec.split_whitespace()
+                    .filter(|word| !word.starts_with('%'))
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_desktop_entry_starts_kirie() {
+        let commands = desktop_commands();
+        assert!(!commands.is_empty());
+        for command in commands {
+            assert!(
+                Cli::try_parse_from(&command).is_ok(),
+                "the desktop entry runs {command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn edit_takes_an_optional_file() {
+        assert!(matches!(
+            Cli::parse_from(["kirie", "edit"]).command,
+            Some(Command::Edit { path: None })
+        ));
+        assert!(matches!(
+            Cli::parse_from(["kirie", "edit", "a.png"]).command,
+            Some(Command::Edit { path: Some(_) })
+        ));
+    }
 }
