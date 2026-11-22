@@ -170,6 +170,7 @@ pub struct Overlay {
     busy: bool,
     /// What Enter does.
     primary: Action,
+    host: Host,
     typesetter: RefCell<Typesetter>,
     patches: RefCell<HashMap<crate::paint::PatchKey, image::Handle>>,
     outcome: Arc<Mutex<Outcome>>,
@@ -305,6 +306,7 @@ impl Overlay {
             last_click: None,
             busy: false,
             primary,
+            host,
             typesetter: RefCell::new(Typesetter::new()),
             patches: RefCell::new(HashMap::new()),
             outcome,
@@ -929,7 +931,14 @@ impl Overlay {
         if let Ok(mut slot) = self.outcome.lock() {
             *slot = outcome;
         }
-        iced::exit()
+        if self.host == Host::Layer {
+            return iced::exit();
+        }
+        // GNOME 46 can leave a window on screen when its process ends before the compositor
+        // has seen it closed.
+        Task::batch(self.surfaces.keys().copied().map(window::close))
+            .chain(Task::future(tokio::time::sleep(TEARDOWN)).discard())
+            .chain(iced::exit())
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -976,6 +985,9 @@ fn settled(message: &Message) -> bool {
             | Message::Look(crate::controls::TextEvent::Size(_))
     )
 }
+
+/// How long the closed overlay windows get to reach the compositor before the process ends.
+const TEARDOWN: std::time::Duration = std::time::Duration::from_millis(100);
 
 fn window_settings() -> window::Settings {
     window::Settings {
