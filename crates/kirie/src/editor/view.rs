@@ -2,7 +2,7 @@
 
 use iced::widget::{Space, column, container, row, rule, stack, svg, text};
 use iced::{Alignment, Background, Border, Element, Length, Padding};
-use kirie_annotate::Tool;
+use kirie_annotate::{StyleId, Tool};
 use kirie_ui::icon::Icon;
 use kirie_ui::widget::{divider, floating, icon_button, primary_button};
 use kirie_ui::{Palette, Scheme, space};
@@ -108,17 +108,7 @@ impl Editor {
         }
         actions = actions.push(divider(palette)).push(theme);
         let document = self.document();
-        let styles = row![
-            controls::styles(document.style, palette, Message::PickStyle),
-            controls::shadow(
-                document.style,
-                document.shadow,
-                palette,
-                Message::ToggleShadow
-            ),
-        ]
-        .spacing(space::S)
-        .align_y(Alignment::Center);
+        let styles = controls::styles(document.style, palette, Message::PickStyle);
         container(
             row![
                 brand,
@@ -300,7 +290,7 @@ impl Editor {
             .into()
     }
 
-    /// The color, and the text look, the spotlight brightness, or the weight and fill, of the
+    /// The color, and the text look, the spotlight, or the weight, fill and shadow, of the
     /// picked mark or the next.
     fn paint_sections(&self) -> iced::widget::Column<'_, Message> {
         let palette = self.palette;
@@ -370,12 +360,32 @@ impl Editor {
         ]
         .spacing(space::S)
         .align_y(Alignment::Center);
+        let document = self.document();
+        let clean = document.style == StyleId::Clean;
+        let shadow = row![
+            controls::shadow(
+                document.style,
+                document.shadow,
+                palette,
+                Message::ToggleShadow
+            ),
+            text(match (clean, document.shadow) {
+                (false, _) => "Only in the Clean style",
+                (true, true) => "Marks cast a shadow",
+                (true, false) => "No shadow",
+            })
+            .size(13)
+            .color(if clean { palette.text } else { palette.muted }),
+        ]
+        .spacing(space::S)
+        .align_y(Alignment::Center);
         content
             .push(section(palette, "Weight", {
                 let (presets, slider) = controls::weights(paint, palette, 150.0, Message::Weight);
                 column![presets, slider].spacing(space::S).into()
             }))
             .push(section(palette, "Fill", fill.into()))
+            .push(section(palette, "Shadow", shadow.into()))
     }
 }
 

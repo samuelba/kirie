@@ -188,22 +188,12 @@ impl Overlay {
             .into()
     }
 
-    /// Style, color, and the text look or the weight and fill.
+    /// Style, color, and the text look, the spotlight, or the weight, fill and shadow.
     fn properties(&self) -> Element<'_, Message> {
         let palette = self.palette;
         let style = self.style();
         let paint = self.shown_paint();
-        let styles = row![
-            controls::styles(style, palette, Message::PickStyle),
-            controls::shadow(
-                style,
-                self.document().shadow,
-                palette,
-                Message::ToggleShadow
-            ),
-        ]
-        .spacing(space::XS)
-        .align_y(iced::Alignment::Center);
+        let styles = controls::styles(style, palette, Message::PickStyle);
         let colors = controls::colors(
             &self.swatches,
             paint,
@@ -251,13 +241,24 @@ impl Overlay {
                         .align_y(iced::Alignment::Center)
                 })
                 .push(divider(palette))
-                .push(icon_button(
-                    Icon::Fill,
-                    "Fill shapes",
-                    palette,
-                    paint.filled,
-                    Some(Message::ToggleFill),
-                ));
+                .push(
+                    row![
+                        icon_button(
+                            Icon::Fill,
+                            "Fill shapes",
+                            palette,
+                            paint.filled,
+                            Some(Message::ToggleFill),
+                        ),
+                        controls::shadow(
+                            style,
+                            self.document().shadow,
+                            palette,
+                            Message::ToggleShadow,
+                        ),
+                    ]
+                    .spacing(2),
+                );
         }
         properties.into()
     }
