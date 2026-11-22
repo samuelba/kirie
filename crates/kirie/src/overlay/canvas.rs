@@ -118,16 +118,13 @@ impl canvas::Program<Message> for Surface<'_> {
         }
         match self.overlay.tool {
             Some(Tool::Select) => {
-                return if self
-                    .overlay
-                    .document()
-                    .hit(to_kurbo(at), MARK_REACH)
-                    .is_some()
-                {
-                    Interaction::Grab
-                } else {
-                    Interaction::default()
-                };
+                return crate::cursor::select(
+                    self.overlay.document(),
+                    self.overlay.picked,
+                    self.overlay.draft.as_ref(),
+                    to_kurbo(at),
+                    MARK_REACH,
+                );
             }
             Some(Tool::Text) => return Interaction::Text,
             Some(_) => return Interaction::Crosshair,

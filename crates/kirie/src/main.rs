@@ -1,6 +1,7 @@
 mod appearance;
 mod clipboard;
 mod controls;
+mod cursor;
 mod dialog;
 mod editor;
 mod extension;

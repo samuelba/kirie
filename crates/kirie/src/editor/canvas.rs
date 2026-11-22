@@ -148,11 +148,13 @@ impl canvas::Program<Message> for Board<'_> {
                     .viewport
                     .image_point(local, self.image(), bounds.size());
                 let reach = MARK_REACH / f64::from(scale(self.editor, bounds.size()));
-                if self.editor.document().hit(at, reach).is_some() {
-                    Interaction::Grab
-                } else {
-                    Interaction::default()
-                }
+                crate::cursor::select(
+                    self.editor.document(),
+                    self.editor.picked,
+                    self.editor.draft.as_ref(),
+                    at,
+                    reach,
+                )
             }
             Tool::Text => Interaction::Text,
             _ => Interaction::Crosshair,
