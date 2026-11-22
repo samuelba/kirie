@@ -1,18 +1,24 @@
 //! The on-screen mode: every screen frozen on a surface of its own, where the user picks a
-//! region (or a whole screen) and keeps it.
+//! region, marks it up, and copies or saves it.
 
 mod canvas;
+mod paint;
 mod selection;
+mod view;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
-use iced::widget::{image, stack};
-use iced::{Element, Length, Point, Rectangle, Size, Subscription, Task, Vector, event, keyboard};
-use iced::{Event, window};
+use iced::widget::image;
+use iced::{Event, Point, Rectangle, Size, Subscription, Task, Vector, event, keyboard, window};
 use iced_layershell::actions::{LayerShellCustomAction, LayerShellCustomActionWithId};
 use iced_layershell::reexport::{
     Anchor, KeyboardInteractivity, Layer, NewLayerShellSettings, OutputOption,
+};
+use kirie_annotate::{
+    Document, Draft, History, Kind, Op, Paint, Press, StyleId, Tool, Typesetter, Weight,
 };
 use kirie_capture::{Frame, geometry};
 use kirie_ui::Palette;
@@ -22,13 +28,15 @@ use self::selection::{Release, Selection};
 pub const NAMESPACE: &str = "kirie-overlay";
 /// How close to a handle a press grabs it, in logical pixels.
 const HANDLE_REACH: f32 = 8.0;
+/// How close to a mark the select tool picks it, in logical pixels.
+const MARK_REACH: f64 = 6.0;
 
 /// One frozen screen.
 #[derive(Debug)]
 struct Screen {
-    frame: Frame,
     handle: image::Handle,
     area: Rectangle,
+    scale: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -38,14 +46,31 @@ pub enum Pointer {
     Released(Point),
 }
 
+/// What to do with the finished picture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    Copy,
+    Save,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     Pointer(Pointer),
-    Accept,
-    Cancel,
+    Modifiers(keyboard::Modifiers),
+    PickTool(Option<Tool>),
+    PickStyle(StyleId),
+    PickColor(kirie_annotate::Rgba),
+    PickWeight(Weight),
+    ToggleFill,
+    TextChanged(String),
+    TextDone,
+    Undo,
+    Redo,
+    Escape,
+    Finish(Action),
     SelectAll,
     Nudge(Vector),
-    Saved(Result<PathBuf, String>),
+    Finished(Result<Outcome, String>),
     Layer(LayerShellCustomActionWithId),
 }
 
@@ -66,19 +91,44 @@ pub enum Outcome {
     #[default]
     Cancelled,
     Saved(PathBuf),
+    Copied,
     Failed(String),
 }
 
-#[derive(Debug)]
+/// Text being typed for a text mark.
+#[derive(Debug, Clone)]
+struct Typing {
+    at: kurbo::Point,
+    text: String,
+}
+
 pub struct Overlay {
+    captures: Vec<Frame>,
     screens: Vec<Screen>,
     surfaces: HashMap<window::Id, usize>,
     desktop: Rectangle,
     selection: Selection,
     pointer: Option<Point>,
+    modifiers: keyboard::Modifiers,
     palette: Palette,
+    tool: Option<Tool>,
+    paint: Paint,
+    history: History,
+    draft: Option<Draft>,
+    typing: Option<Typing>,
     busy: bool,
-    outcome: std::sync::Arc<std::sync::Mutex<Outcome>>,
+    typesetter: RefCell<Typesetter>,
+    patches: RefCell<HashMap<paint::PatchKey, image::Handle>>,
+    outcome: Arc<Mutex<Outcome>>,
+}
+
+impl std::fmt::Debug for Overlay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Overlay")
+            .field("screens", &self.screens.len())
+            .field("tool", &self.tool)
+            .finish_non_exhaustive()
+    }
 }
 
 fn area(rect: geometry::Rect) -> Rectangle {
@@ -90,7 +140,7 @@ fn area(rect: geometry::Rect) -> Rectangle {
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn rect(area: Rectangle) -> geometry::Rect {
+fn whole(area: Rectangle) -> geometry::Rect {
     let (x, y) = (area.x.round() as i32, area.y.round() as i32);
     geometry::Rect::new(
         x,
@@ -100,25 +150,22 @@ fn rect(area: Rectangle) -> geometry::Rect {
     )
 }
 
+fn to_kurbo(point: Point) -> kurbo::Point {
+    kurbo::Point::new(f64::from(point.x), f64::from(point.y))
+}
+
 impl Overlay {
-    pub fn boot(
-        frames: Vec<Frame>,
-        outcome: std::sync::Arc<std::sync::Mutex<Outcome>>,
-    ) -> (Self, Task<Message>) {
+    pub fn boot(frames: Vec<Frame>, outcome: Arc<Mutex<Outcome>>) -> (Self, Task<Message>) {
         let screens: Vec<Screen> = frames
-            .into_iter()
-            .map(|frame| {
-                let handle = image::Handle::from_rgba(
+            .iter()
+            .map(|frame| Screen {
+                handle: image::Handle::from_rgba(
                     frame.image.width(),
                     frame.image.height(),
                     frame.image.as_raw().clone(),
-                );
-                let area = area(frame.output.logical);
-                Screen {
-                    frame,
-                    handle,
-                    area,
-                }
+                ),
+                area: area(frame.output.logical),
+                scale: frame.scale(),
             })
             .collect();
         let desktop = screens
@@ -127,44 +174,154 @@ impl Overlay {
             .reduce(|all, area| all.union(&area))
             .unwrap_or_default();
         let mut surfaces = HashMap::new();
-        let open = screens.iter().enumerate().map(|(index, screen)| {
-            let id = window::Id::unique();
-            surfaces.insert(id, index);
-            Task::done(Message::Layer(LayerShellCustomActionWithId::new(
-                None,
-                LayerShellCustomAction::NewLayerShell {
-                    settings: NewLayerShellSettings {
-                        size: Some((0, 0)),
-                        layer: Layer::Overlay,
-                        anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
-                        exclusive_zone: Some(-1),
-                        margin: Some((0, 0, 0, 0)),
-                        keyboard_interactivity: KeyboardInteractivity::Exclusive,
-                        output_option: OutputOption::OutputName(screen.frame.output.name.clone()),
-                        events_transparent: false,
-                        namespace: Some(NAMESPACE.to_owned()),
+        let open: Vec<Task<Message>> = frames
+            .iter()
+            .enumerate()
+            .map(|(index, frame)| {
+                let id = window::Id::unique();
+                surfaces.insert(id, index);
+                Task::done(Message::Layer(LayerShellCustomActionWithId::new(
+                    None,
+                    LayerShellCustomAction::NewLayerShell {
+                        settings: surface_settings(&frame.output.name),
+                        id,
                     },
-                    id,
-                },
-            )))
-        });
-        let open = Task::batch(open.collect::<Vec<_>>());
+                )))
+            })
+            .collect();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let document = Document::new(
+            (desktop.x + desktop.width).max(1.0) as u32,
+            (desktop.y + desktop.height).max(1.0) as u32,
+            1.0,
+        );
         let overlay = Self {
+            captures: frames,
             screens,
             surfaces,
             desktop,
             selection: Selection::default(),
             pointer: None,
+            modifiers: keyboard::Modifiers::default(),
             palette: Palette::DARK,
+            tool: None,
+            paint: Paint::default(),
+            history: History::new(document),
+            draft: None,
+            typing: None,
             busy: false,
+            typesetter: RefCell::new(Typesetter::new()),
+            patches: RefCell::new(HashMap::new()),
             outcome,
         };
-        (overlay, open)
+        let overlay = if std::env::var_os("KIRIE_OVERLAY_DEMO").is_some() {
+            overlay.with_demo()
+        } else {
+            overlay
+        };
+        (overlay, Task::batch(open))
+    }
+
+    /// A selection with a few marks, for screenshots of the overlay and the smoke test.
+    fn with_demo(mut self) -> Self {
+        let Some(screen) = self.screens.first() else {
+            return self;
+        };
+        let area = screen.area;
+        let region = Rectangle::new(
+            Point::new(area.x + area.width * 0.2, area.y + area.height * 0.15),
+            Size::new(area.width * 0.6, area.height * 0.5),
+        );
+        self.selection = Selection::selected(region);
+        self.tool = Some(Tool::Arrow);
+        let point = |x: f32, y: f32| {
+            kurbo::Point::new(
+                f64::from(region.x + region.width * x),
+                f64::from(region.y + region.height * y),
+            )
+        };
+        for kind in [
+            Kind::Rectangle {
+                rect: kurbo::Rect::from_points(point(0.08, 0.15), point(0.45, 0.55)),
+            },
+            Kind::Arrow {
+                from: point(0.8, 0.85),
+                to: point(0.5, 0.5),
+            },
+            Kind::Counter {
+                at: point(0.1, 0.15),
+                number: 1,
+            },
+            Kind::Text {
+                at: point(0.55, 0.15),
+                text: "Kirie".into(),
+            },
+        ] {
+            self.history.apply(Op::Add {
+                kind,
+                paint: self.paint,
+            });
+        }
+        self
+    }
+
+    fn document(&self) -> &Document {
+        self.history.current()
+    }
+
+    fn style(&self) -> StyleId {
+        self.document().style
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Pointer(pointer) => self.pointer(pointer),
+            Message::Modifiers(modifiers) => {
+                self.modifiers = modifiers;
+                Task::none()
+            }
+            Message::PickTool(tool) => {
+                self.commit_text();
+                self.tool = tool;
+                self.draft = None;
+                Task::none()
+            }
+            Message::PickStyle(style) => {
+                self.history.apply(Op::SetStyle(style));
+                self.paint.color = style.palette()[0];
+                Task::none()
+            }
+            Message::PickColor(color) => {
+                self.paint.color = color;
+                Task::none()
+            }
+            Message::PickWeight(weight) => {
+                self.paint.weight = weight;
+                Task::none()
+            }
+            Message::ToggleFill => {
+                self.paint.filled = !self.paint.filled;
+                Task::none()
+            }
+            Message::TextChanged(text) => {
+                if let Some(typing) = &mut self.typing {
+                    typing.text = text;
+                }
+                Task::none()
+            }
+            Message::TextDone => {
+                self.commit_text();
+                Task::none()
+            }
+            Message::Undo => {
+                self.history.undo();
+                Task::none()
+            }
+            Message::Redo => {
+                self.history.redo();
+                Task::none()
+            }
+            Message::Escape => self.escape(),
             Message::Nudge(by) => {
                 self.selection = self.selection.nudge(by, self.desktop);
                 Task::none()
@@ -173,24 +330,40 @@ impl Overlay {
                 self.selection = Selection::selected(self.desktop);
                 Task::none()
             }
-            Message::Accept => self.accept(),
-            Message::Cancel => self.finish(Outcome::Cancelled),
-            Message::Saved(Ok(path)) => self.finish(Outcome::Saved(path)),
-            Message::Saved(Err(error)) => self.finish(Outcome::Failed(error)),
+            Message::Finish(action) => self.finish(action),
+            Message::Finished(Ok(outcome)) => self.close(outcome),
+            Message::Finished(Err(error)) => self.close(Outcome::Failed(error)),
             Message::Layer(_) => Task::none(),
         }
     }
 
+    fn escape(&mut self) -> Task<Message> {
+        if self.typing.take().is_some() || self.draft.take().is_some() {
+            return Task::none();
+        }
+        if self.tool.take().is_some() {
+            return Task::none();
+        }
+        self.close(Outcome::Cancelled)
+    }
+
     fn pointer(&mut self, pointer: Pointer) -> Task<Message> {
+        let at = match pointer {
+            Pointer::Pressed(at) | Pointer::Moved(at) | Pointer::Released(at) => at,
+        };
+        self.pointer = Some(at);
+        if let (Some(tool), Some(_)) = (self.tool, self.selection.rect()) {
+            self.annotate(tool, pointer)
+        } else {
+            self.select(pointer);
+            Task::none()
+        }
+    }
+
+    fn select(&mut self, pointer: Pointer) {
         match pointer {
-            Pointer::Pressed(at) => {
-                self.pointer = Some(at);
-                self.selection = self.selection.press(at, HANDLE_REACH);
-            }
-            Pointer::Moved(at) => {
-                self.pointer = Some(at);
-                self.selection = self.selection.drag_to(at, self.desktop);
-            }
+            Pointer::Pressed(at) => self.selection = self.selection.press(at, HANDLE_REACH),
+            Pointer::Moved(at) => self.selection = self.selection.drag_to(at, self.desktop),
             Pointer::Released(at) => {
                 let (selection, release) = self.selection.release(at);
                 self.selection = selection;
@@ -201,65 +374,113 @@ impl Overlay {
                 }
             }
         }
+    }
+
+    fn annotate(&mut self, tool: Tool, pointer: Pointer) -> Task<Message> {
+        match pointer {
+            Pointer::Pressed(at) => {
+                self.commit_text();
+                let press = kirie_annotate::tools::press(
+                    tool,
+                    to_kurbo(at),
+                    self.document(),
+                    self.paint,
+                    MARK_REACH,
+                );
+                match press {
+                    Press::Draft(draft) => self.draft = Some(draft),
+                    Press::Done(op) => self.history.apply(op),
+                    Press::TypeAt(at) => {
+                        self.typing = Some(Typing {
+                            at,
+                            text: String::new(),
+                        });
+                        return iced::widget::operation::focus(view::TEXT_INPUT);
+                    }
+                    Press::Nothing => {}
+                }
+            }
+            Pointer::Moved(at) => {
+                if let Some(draft) = self.draft.take() {
+                    self.draft = Some(draft.drag(to_kurbo(at), self.modifiers.shift()));
+                }
+            }
+            Pointer::Released(at) => {
+                if let Some(draft) = self.draft.take() {
+                    let draft = draft.drag(to_kurbo(at), self.modifiers.shift());
+                    if let Some(op) = draft.finish(self.paint) {
+                        self.history.apply(op);
+                    }
+                }
+            }
+        }
         Task::none()
     }
 
-    fn accept(&mut self) -> Task<Message> {
-        let Some(region) = self.selection.rect() else {
-            return Task::none();
+    fn commit_text(&mut self) {
+        let Some(typing) = self.typing.take() else {
+            return;
         };
-        if self.busy {
+        if typing.text.trim().is_empty() {
+            return;
+        }
+        self.history.apply(Op::Add {
+            kind: Kind::Text {
+                at: typing.at,
+                text: typing.text,
+            },
+            paint: self.paint,
+        });
+    }
+
+    /// The selection, rendered with every mark, at the highest scale of the screens it covers.
+    fn picture(&self) -> Result<::image::RgbaImage, String> {
+        let region = self.selection.rect().ok_or("nothing is selected")?;
+        let region = whole(region);
+        let base = geometry::crop(&self.captures, region).ok_or("the selection is empty")?;
+        let scale = f64::from(base.width()) / f64::from(region.width.max(1));
+        let transform = kurbo::Affine::translate((-f64::from(region.x), -f64::from(region.y)))
+            .then_scale(scale);
+        let document = self
+            .document()
+            .transformed(transform, base.width(), base.height(), scale);
+        kirie_annotate::render::render(&document, &base, &mut self.typesetter.borrow_mut())
+            .map_err(|error| error.to_string())
+    }
+
+    fn finish(&mut self, action: Action) -> Task<Message> {
+        self.commit_text();
+        if self.busy || self.selection.rect().is_none() {
             return Task::none();
         }
         self.busy = true;
-        let Some(image) = geometry::crop(
-            &self
-                .screens
-                .iter()
-                .map(|screen| screen.frame.clone())
-                .collect::<Vec<_>>(),
-            rect(region),
-        ) else {
-            return self.finish(Outcome::Failed("the region is empty".into()));
+        let picture = match self.picture() {
+            Ok(picture) => picture,
+            Err(error) => return self.close(Outcome::Failed(error)),
         };
-        Task::perform(crate::save::save(image), Message::Saved)
+        match action {
+            Action::Save => Task::perform(crate::save::save(picture), |saved| {
+                Message::Finished(saved.map(Outcome::Saved))
+            }),
+            Action::Copy => Task::perform(crate::clipboard::copy(picture), |copied| {
+                Message::Finished(copied.map(|()| Outcome::Copied))
+            }),
+        }
     }
 
-    fn finish(&mut self, outcome: Outcome) -> Task<Message> {
+    fn close(&mut self, outcome: Outcome) -> Task<Message> {
         if let Ok(mut slot) = self.outcome.lock() {
             *slot = outcome;
         }
         iced::exit()
     }
 
-    pub fn view(&self, id: window::Id) -> Element<'_, Message> {
-        let Some(&index) = self.surfaces.get(&id) else {
-            return iced::widget::space().into();
-        };
-        let screen = &self.screens[index];
-        stack![
-            image(screen.handle.clone())
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .content_fit(iced::ContentFit::Fill)
-                .filter_method(image::FilterMethod::Linear),
-            iced::widget::canvas(canvas::Surface {
-                overlay: self,
-                area: screen.area,
-                scale: screen.frame.scale(),
-            })
-            .width(Length::Fill)
-            .height(Length::Fill),
-        ]
-        .into()
-    }
-
-    #[expect(
-        clippy::unused_self,
-        reason = "iced passes the state to every subscription"
-    )]
     pub fn subscription(&self) -> Subscription<Message> {
-        event::listen_with(key)
+        if self.typing.is_some() {
+            event::listen_with(typing_key)
+        } else {
+            event::listen_with(key)
+        }
     }
 
     #[expect(
@@ -271,29 +492,63 @@ impl Overlay {
     }
 }
 
+fn surface_settings(output: &str) -> NewLayerShellSettings {
+    NewLayerShellSettings {
+        size: Some((0, 0)),
+        layer: Layer::Overlay,
+        anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
+        exclusive_zone: Some(-1),
+        margin: Some((0, 0, 0, 0)),
+        keyboard_interactivity: KeyboardInteractivity::Exclusive,
+        output_option: OutputOption::OutputName(output.to_owned()),
+        events_transparent: false,
+        namespace: Some(NAMESPACE.to_owned()),
+    }
+}
+
 #[allow(clippy::needless_pass_by_value)]
-fn key(event: Event, _: event::Status, _: window::Id) -> Option<Message> {
+fn typing_key(event: Event, _: event::Status, _: window::Id) -> Option<Message> {
+    match event {
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            key: keyboard::Key::Named(keyboard::key::Named::Escape),
+            ..
+        }) => Some(Message::Escape),
+        _ => None,
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
+    use keyboard::key::Named;
+    if let Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) = event {
+        return Some(Message::Modifiers(modifiers));
+    }
     let Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event else {
         return None;
     };
+    if status == event::Status::Captured {
+        return None;
+    }
     let step = if modifiers.shift() { 10.0 } else { 1.0 };
+    let command = modifiers.command();
     match key.as_ref() {
-        keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::Cancel),
-        keyboard::Key::Named(keyboard::key::Named::Enter) => Some(Message::Accept),
-        keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
-            Some(Message::Nudge(Vector::new(-step, 0.0)))
-        }
-        keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
-            Some(Message::Nudge(Vector::new(step, 0.0)))
-        }
-        keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-            Some(Message::Nudge(Vector::new(0.0, -step)))
-        }
-        keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-            Some(Message::Nudge(Vector::new(0.0, step)))
-        }
-        keyboard::Key::Character("a") if modifiers.command() => Some(Message::SelectAll),
-        keyboard::Key::Character("s") if modifiers.command() => Some(Message::Accept),
+        keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
+        keyboard::Key::Named(Named::Enter) => Some(Message::Finish(Action::Copy)),
+        keyboard::Key::Named(Named::ArrowLeft) => Some(Message::Nudge(Vector::new(-step, 0.0))),
+        keyboard::Key::Named(Named::ArrowRight) => Some(Message::Nudge(Vector::new(step, 0.0))),
+        keyboard::Key::Named(Named::ArrowUp) => Some(Message::Nudge(Vector::new(0.0, -step))),
+        keyboard::Key::Named(Named::ArrowDown) => Some(Message::Nudge(Vector::new(0.0, step))),
+        keyboard::Key::Character("z") if command && modifiers.shift() => Some(Message::Redo),
+        keyboard::Key::Character("z") if command => Some(Message::Undo),
+        keyboard::Key::Character("y") if command => Some(Message::Redo),
+        keyboard::Key::Character("a") if command => Some(Message::SelectAll),
+        keyboard::Key::Character("s") if command => Some(Message::Finish(Action::Save)),
+        keyboard::Key::Character("c") if command => Some(Message::Finish(Action::Copy)),
+        keyboard::Key::Character(c) if !command => c
+            .chars()
+            .next()
+            .and_then(Tool::from_key)
+            .map(|tool| Message::PickTool(Some(tool))),
         _ => None,
     }
 }
@@ -302,9 +557,9 @@ fn key(event: Event, _: event::Status, _: window::Id) -> Option<Message> {
 pub fn run(frames: Vec<Frame>) -> Result<Outcome, String> {
     use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
 
-    let outcome = std::sync::Arc::new(std::sync::Mutex::new(Outcome::Cancelled));
+    let outcome = Arc::new(Mutex::new(Outcome::Cancelled));
     let shared = outcome.clone();
-    let frames = std::sync::Mutex::new(Some(frames));
+    let frames = Mutex::new(Some(frames));
     let boot = move || {
         let frames = frames
             .lock()

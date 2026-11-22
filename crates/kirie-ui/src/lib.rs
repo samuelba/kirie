@@ -1,6 +1,9 @@
 //! Kirie's design language: a calm, flat dark or light surface with one vermilion accent, on a
 //! 4 px grid with soft radii. The overlay and the editor both draw from these tokens.
 
+pub mod icon;
+pub mod widget;
+
 use iced::Color;
 
 /// Spacing steps on the 4 px grid.

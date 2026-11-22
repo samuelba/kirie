@@ -3,7 +3,7 @@
 use image::{RgbaImage, imageops};
 
 /// A rectangle in logical (scale-independent) desktop coordinates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Rect {
     pub x: i32,
     pub y: i32,

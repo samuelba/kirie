@@ -6,8 +6,11 @@ use iced::widget::canvas::{self, Action, Event, Frame, Geometry, Path, Stroke, T
 use iced::{Color, Pixels, Point, Rectangle, Renderer, Size, Theme, Vector, alignment};
 use kirie_ui::{radius, space};
 
+use kirie_annotate::{Shape, Tool, style};
+
+use super::paint::Painter;
 use super::selection::{Handle, Hit};
-use super::{HANDLE_REACH, Message, Overlay, Pointer};
+use super::{HANDLE_REACH, MARK_REACH, Message, Overlay, Pointer, to_kurbo};
 
 const HANDLE_RADIUS: f32 = 4.5;
 const LABEL_SIZE: f32 = 13.0;
@@ -68,6 +71,7 @@ impl canvas::Program<Message> for Surface<'_> {
     ) -> Vec<Geometry> {
         let palette = self.overlay.palette;
         let mut frame = Frame::new(renderer, bounds.size());
+        self.draw_marks(&mut frame);
         let selection = self
             .overlay
             .selection
@@ -111,6 +115,23 @@ impl canvas::Program<Message> for Surface<'_> {
         if self.overlay.selection.dragging() {
             return Interaction::Crosshair;
         }
+        match self.overlay.tool {
+            Some(Tool::Select) => {
+                return if self
+                    .overlay
+                    .document()
+                    .hit(to_kurbo(at), MARK_REACH)
+                    .is_some()
+                {
+                    Interaction::Grab
+                } else {
+                    Interaction::default()
+                };
+            }
+            Some(Tool::Text) => return Interaction::Text,
+            Some(_) => return Interaction::Crosshair,
+            None => {}
+        }
         match self.overlay.selection.hit(at, HANDLE_REACH) {
             Some(Hit::Inside) => Interaction::Grab,
             Some(Hit::Handle(Handle::North | Handle::South)) => Interaction::ResizingVertically,
@@ -127,6 +148,52 @@ impl canvas::Program<Message> for Surface<'_> {
 }
 
 impl Surface<'_> {
+    /// The marks, and the one being drawn, under the scrim so it dims those outside.
+    fn draw_marks(&self, frame: &mut Frame) {
+        let overlay = self.overlay;
+        let document = overlay.document();
+        let visible = overlay.selection.rect().map_or(kurbo::Rect::ZERO, |rect| {
+            kurbo::Rect::new(
+                f64::from(rect.x),
+                f64::from(rect.y),
+                f64::from(rect.x + rect.width),
+                f64::from(rect.y + rect.height),
+            )
+        });
+        let painter = Painter {
+            captures: &overlay.captures,
+            typesetter: &overlay.typesetter,
+            patches: &overlay.patches,
+        };
+        let origin = kurbo::Vec2::new(f64::from(self.area.x), f64::from(self.area.y));
+        let moving = match &overlay.draft {
+            Some(kirie_annotate::Draft::Moving { ids, by, .. }) => Some((ids.as_slice(), *by)),
+            _ => None,
+        };
+        let draft = overlay
+            .draft
+            .as_ref()
+            .and_then(kirie_annotate::Draft::preview)
+            .map(|kind| Shape {
+                id: document.next_id(),
+                kind,
+                paint: overlay.paint,
+                style: None,
+            });
+        for shape in document.shapes().cloned().chain(draft) {
+            let shape = match moving {
+                Some((ids, by)) if ids.contains(&shape.id) => Shape {
+                    kind: shape.kind.translated(by),
+                    ..shape
+                },
+                _ => shape,
+            };
+            for primitive in style::primitives(&shape, document.style, document.unit, visible) {
+                painter.draw(frame, &primitive, origin);
+            }
+        }
+    }
+
     fn draw_selection(&self, frame: &mut Frame, rect: Rectangle) {
         let palette = self.overlay.palette;
         frame.stroke(

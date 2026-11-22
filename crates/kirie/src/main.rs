@@ -1,3 +1,4 @@
+mod clipboard;
 mod overlay;
 mod save;
 
@@ -38,6 +39,9 @@ enum Command {
     /// Information for bug reports.
     #[command(subcommand, hide = true)]
     Debug(Debug),
+    /// Offers a PNG from stdin on the clipboard until something else is copied.
+    #[command(name = "serve-clipboard", hide = true)]
+    ServeClipboard,
 }
 
 #[derive(Debug, Subcommand)]
@@ -70,6 +74,7 @@ fn main() -> anyhow::Result<()> {
             cursor,
         }) => capture_region(cursor),
         Some(Command::Debug(Debug::Globals)) => print_globals(),
+        Some(Command::ServeClipboard) => clipboard::serve(),
         None | Some(Command::Capture { .. } | Command::Edit { .. }) => {
             anyhow::bail!("not implemented yet")
         }
@@ -119,7 +124,7 @@ fn capture_region(cursor: bool) -> anyhow::Result<()> {
             println!("{}", path.display());
             Ok(())
         }
-        overlay::Outcome::Cancelled => Ok(()),
+        overlay::Outcome::Copied | overlay::Outcome::Cancelled => Ok(()),
         overlay::Outcome::Failed(error) => anyhow::bail!(error),
     }
 }

@@ -38,7 +38,7 @@ export WAYLAND_DISPLAY="${socket##*/}"
 head -n 3 "$out/globals.txt"
 "$kirie" capture all --output "$out/screen.png"
 
-"$kirie" capture >"$out/overlay.log" 2>&1 &
+KIRIE_OVERLAY_DEMO=1 "$kirie" capture >"$out/overlay.log" 2>&1 &
 overlay_pid=$!
 sleep 3
 "$kirie" capture all --output "$out/overlay.png"

@@ -19,6 +19,9 @@ kirie-ui.workspace = true
 directories.workspace = true
 jiff.workspace = true
 tokio.workspace = true
+kirie-annotate.workspace = true
+kurbo = "0.11"
+wl-clipboard-rs = "0.9.5"
 image.workspace = true
 iced.workspace = true
 iced_layershell = { version = "0.19.1", default-features = false }
