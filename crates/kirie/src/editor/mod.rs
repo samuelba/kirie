@@ -107,6 +107,7 @@ pub enum Message {
     Delete,
     Escape,
     Copy,
+    Open,
     Paste,
     Save,
     SaveProject,
@@ -287,14 +288,12 @@ impl Editor {
                     self.picked = None;
                 }
             }
-            Message::Copy => return self.export(Export::Copy),
-            Message::Paste => {
-                return Task::perform(crate::clipboard::paste(), |pasted| {
-                    Message::Opened(pasted.map(|image| Loaded::image(image, None)))
-                });
-            }
-            Message::Save => return self.export(Export::Save),
-            Message::SaveProject => return self.export(Export::Project),
+            Message::Copy
+            | Message::Open
+            | Message::Paste
+            | Message::Save
+            | Message::SaveProject => return self.files(&message),
+            Message::Done(Ok(text)) if text.is_empty() => {}
             Message::Done(result) => return self.toast(result),
             Message::Opened(Ok(loaded)) => {
                 self.open(loaded);
@@ -324,6 +323,24 @@ impl Editor {
             }
         }
         Task::none()
+    }
+
+    /// Copying, saving, opening and pasting.
+    fn files(&mut self, message: &Message) -> Task<Message> {
+        match message {
+            Message::Copy => self.export(Export::Copy),
+            Message::Open => Task::perform(crate::dialog::open_image(), |picked| match picked {
+                Ok(Some(path)) => Message::Ipc(crate::ipc::Request::Open(path)),
+                Ok(None) => Message::Done(Ok(String::new())),
+                Err(error) => Message::Done(Err(error)),
+            }),
+            Message::Paste => Task::perform(crate::clipboard::paste(), |pasted| {
+                Message::Opened(pasted.map(|image| Loaded::image(image, None)))
+            }),
+            Message::Save => self.export(Export::Save),
+            Message::SaveProject => self.export(Export::Project),
+            _ => Task::none(),
+        }
     }
 
     /// Follows the desktop's `scheme` until the user switches it themselves (`None`).
@@ -565,6 +582,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("y") if command => Some(Message::Redo),
         keyboard::Key::Character("c") if command => Some(Message::Copy),
         keyboard::Key::Character("v") if command => Some(Message::Paste),
+        keyboard::Key::Character("o") if command => Some(Message::Open),
         keyboard::Key::Character("s") if command && modifiers.shift() => Some(Message::SaveProject),
         keyboard::Key::Character("s") if command => Some(Message::Save),
         keyboard::Key::Character("0") if command => Some(Message::ZoomFit),

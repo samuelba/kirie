@@ -74,7 +74,14 @@ impl Editor {
             false,
             Some(Message::Capture),
         );
-        let mut actions = row![capture, divider(palette), history, divider(palette)]
+        let open = icon_button(
+            Icon::Open,
+            "Open an image (Ctrl+O)",
+            palette,
+            false,
+            Some(Message::Open),
+        );
+        let mut actions = row![open, capture, divider(palette), history, divider(palette)]
             .spacing(space::S)
             .align_y(Alignment::Center);
         if has_image {
@@ -189,17 +196,32 @@ impl Editor {
 
     fn empty(&self) -> Element<'_, Message> {
         let palette = self.palette;
-        let card =
-            column![
+        let card = column![
             svg(svg::Handle::from_memory(APP_ICON)).width(96).height(96),
             text("Cut a piece out of your screen").size(22),
-            text("Take a screenshot, paste an image with Ctrl+V, or open one with kirie edit FILE.")
+            text("Take a screenshot, open an image, or paste one with Ctrl+V.")
                 .size(14)
                 .color(palette.muted),
-            primary_button(Icon::Capture, "Take a screenshot", palette, Message::Capture),
+            row![
+                primary_button(
+                    Icon::Capture,
+                    "Take a screenshot",
+                    palette,
+                    Message::Capture
+                ),
+                icon_button(
+                    Icon::Open,
+                    "Open an image (Ctrl+O)",
+                    palette,
+                    false,
+                    Some(Message::Open)
+                ),
+            ]
+            .spacing(space::S)
+            .align_y(Alignment::Center),
         ]
-            .spacing(space::M)
-            .align_x(Alignment::Center);
+        .spacing(space::M)
+        .align_x(Alignment::Center);
         container(card).center(Length::Fill).into()
     }
 

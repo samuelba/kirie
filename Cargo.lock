@@ -1757,6 +1757,7 @@ dependencies = [
  "futures-util",
  "image",
  "rustix 1.1.6",
+ "serde",
  "thiserror 2.0.21",
  "tokio",
  "tracing",

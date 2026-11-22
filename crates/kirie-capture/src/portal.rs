@@ -17,13 +17,25 @@ const PATH: &str = "/org/freedesktop/portal/desktop";
 /// Numbers each request, so its handle token is unique within the process.
 static REQUESTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-/// Asks the portal for a screenshot of the whole desktop. `interactive` lets the desktop show
-/// its own picker instead.
-pub async fn screenshot(interactive: bool) -> Result<RgbaImage, CaptureError> {
+/// A fresh handle token for a portal request.
+pub fn token() -> String {
+    let request = REQUESTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("kirie_{}_{request}", std::process::id())
+}
+
+/// Calls `method` on the portal `interface` and waits for its answer. `body` must carry
+/// `token` as its `handle_token` option.
+pub async fn request<B>(
+    interface: &str,
+    method: &str,
+    token: &str,
+    body: &B,
+) -> Result<HashMap<String, OwnedValue>, CaptureError>
+where
+    B: serde::Serialize + zbus::zvariant::DynamicType,
+{
     let portal = |error: zbus::Error| CaptureError::Portal(error.to_string());
     let connection = zbus::Connection::session().await.map_err(portal)?;
-    let request = REQUESTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let token = format!("kirie_{}_{request}", std::process::id());
     let sender = connection
         .unique_name()
         .map(|name| name.trim_start_matches(':').replace('.', "_"))
@@ -38,25 +50,12 @@ pub async fn screenshot(interactive: bool) -> Result<RgbaImage, CaptureError> {
     .await
     .map_err(portal)?;
     let mut responses = request.receive_signal("Response").await.map_err(portal)?;
-
-    let options: HashMap<&str, Value<'_>> = HashMap::from([
-        ("handle_token", Value::from(token.as_str())),
-        ("interactive", Value::from(interactive)),
-        ("modal", Value::from(false)),
-    ]);
-    let screenshot = zbus::Proxy::new(
-        &connection,
-        DESTINATION,
-        PATH,
-        "org.freedesktop.portal.Screenshot",
-    )
-    .await
-    .map_err(portal)?;
-    screenshot
-        .call_method("Screenshot", &("", options))
+    zbus::Proxy::new(&connection, DESTINATION, PATH, interface)
+        .await
+        .map_err(portal)?
+        .call_method(method, body)
         .await
         .map_err(portal)?;
-
     let message = futures_util::StreamExt::next(&mut responses)
         .await
         .ok_or_else(|| CaptureError::Portal("the portal did not answer".into()))?;
@@ -65,14 +64,28 @@ pub async fn screenshot(interactive: bool) -> Result<RgbaImage, CaptureError> {
         .deserialize()
         .map_err(|error| CaptureError::Portal(error.to_string()))?;
     match response {
-        0 => {}
-        1 => return Err(CaptureError::Cancelled),
-        _ => {
-            return Err(CaptureError::Portal(
-                "the portal refused the screenshot".into(),
-            ));
-        }
+        0 => Ok(results),
+        1 => Err(CaptureError::Cancelled),
+        _ => Err(CaptureError::Portal(format!("the portal refused {method}"))),
     }
+}
+
+/// Asks the portal for a screenshot of the whole desktop. `interactive` lets the desktop show
+/// its own picker instead.
+pub async fn screenshot(interactive: bool) -> Result<RgbaImage, CaptureError> {
+    let token = token();
+    let options: HashMap<&str, Value<'_>> = HashMap::from([
+        ("handle_token", Value::from(token.as_str())),
+        ("interactive", Value::from(interactive)),
+        ("modal", Value::from(false)),
+    ]);
+    let results = request(
+        "org.freedesktop.portal.Screenshot",
+        "Screenshot",
+        &token,
+        &("", options),
+    )
+    .await?;
     let uri: String = results
         .get("uri")
         .and_then(|uri| String::try_from(uri.clone()).ok())
