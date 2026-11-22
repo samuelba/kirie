@@ -77,7 +77,7 @@ impl Viewport {
         }
     }
 
-    /// Shows image pixels one to one, centred.
+    /// Shows image pixels one to one, centered.
     pub fn actual_size() -> Self {
         Self {
             zoom: Some(1.0),
@@ -116,7 +116,7 @@ mod tests {
     }
 
     #[test]
-    fn fitted_images_are_centred() {
+    fn fitted_images_are_centered() {
         let center = Viewport::fitted().transform(IMAGE, CANVAS) * kurbo::Point::new(1000.0, 500.0);
         assert!((center.x - 532.0).abs() < 1e-3 && (center.y - 400.0).abs() < 1e-3);
     }

@@ -71,6 +71,11 @@ button. **Save project** (Ctrl+Shift+S) keeps a `.kirie` file whose marks you ca
 - **Sketch**: hand-drawn lines, hatched fills and handwritten text.
 - **Ink**: brush strokes that swell and taper, and an open ensō for circles.
 
+Each style has its own shades of the standard colors: bright pastels for Sketch, the pigments of
+ink painting for Ink.
+Switching styles moves marks in a standard color to the new style's shade and leaves your own
+colors as they are.
+
 ## Build from source
 
 Kirie needs Rust (stable) and the Wayland and xkbcommon development files.
@@ -87,7 +92,7 @@ cargo fmt --all --check && cargo clippy --workspace --all-targets && cargo test 
 |---|---|
 | `kirie-capture` | Captures every screen through the compositor's protocol, Kirie's GNOME Shell extension or the screenshot portal |
 | `kirie-annotate` | Documents of marks, the drawing tools, the three styles, rendering and `.kirie` projects |
-| `kirie-ui` | Kirie's colours, spacing, icons and controls |
+| `kirie-ui` | Kirie's colors, spacing, icons and controls |
 | `kirie` | The command, the on-screen overlay and the editor |
 
 Smoke tests run Kirie under a headless compositor: `scripts/sway-smoke.sh` (needs sway) and
@@ -96,5 +101,5 @@ Smoke tests run Kirie under a headless compositor: `scripts/sway-smoke.sh` (need
 ## License
 
 MIT. The GNOME Shell extension in `gnome-extension/` is GPL-2.0-or-later. The bundled fonts
-(Inter, Caveat) are under the SIL Open Font License, and the icons come from
+(Inter, Caveat, Source Code Pro) are under the SIL Open Font License, and the icons come from
 [Lucide](https://lucide.dev) under the ISC license; their licenses are in `assets/`.

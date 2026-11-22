@@ -1,14 +1,18 @@
-//! Annotation controls the overlay toolbar and the editor share: tool icons, style, colour and
+//! Annotation controls the overlay toolbar and the editor share: tool icons, style, color and
 //! weight pickers.
 
 use iced::Element;
-use iced::widget::row;
-use kirie_annotate::{Paint, Rgba, StyleId, Tool, Weight};
-use kirie_ui::Palette;
+use iced::widget::{Row, container, mouse_area, row, svg, text};
+use kirie_annotate::{
+    Align, Document, Font, HIGHLIGHT, Paint, Rgba, SpotShape, StyleId, TextLook, Tool, Weight,
+};
 use kirie_ui::icon::Icon;
-use kirie_ui::widget::{pill, swatch};
+use kirie_ui::widget::{icon_button, pill, swatch, swatch_button, value_slider};
+use kirie_ui::{Palette, space};
 
 use crate::paint::color_of;
+use crate::picker::Target;
+use crate::swatches::{Slot, Swatches};
 
 pub fn tool_icon(tool: Tool) -> Icon {
     match tool {
@@ -28,14 +32,13 @@ pub fn tool_icon(tool: Tool) -> Icon {
     }
 }
 
-/// The colour to draw with after switching tools: the highlighter takes the style's highlight
-/// colour while the colour is still the style's default, and gives it back when put down.
-pub fn tool_color(tool: Option<Tool>, color: Rgba, style: StyleId) -> Rgba {
-    let default = style.palette()[0];
+/// The color to draw with after switching tools: the highlighter takes the highlight color
+/// while the color is still the default, and gives it back when put down.
+pub fn tool_color(tool: Option<Tool>, color: Rgba, default: Rgba) -> Rgba {
     match tool {
-        Some(Tool::Highlighter) if color == default => style.highlight(),
+        Some(Tool::Highlighter) if color == default => HIGHLIGHT,
         Some(Tool::Highlighter) => color,
-        _ if color == style.highlight() => default,
+        _ if color == HIGHLIGHT => default,
         _ => color,
     }
 }
@@ -52,59 +55,357 @@ pub fn styles<'a, Message: Clone + 'a>(
     .into()
 }
 
+/// Turns the shadow marks cast on or off; only the clean style draws one.
+pub fn shadow<'a, Message: Clone + 'a>(
+    style: StyleId,
+    shadow: bool,
+    palette: Palette,
+    on_toggle: Message,
+) -> Element<'a, Message> {
+    let clean = style == StyleId::Clean;
+    icon_button(
+        Icon::Shadow,
+        if clean {
+            "Shadow"
+        } else {
+            "Shadow (in the Clean style)"
+        },
+        palette,
+        clean && shadow,
+        clean.then_some(on_toggle),
+    )
+}
+
+/// `color` in another style: the new style's shade of it, if it is a standard color.
+pub fn restyled(color: Rgba, recolor: &[(Rgba, Rgba)]) -> Rgba {
+    recolor
+        .iter()
+        .find(|(from, _)| *from == color)
+        .map_or(color, |(_, to)| *to)
+}
+
+/// The swatches of `style` to draw with, then a button to add a color. A right click on a swatch
+/// changes it; `editing` is what the picker is open for, if it is.
 pub fn colors<'a, Message: Clone + 'a>(
+    swatches: &Swatches,
     style: StyleId,
     paint: Paint,
     palette: Palette,
+    editing: Option<Target>,
     on_pick: impl Fn(Rgba) -> Message,
-) -> Element<'a, Message> {
-    row(style.palette().into_iter().map(|color| {
-        swatch(
-            color_of(color),
-            paint.color == color,
+    on_edit: impl Fn(Target) -> Message,
+) -> Row<'a, Message> {
+    let defaults = swatches
+        .defaults(style)
+        .iter()
+        .enumerate()
+        .map(|(index, &color)| (Slot::Default(index), color));
+    let custom = swatches
+        .custom()
+        .iter()
+        .enumerate()
+        .map(|(index, &color)| (Slot::Custom(index), color));
+    let swatches = defaults.chain(custom).map(|(slot, color)| {
+        let selected = editing.map_or(paint.color == color, |editing| {
+            editing == Target::Change(slot)
+        });
+        mouse_area(swatch(color_of(color), selected, palette, on_pick(color)))
+            .on_right_press(on_edit(Target::Change(slot)))
+            .into()
+    });
+    row(swatches)
+        .push(swatch_button(
+            Icon::Plus,
+            "Add a color (right-click a color to change it)",
             palette,
-            on_pick(color),
+            editing == Some(Target::New),
+            on_edit(Target::New),
+        ))
+        .spacing(2)
+        .align_y(iced::Alignment::Center)
+}
+
+/// A change to the weight.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WeightEvent {
+    Pick(Weight),
+    Slide(f64),
+    /// The slider was let go.
+    Done,
+}
+
+/// The three usual weights, and a slider for any other; `width` is the slider's.
+pub fn weights<'a, Message: Clone + 'a>(
+    paint: Paint,
+    palette: Palette,
+    width: f32,
+    on: impl Fn(WeightEvent) -> Message + 'a,
+) -> (Element<'a, Message>, Element<'a, Message>) {
+    let presets = row([
+        ("S", Weight::THIN),
+        ("M", Weight::MEDIUM),
+        ("L", Weight::THICK),
+    ]
+    .into_iter()
+    .map(|(label, weight)| {
+        pill(
+            label,
+            paint.weight == weight,
+            palette,
+            on(WeightEvent::Pick(weight)),
+        )
+    }))
+    .spacing(2)
+    .into();
+    let done = on(WeightEvent::Done);
+    let slider = row![
+        container(value_slider(
+            Weight::MIN..=Weight::MAX,
+            paint.weight.base(),
+            palette,
+            move |width| on(WeightEvent::Slide(width)),
+            done,
+        ))
+        .width(width),
+        text(format!("{:.1} px", paint.weight.base()))
+            .size(12)
+            .color(palette.muted)
+            .width(42),
+    ]
+    .spacing(space::S)
+    .align_y(iced::Alignment::Center)
+    .into();
+    (presets, slider)
+}
+
+/// Whether spotlights light a rectangle or an ellipse.
+pub fn spot_shapes<'a, Message: Clone + 'a>(
+    paint: Paint,
+    palette: Palette,
+    on_pick: impl Fn(SpotShape) -> Message,
+) -> Element<'a, Message> {
+    row([
+        (SpotShape::Rectangle, Icon::Rectangle, "Light a rectangle"),
+        (SpotShape::Ellipse, Icon::Ellipse, "Light an ellipse"),
+    ]
+    .into_iter()
+    .map(|(spot, icon, label)| {
+        icon_button(
+            icon,
+            label,
+            palette,
+            paint.spot == spot,
+            Some(on_pick(spot)),
         )
     }))
     .spacing(2)
     .into()
 }
 
-pub fn weights<'a, Message: Clone + 'a>(
-    paint: Paint,
+/// A change to how bright spotlights leave the rest of the image.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BrightnessEvent {
+    Slide(f64),
+    /// The slider was let go.
+    Done,
+}
+
+/// A slider for how bright spotlights leave the rest of the image, with the brightness beside
+/// it; `width` is the slider's.
+pub fn spotlight_brightness<'a, Message: Clone + 'a>(
+    brightness: f64,
     palette: Palette,
-    on_pick: impl Fn(Weight) -> Message,
+    width: f32,
+    on: impl Fn(BrightnessEvent) -> Message + 'a,
 ) -> Element<'a, Message> {
-    row([
-        ("S", Weight::Thin),
-        ("M", Weight::Medium),
-        ("L", Weight::Thick),
+    let range = Document::SPOTLIGHT_BRIGHTNESS_RANGE;
+    let percent = brightness * 100.0;
+    let done = on(BrightnessEvent::Done);
+    row![
+        svg(Icon::Light.handle())
+            .width(16)
+            .height(16)
+            .style(move |_, _| svg::Style {
+                color: Some(palette.muted),
+            }),
+        container(value_slider(
+            range.start() * 100.0..=range.end() * 100.0,
+            percent,
+            palette,
+            move |percent| on(BrightnessEvent::Slide(percent / 100.0)),
+            done,
+        ))
+        .width(width),
+        text(format!("{percent:.0} %"))
+            .size(12)
+            .color(palette.muted)
+            .width(42),
     ]
-    .into_iter()
-    .map(|(label, weight)| pill(label, paint.weight == weight, palette, on_pick(weight))))
+    .spacing(space::S)
+    .align_y(iced::Alignment::Center)
+    .into()
+}
+
+/// A change to how text looks.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextEvent {
+    Font(Font),
+    Size(f64),
+    /// The size slider was let go.
+    SizeDone,
+    Align(Align),
+    ToggleOutline,
+}
+
+impl TextEvent {
+    /// `look` changed by this event.
+    pub fn apply(self, look: TextLook) -> TextLook {
+        match self {
+            TextEvent::Font(font) => TextLook {
+                font: Some(font),
+                ..look
+            },
+            TextEvent::Size(size) => TextLook {
+                size: size.clamp(TextLook::MIN_SIZE, TextLook::MAX_SIZE),
+                ..look
+            },
+            TextEvent::Align(align) => TextLook { align, ..look },
+            TextEvent::ToggleOutline => TextLook {
+                outlined: !look.outlined,
+                ..look
+            },
+            TextEvent::SizeDone => look,
+        }
+    }
+
+    /// Whether the event is one step of a drag, to be undone with the rest of it.
+    pub fn gradual(self) -> bool {
+        matches!(self, TextEvent::Size(_))
+    }
+}
+
+/// The faces to set text in; `fallback` is the style's face, shown while none is picked.
+pub fn fonts<'a, Message: Clone + 'a>(
+    look: TextLook,
+    fallback: Font,
+    palette: Palette,
+    on: impl Fn(TextEvent) -> Message,
+) -> Element<'a, Message> {
+    let current = look.font.unwrap_or(fallback);
+    row(Font::ALL.into_iter().map(|font| {
+        pill(
+            font.name(),
+            font == current,
+            palette,
+            on(TextEvent::Font(font)),
+        )
+    }))
     .spacing(2)
     .into()
+}
+
+/// A slider for the text size, with the size beside it.
+pub fn text_size<'a, Message: Clone + 'a>(
+    look: TextLook,
+    palette: Palette,
+    width: f32,
+    on: impl Fn(TextEvent) -> Message + 'a,
+) -> Element<'a, Message> {
+    let done = on(TextEvent::SizeDone);
+    row![
+        container(value_slider(
+            TextLook::MIN_SIZE..=TextLook::MAX_SIZE,
+            look.size,
+            palette,
+            move |size| on(TextEvent::Size(size)),
+            done,
+        ))
+        .width(width),
+        text(format!("{:.0} px", look.size))
+            .size(12)
+            .color(palette.muted)
+            .width(42),
+    ]
+    .spacing(space::S)
+    .align_y(iced::Alignment::Center)
+    .into()
+}
+
+/// How the lines line up, and whether the text is outlined.
+pub fn text_layout<'a, Message: Clone + 'a>(
+    look: TextLook,
+    palette: Palette,
+    on: impl Fn(TextEvent) -> Message,
+) -> Element<'a, Message> {
+    let aligns = [
+        (Align::Left, Icon::AlignLeft, "Align left"),
+        (Align::Center, Icon::AlignCenter, "Center"),
+        (Align::Right, Icon::AlignRight, "Align right"),
+    ]
+    .into_iter()
+    .map(|(align, icon, label)| {
+        icon_button(
+            icon,
+            label,
+            palette,
+            look.align == align,
+            Some(on(TextEvent::Align(align))),
+        )
+    });
+    row(aligns)
+        .push(icon_button(
+            Icon::TextOutline,
+            "Outline the text",
+            palette,
+            look.outlined,
+            Some(on(TextEvent::ToggleOutline)),
+        ))
+        .spacing(2)
+        .into()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kirie_annotate::PALETTE;
 
     #[test]
-    fn the_highlighter_brings_its_own_colour() {
-        let style = StyleId::Clean;
-        let default = style.palette()[0];
+    fn the_highlighter_brings_its_own_color() {
+        let default = PALETTE[0];
         assert_eq!(
-            tool_color(Some(Tool::Highlighter), default, style),
-            style.highlight()
+            tool_color(Some(Tool::Highlighter), default, default),
+            HIGHLIGHT
         );
-        let blue = style.palette()[3];
-        assert_eq!(tool_color(Some(Tool::Highlighter), blue, style), blue);
+        let blue = PALETTE[3];
+        assert_eq!(tool_color(Some(Tool::Highlighter), blue, default), blue);
+        assert_eq!(tool_color(Some(Tool::Arrow), HIGHLIGHT, default), default);
+        assert_eq!(tool_color(None, blue, default), blue);
+    }
+
+    #[test]
+    fn a_new_style_reshades_only_standard_colors() {
+        let ink = StyleId::Ink.palette();
+        let recolor: Vec<(Rgba, Rgba)> = PALETTE.into_iter().zip(ink).collect();
+        assert_eq!(restyled(PALETTE[2], &recolor), ink[2]);
+        let teal = Rgba::rgb(0x14, 0xb8, 0xa6);
+        assert_eq!(restyled(teal, &recolor), teal);
+    }
+
+    #[test]
+    fn text_events_change_only_their_part() {
+        let look = TextLook::default();
+        let mono = TextEvent::Font(Font::Mono).apply(look);
+        assert_eq!(mono.font, Some(Font::Mono));
+        assert!((mono.size - look.size).abs() < f64::EPSILON);
+        let huge = TextEvent::Size(1000.0).apply(look);
+        assert!((huge.size - TextLook::MAX_SIZE).abs() < f64::EPSILON);
         assert_eq!(
-            tool_color(Some(Tool::Arrow), style.highlight(), style),
-            default
+            TextEvent::Align(Align::Right).apply(look).align,
+            Align::Right
         );
-        assert_eq!(tool_color(None, blue, style), blue);
+        assert!(!TextEvent::ToggleOutline.apply(look).outlined);
+        assert_eq!(TextEvent::SizeDone.apply(look), look);
+        assert!(TextEvent::Size(9.0).gradual() && !TextEvent::SizeDone.gradual());
     }
 
     #[test]

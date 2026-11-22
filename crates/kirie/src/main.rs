@@ -1,15 +1,20 @@
 mod appearance;
 mod clipboard;
 mod controls;
+mod cursor;
 mod dialog;
+mod drops;
 mod editor;
 mod extension;
 mod ipc;
 mod notify;
 mod overlay;
 mod paint;
+mod picker;
 mod save;
 mod shortcuts;
+mod swatches;
+mod typing;
 mod update;
 
 use std::path::PathBuf;
@@ -229,7 +234,7 @@ fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
             ))?;
             Ok(())
         }
-        overlay::Outcome::Cancelled => Ok(()),
+        overlay::Outcome::Canceled => Ok(()),
         overlay::Outcome::Edit(path) => {
             if !block_on(ipc::hand_over(Some(&path)))? {
                 std::process::Command::new(std::env::current_exe()?)

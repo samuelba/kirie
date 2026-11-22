@@ -73,10 +73,11 @@ pub fn draw(pixmap: &mut Pixmap, primitive: &Primitive, typesetter: &mut Typeset
             size,
             color,
             font,
+            align,
             halo,
             centered,
         } => {
-            let outline = typesetter.outline(text, *font, *size, *at, *centered);
+            let outline = typesetter.outline(text, *font, *size, *at, *align, *centered);
             if let Some(halo) = halo {
                 stroke(pixmap, &outline, *halo, size * 0.16);
             }
@@ -240,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn lines_draw_in_their_colour() {
+    fn lines_draw_in_their_color() {
         let document = add(
             &Document::new(40, 40, 1.0),
             Kind::Line {
@@ -273,6 +274,21 @@ mod tests {
             Document::new(40, 30, 1.0).apply(Op::Crop(Some(Rect::new(5.0, 5.0, 25.0, 15.0))));
         let out = render(&document, &white(40, 30), &mut Typesetter::new()).unwrap();
         assert_eq!(out.dimensions(), (20, 10));
+    }
+
+    #[test]
+    fn overlapping_spotlights_dim_evenly() {
+        let spot = |x0: f64, x1: f64| Kind::Spotlight {
+            rect: Rect::new(x0, 10.0, x1, 30.0),
+        };
+        let one = add(&Document::new(60, 40, 1.0), spot(5.0, 30.0));
+        let two = add(&one, spot(20.0, 50.0));
+        let single = render(&one, &white(60, 40), &mut Typesetter::new()).unwrap();
+        let double = render(&two, &white(60, 40), &mut Typesetter::new()).unwrap();
+        assert_eq!(double.get_pixel(25, 20), &Pixel([255, 255, 255, 255]));
+        assert_eq!(double.get_pixel(45, 20), &Pixel([255, 255, 255, 255]));
+        assert_eq!(double.get_pixel(55, 2), single.get_pixel(55, 2));
+        assert!(single.get_pixel(55, 2)[0] < 150);
     }
 
     #[test]

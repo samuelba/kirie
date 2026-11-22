@@ -70,7 +70,7 @@ pub struct Painter<'a> {
 pub struct Marks<'a> {
     pub document: &'a Document,
     pub draft: Option<&'a Draft>,
-    /// A mark not in the document yet: the one being drawn, or text being typed.
+    /// A mark being drawn or typed: a new one, or one in place of the mark with its id.
     pub preview: Option<Shape>,
     pub picked: Option<ShapeId>,
     /// The image area a spotlight dims around.
@@ -114,13 +114,14 @@ impl Painter<'_> {
                 size,
                 color,
                 font,
+                align,
                 halo,
                 centered,
             } => {
                 let outline = self
                     .typesetter
                     .borrow_mut()
-                    .outline(text, *font, *size, *at, *centered);
+                    .outline(text, *font, *size, *at, *align, *centered);
                 let path = to_iced(&outline, transform);
                 if let Some(halo) = halo {
                     frame.stroke(&path, stroke(*halo, size * 0.16 * scale));
@@ -154,20 +155,36 @@ impl Painter<'_> {
             _ => None,
         };
         let edited = marks.draft.and_then(Draft::edited);
-        let mut picked = None;
-        let shapes = document.shapes().cloned().chain(marks.preview);
-        for shape in shapes {
-            let shape = match (moving, edited) {
+        let preview = marks.preview;
+        let replaces = preview
+            .as_ref()
+            .is_some_and(|preview| document.shape(preview.id).is_some());
+        let (in_place, added) = if replaces {
+            (preview, None)
+        } else {
+            (None, preview)
+        };
+        let shapes: Vec<Shape> = document
+            .shapes()
+            .map(|shape| match &in_place {
+                Some(preview) if preview.id == shape.id => preview.clone(),
+                _ => shape.clone(),
+            })
+            .chain(added)
+            .map(|shape| match (moving, edited) {
                 (Some((ids, by)), _) if ids.contains(&shape.id) => Shape {
                     kind: shape.kind.translated(by),
                     ..shape
                 },
                 (_, Some(edited)) if edited.id == shape.id => edited.clone(),
                 _ => shape,
-            };
+            })
+            .collect();
+        let stage = style::Stage::new(document, marks.visible, &shapes);
+        let mut picked = None;
+        for shape in shapes {
             let draft = shape.id == document.next_id();
-            for primitive in style::primitives(&shape, document.style, document.unit, marks.visible)
-            {
+            for primitive in style::primitives(&shape, document.style, document.unit, &stage) {
                 if draft {
                     self.draw_draft(frame, &primitive, transform);
                 } else {
@@ -260,15 +277,22 @@ impl Painter<'_> {
     }
 }
 
-/// The outline and grips of a picked mark; `pixel` is one screen pixel in mark coordinates.
-pub fn draw_grips(frame: &mut Frame, shape: &Shape, transform: Affine, pixel: f64, accent: Color) {
+/// The outline and grips of a picked mark that covers `bounds`; `pixel` is one screen pixel in
+/// mark coordinates.
+pub fn draw_grips(
+    frame: &mut Frame,
+    shape: &Shape,
+    bounds: kurbo::Rect,
+    transform: Affine,
+    pixel: f64,
+    accent: Color,
+) {
     #[allow(clippy::cast_possible_truncation)]
     let at = |point: kurbo::Point| {
         let point = transform * point;
         Point::new(point.x as f32, point.y as f32)
     };
     let turn = shape.turn();
-    let bounds = shape.kind.bounds();
     let corners = [
         kurbo::Point::new(bounds.x0, bounds.y0),
         kurbo::Point::new(bounds.x1, bounds.y0),
@@ -365,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn colours_keep_their_alpha() {
+    fn colors_keep_their_alpha() {
         let color = color_of(Rgba::rgb(255, 0, 0).with_alpha(51));
         assert!((color.a - 0.2).abs() < 1e-6);
         assert!((color.r - 1.0).abs() < 1e-6);

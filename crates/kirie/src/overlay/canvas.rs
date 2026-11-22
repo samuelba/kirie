@@ -118,16 +118,13 @@ impl canvas::Program<Message> for Surface<'_> {
         }
         match self.overlay.tool {
             Some(Tool::Select) => {
-                return if self
-                    .overlay
-                    .document()
-                    .hit(to_kurbo(at), MARK_REACH)
-                    .is_some()
-                {
-                    Interaction::Grab
-                } else {
-                    Interaction::default()
-                };
+                return crate::cursor::select(
+                    self.overlay.document(),
+                    self.overlay.picked,
+                    self.overlay.draft.as_ref(),
+                    to_kurbo(at),
+                    MARK_REACH,
+                );
             }
             Some(Tool::Text) => return Interaction::Text,
             Some(_) => return Interaction::Crosshair,
@@ -179,6 +176,12 @@ impl Surface<'_> {
                 paint: overlay.paint,
                 style: None,
                 rotation: 0.0,
+            })
+            .or_else(|| {
+                overlay
+                    .typing
+                    .as_ref()
+                    .map(|typing| typing.preview(document, overlay.paint))
             });
         let picked = painter.draw_marks(
             frame,
@@ -192,7 +195,15 @@ impl Surface<'_> {
             transform,
         );
         if let Some(picked) = picked {
-            draw_grips(frame, &picked, transform, 1.0, overlay.palette.accent);
+            let bounds = document.bounds(&picked);
+            draw_grips(
+                frame,
+                &picked,
+                bounds,
+                transform,
+                1.0,
+                overlay.palette.accent,
+            );
         }
     }
 

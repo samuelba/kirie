@@ -1,10 +1,10 @@
-//! The editor's canvas: the image and its marks, zoomed and panned, with the pointer reported
+//! The editor's canvases: the image and, above it, its marks, zoomed and panned, with the pointer reported
 //! in image coordinates.
 
 use iced::mouse::{self, Interaction, ScrollDelta};
 use iced::widget::canvas::{self, Action, Event, Frame, Geometry};
 use iced::{Color, Point, Rectangle, Renderer, Size, Theme, Vector};
-use kirie_annotate::{Draft, Kind, Shape, Tool};
+use kirie_annotate::{Draft, Shape, Tool};
 
 use super::{Editor, MARK_REACH, Message, Pointer};
 use crate::paint::{ImageSource, Marks, Painter, draw_grips};
@@ -115,42 +115,21 @@ impl canvas::Program<Message> for Board<'_> {
     ) -> Vec<Geometry> {
         let editor = self.editor;
         let mut frame = Frame::new(renderer, bounds.size());
-        let Some((image, handle)) = &editor.image else {
+        let Some((image, _)) = &editor.image else {
             return vec![frame.into_geometry()];
         };
         let transform = editor.viewport.transform(self.image(), bounds.size());
-        let document = editor.document();
-        let area = transform.transform_rect_bbox(document.visible());
-        #[allow(clippy::cast_possible_truncation)]
-        let area = Rectangle::new(
-            Point::new(area.x0 as f32, area.y0 as f32),
-            Size::new(area.width() as f32, area.height() as f32),
-        );
-        frame.fill_rectangle(
-            area.position() + Vector::new(0.0, 6.0),
-            area.size(),
-            Color::BLACK.scale_alpha(0.25),
-        );
-        frame.draw_image(
-            Rectangle::new(
-                transform_point(transform, kurbo::Point::ORIGIN),
-                Size::new(
-                    self.image().width * editor.viewport.scale(self.image(), bounds.size()),
-                    self.image().height * editor.viewport.scale(self.image(), bounds.size()),
-                ),
-            ),
-            canvas::Image::new(handle.clone()).filter_method(
-                if editor.viewport.scale(self.image(), bounds.size()) >= 2.0 {
-                    iced::widget::image::FilterMethod::Nearest
-                } else {
-                    iced::widget::image::FilterMethod::Linear
-                },
-            ),
-        );
-
         if let Some(picked) = self.draw_marks(&mut frame, image, transform) {
             let pixel = 1.0 / f64::from(editor.viewport.scale(self.image(), bounds.size()));
-            draw_grips(&mut frame, &picked, transform, pixel, editor.palette.accent);
+            let bounds = editor.document().bounds(&picked);
+            draw_grips(
+                &mut frame,
+                &picked,
+                bounds,
+                transform,
+                pixel,
+                editor.palette.accent,
+            );
         }
         vec![frame.into_geometry()]
     }
@@ -177,11 +156,13 @@ impl canvas::Program<Message> for Board<'_> {
                     .viewport
                     .image_point(local, self.image(), bounds.size());
                 let reach = MARK_REACH / f64::from(scale(self.editor, bounds.size()));
-                if self.editor.document().hit(at, reach).is_some() {
-                    Interaction::Grab
-                } else {
-                    Interaction::default()
-                }
+                crate::cursor::select(
+                    self.editor.document(),
+                    self.editor.picked,
+                    self.editor.draft.as_ref(),
+                    at,
+                    reach,
+                )
             }
             Tool::Text => Interaction::Text,
             _ => Interaction::Crosshair,
@@ -209,22 +190,18 @@ impl Board<'_> {
             .draft
             .as_ref()
             .and_then(Draft::preview)
-            .or_else(|| {
-                editor.typing.as_ref().map(|typing| Kind::Text {
-                    at: typing.at,
-                    text: if typing.text.is_empty() {
-                        "|".to_owned()
-                    } else {
-                        typing.text.clone()
-                    },
-                })
-            })
             .map(|kind| Shape {
                 id: document.next_id(),
                 kind,
                 paint: editor.paint,
                 style: None,
                 rotation: 0.0,
+            })
+            .or_else(|| {
+                editor
+                    .typing
+                    .as_ref()
+                    .map(|typing| typing.preview(document, editor.paint))
             });
         painter.draw_marks(
             frame,
@@ -237,6 +214,57 @@ impl Board<'_> {
             },
             transform,
         )
+    }
+}
+
+/// The image and its shadow, drawn in a layer below the [`Board`]: the renderer draws a layer's
+/// images after its shapes, so sharing one canvas would hide the marks under the image.
+pub(super) struct Backdrop<'a> {
+    pub editor: &'a Editor,
+}
+
+impl canvas::Program<Message> for Backdrop<'_> {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let editor = self.editor;
+        let mut frame = Frame::new(renderer, bounds.size());
+        let Some((_, handle)) = &editor.image else {
+            return vec![frame.into_geometry()];
+        };
+        let image = editor.image_size();
+        let transform = editor.viewport.transform(image, bounds.size());
+        let scale = editor.viewport.scale(image, bounds.size());
+        let area = transform.transform_rect_bbox(editor.document().visible());
+        #[allow(clippy::cast_possible_truncation)]
+        let area = Rectangle::new(
+            Point::new(area.x0 as f32, area.y0 as f32),
+            Size::new(area.width() as f32, area.height() as f32),
+        );
+        frame.fill_rectangle(
+            area.position() + Vector::new(0.0, 6.0),
+            area.size(),
+            Color::BLACK.scale_alpha(0.25),
+        );
+        frame.draw_image(
+            Rectangle::new(
+                transform_point(transform, kurbo::Point::ORIGIN),
+                Size::new(image.width * scale, image.height * scale),
+            ),
+            canvas::Image::new(handle.clone()).filter_method(if scale >= 2.0 {
+                iced::widget::image::FilterMethod::Nearest
+            } else {
+                iced::widget::image::FilterMethod::Linear
+            }),
+        );
+        vec![frame.into_geometry()]
     }
 }
 

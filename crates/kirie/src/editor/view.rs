@@ -1,15 +1,16 @@
 //! The editor window: a header bar, the tool rail, the canvas and the inspector.
 
-use iced::widget::{Space, column, container, row, rule, stack, svg, text, text_input};
+use iced::widget::{Space, column, container, row, rule, stack, svg, text};
 use iced::{Alignment, Background, Border, Element, Length, Padding};
-use kirie_annotate::Tool;
+use kirie_annotate::{StyleId, Tool};
 use kirie_ui::icon::Icon;
 use kirie_ui::widget::{divider, floating, icon_button, primary_button};
 use kirie_ui::{Palette, Scheme, space};
 
-use super::canvas::Board;
+use super::canvas::{Backdrop, Board};
 use super::{Editor, Message};
 use crate::controls;
+use crate::picker::{self, Picker};
 
 pub const TEXT_INPUT: &str = "kirie-editor-text";
 const APP_ICON: &[u8] =
@@ -20,15 +21,18 @@ impl Editor {
     pub fn view(&self) -> Element<'_, Message> {
         let palette = self.palette;
         let body = row![self.rail(), self.center(), self.inspector()];
-        container(column![self.header(), body.height(Length::Fill)])
+        let window = container(column![self.header(), body.height(Length::Fill)])
             .width(Length::Fill)
             .height(Length::Fill)
             .style(move |_| container::Style {
                 background: Some(Background::Color(palette.background)),
                 text_color: Some(palette.text),
                 ..container::Style::default()
-            })
-            .into()
+            });
+        match self.closing_dialog() {
+            Some(dialog) => stack![window, dialog].into(),
+            None => window.into(),
+        }
     }
 
     fn header(&self) -> Element<'_, Message> {
@@ -81,11 +85,12 @@ impl Editor {
             false,
             Some(Message::Open),
         );
-        let mut actions = row![open, capture, divider(palette), history, divider(palette)]
+        let mut actions = row![open, capture, divider(palette), history]
             .spacing(space::S)
             .align_y(Alignment::Center);
         if has_image {
             actions = actions
+                .push(divider(palette))
                 .push(icon_button(
                     Icon::Project,
                     "Save editable project (Ctrl+Shift+S)",
@@ -103,7 +108,8 @@ impl Editor {
                 .push(primary_button(Icon::Copy, "Copy", palette, Message::Copy));
         }
         actions = actions.push(divider(palette)).push(theme);
-        let styles = controls::styles(self.document().style, palette, Message::PickStyle);
+        let document = self.document();
+        let styles = controls::styles(document.style, palette, Message::PickStyle);
         container(
             row![
                 brand,
@@ -139,27 +145,36 @@ impl Editor {
 
     fn center(&self) -> Element<'_, Message> {
         let palette = self.palette;
-        let mut layers = stack![if self.image.is_some() {
-            Element::from(
+        let mut layers = if self.image.is_some() {
+            stack![
+                iced::widget::canvas(Backdrop { editor: self })
+                    .width(Length::Fill)
+                    .height(Length::Fill),
                 iced::widget::canvas(Board { editor: self })
                     .width(Length::Fill)
                     .height(Length::Fill),
-            )
+            ]
         } else {
-            self.empty()
-        }];
+            stack![self.empty()]
+        };
         let mut floating_bits = column![].spacing(space::S).align_x(Alignment::Center);
         if let Some(typing) = &self.typing {
             floating_bits = floating_bits.push(
                 container(
                     row![
-                        text_input("Type here", &typing.text)
-                            .id(TEXT_INPUT)
-                            .on_input(Message::TextChanged)
-                            .on_submit(Message::TextDone)
-                            .width(320)
-                            .padding([space::XS + 2.0, space::S]),
-                        text("Enter to place").size(12).color(palette.muted),
+                        crate::typing::text_box(
+                            typing,
+                            TEXT_INPUT,
+                            palette,
+                            Message::TextEdit,
+                            Message::TextDone,
+                        ),
+                        column![
+                            text("Enter to place").size(12).color(palette.muted),
+                            text("Shift+Enter for a new line")
+                                .size(12)
+                                .color(palette.muted),
+                        ],
                     ]
                     .spacing(space::M)
                     .align_y(Alignment::Center),
@@ -227,27 +242,6 @@ impl Editor {
 
     fn inspector(&self) -> Element<'_, Message> {
         let palette = self.palette;
-        let style = self.document().style;
-        let section = |title: &'static str, content: Element<'static, Message>| {
-            column![text(title).size(12).color(palette.muted), content].spacing(space::S)
-        };
-        let fill = row![
-            icon_button(
-                Icon::Fill,
-                "Fill shapes",
-                palette,
-                self.paint.filled,
-                Some(Message::ToggleFill)
-            ),
-            text(if self.paint.filled {
-                "Shapes are filled"
-            } else {
-                "Outlines only"
-            })
-            .size(13),
-        ]
-        .spacing(space::S)
-        .align_y(Alignment::Center);
         let zoom = row![
             icon_button(
                 Icon::Fit,
@@ -267,22 +261,13 @@ impl Editor {
         ]
         .spacing(space::XS)
         .align_y(Alignment::Center);
-        let mut content = column![
-            section(
-                "Colour",
-                controls::colors(style, self.paint, palette, Message::PickColor)
-            ),
-            section(
-                "Weight",
-                controls::weights(self.paint, palette, Message::PickWeight)
-            ),
-            section("Fill", fill.into()),
-            rule::horizontal(1),
-            section("View", zoom.into()),
-        ]
-        .spacing(space::L);
+        let mut content = self
+            .paint_sections()
+            .push(rule::horizontal(1))
+            .push(section(palette, "View", zoom.into()));
         if let Some((image, _)) = &self.image {
             content = content.push(section(
+                palette,
                 "Image",
                 text(format!("{} × {} px", image.width(), image.height()))
                     .size(13)
@@ -305,6 +290,113 @@ impl Editor {
             .style(panel(palette))
             .into()
     }
+
+    /// The color, and the text look, the spotlight, or the weight, fill and shadow, of the
+    /// picked mark or the next.
+    fn paint_sections(&self) -> iced::widget::Column<'_, Message> {
+        let palette = self.palette;
+        let paint = self.shown_paint();
+        let mut colors = column![
+            controls::colors(
+                &self.swatches,
+                self.document().style,
+                paint,
+                palette,
+                self.picker.as_ref().map(Picker::target),
+                Message::PickColor,
+                Message::EditColor,
+            )
+            .wrap()
+        ]
+        .spacing(space::M);
+        if let Some(open) = &self.picker {
+            colors = colors.push(picker::view(open, palette).map(Message::Picker));
+        }
+        let content = column![section(palette, "Color", colors.into())].spacing(space::L);
+        if self.texting() {
+            let fallback = self.document().style.font();
+            return content.push(section(
+                palette,
+                "Text",
+                column![
+                    controls::fonts(paint.text, fallback, palette, Message::Look),
+                    controls::text_size(paint.text, palette, 150.0, Message::Look),
+                    controls::text_layout(paint.text, palette, Message::Look),
+                ]
+                .spacing(space::S)
+                .into(),
+            ));
+        }
+        if self.spotlighting() {
+            return content
+                .push(section(
+                    palette,
+                    "Spotlight",
+                    controls::spot_shapes(paint, palette, Message::Spot),
+                ))
+                .push(section(
+                    palette,
+                    "Brightness around spotlights",
+                    controls::spotlight_brightness(
+                        self.document().spotlight_brightness,
+                        palette,
+                        126.0,
+                        Message::Brightness,
+                    ),
+                ));
+        }
+        let fill = row![
+            icon_button(
+                Icon::Fill,
+                "Fill shapes",
+                palette,
+                paint.filled,
+                Some(Message::ToggleFill)
+            ),
+            text(if paint.filled {
+                "Shapes are filled"
+            } else {
+                "Outlines only"
+            })
+            .size(13),
+        ]
+        .spacing(space::S)
+        .align_y(Alignment::Center);
+        let document = self.document();
+        let clean = document.style == StyleId::Clean;
+        let shadow = row![
+            controls::shadow(
+                document.style,
+                document.shadow,
+                palette,
+                Message::ToggleShadow
+            ),
+            text(match (clean, document.shadow) {
+                (false, _) => "Only in the Clean style",
+                (true, true) => "Marks cast a shadow",
+                (true, false) => "No shadow",
+            })
+            .size(13)
+            .color(if clean { palette.text } else { palette.muted }),
+        ]
+        .spacing(space::S)
+        .align_y(Alignment::Center);
+        content
+            .push(section(palette, "Weight", {
+                let (presets, slider) = controls::weights(paint, palette, 150.0, Message::Weight);
+                column![presets, slider].spacing(space::S).into()
+            }))
+            .push(section(palette, "Fill", fill.into()))
+            .push(section(palette, "Shadow", shadow.into()))
+    }
+}
+
+fn section<'a>(
+    palette: Palette,
+    title: &'static str,
+    content: Element<'a, Message>,
+) -> iced::widget::Column<'a, Message> {
+    column![text(title).size(12).color(palette.muted), content].spacing(space::S)
 }
 
 fn panel(palette: Palette) -> impl Fn(&iced::Theme) -> container::Style {

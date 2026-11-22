@@ -69,6 +69,22 @@ pub fn grip_at(shape: &Shape, point: Point, reach: f64, pixel: f64) -> Option<Gr
         .map(|(grip, _)| grip)
 }
 
+/// Which way a corner or edge grip of `shape` pulls, as an angle in mark coordinates (0 is
+/// right, y grows down); `None` for grips that do not resize along an axis.
+pub fn pull_angle(shape: &Shape, grip: Grip) -> Option<f64> {
+    use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
+    let base = match grip {
+        Grip::Corner(index) => -3.0 * FRAC_PI_4 + f64::from(index) * FRAC_PI_2,
+        Grip::Edge(index) => -FRAC_PI_2 + f64::from(index) * FRAC_PI_2,
+        Grip::Start | Grip::End | Grip::Rotate => return None,
+    };
+    let turn = match shape.kind {
+        Kind::Pen { .. } | Kind::Highlighter { .. } => 0.0,
+        _ => shape.rotation,
+    };
+    Some(base + turn)
+}
+
 /// Whether marks of this kind can be turned; pixel effects stay square to the screen.
 pub const fn turns(kind: &Kind) -> bool {
     matches!(
@@ -278,6 +294,26 @@ mod tests {
     }
 
     #[test]
+    fn resize_directions_follow_the_turn() {
+        use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
+        let close = |a: Option<f64>, b: f64| assert!((a.unwrap() - b).abs() < 1e-9, "{a:?} vs {b}");
+        close(pull_angle(&rectangle(), Grip::Corner(2)), FRAC_PI_4);
+        close(pull_angle(&rectangle(), Grip::Edge(1)), 0.0);
+        close(pull_angle(&rectangle(), Grip::Edge(0)), -FRAC_PI_2);
+        let turned = Shape {
+            rotation: FRAC_PI_2,
+            ..rectangle()
+        };
+        close(pull_angle(&turned, Grip::Edge(1)), FRAC_PI_2);
+        assert_eq!(pull_angle(&rectangle(), Grip::Rotate), None);
+        let line = shape(Kind::Line {
+            from: Point::ORIGIN,
+            to: Point::new(10.0, 0.0),
+        });
+        assert_eq!(pull_angle(&line, Grip::End), None);
+    }
+
+    #[test]
     fn corners_and_edges_resize_from_the_far_side() {
         let dragged = drag(
             &rectangle(),
@@ -297,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    fn rotating_turns_about_the_centre_and_snaps() {
+    fn rotating_turns_about_the_center_and_snaps() {
         let turned = drag(&rectangle(), Grip::Rotate, Point::new(100.0, 25.0), false);
         assert!((turned.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
         let snapped = drag(&rectangle(), Grip::Rotate, Point::new(100.0, 22.0), true);

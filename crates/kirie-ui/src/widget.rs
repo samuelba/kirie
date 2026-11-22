@@ -1,7 +1,7 @@
-//! Kirie's controls: flat icon buttons, colour swatches, segmented pills and the floating panel
+//! Kirie's controls: flat icon buttons, color swatches, segmented pills and the floating panel
 //! they sit on.
 
-use iced::widget::{button, container, row, svg, text, tooltip};
+use iced::widget::{button, container, row, slider, svg, text, tooltip};
 use iced::{Background, Border, Color, Element, Length, Shadow, Vector};
 
 use crate::icon::Icon;
@@ -72,7 +72,7 @@ pub fn icon_button<'a, Message: Clone + 'a>(
     hint(control.into(), label, palette)
 }
 
-/// A labelled button for the main action.
+/// A labeled button for the main action.
 pub fn primary_button<'a, Message: Clone + 'a>(
     icon: Icon,
     label: &'a str,
@@ -116,7 +116,34 @@ pub fn primary_button<'a, Message: Clone + 'a>(
     .into()
 }
 
-/// A round colour choice, ringed when selected.
+/// A labeled button for a choice beside the main one.
+pub fn secondary_button<'a, Message: Clone + 'a>(
+    label: &'a str,
+    palette: Palette,
+    on_press: Message,
+) -> Element<'a, Message> {
+    button(container(text(label).size(14)).center_y(Length::Fill))
+        .height(CONTROL)
+        .padding([0.0, space::M])
+        .on_press(on_press)
+        .style(move |_, status| button::Style {
+            background: Some(Background::Color(match status {
+                button::Status::Hovered => palette.surface[2],
+                _ => palette.surface[1],
+            })),
+            text_color: palette.text,
+            border: Border {
+                color: palette.border,
+                width: 1.0,
+                radius: radius::CONTROL.into(),
+            },
+            shadow: Shadow::default(),
+            snap: true,
+        })
+        .into()
+}
+
+/// A round color choice, ringed when selected.
 pub fn swatch<'a, Message: Clone + 'a>(
     color: Color,
     selected: bool,
@@ -160,6 +187,45 @@ pub fn swatch<'a, Message: Clone + 'a>(
         .into()
 }
 
+/// A round button the size of a swatch, with an icon.
+pub fn swatch_button<'a, Message: Clone + 'a>(
+    icon: Icon,
+    label: &'a str,
+    palette: Palette,
+    active: bool,
+    on_press: Message,
+) -> Element<'a, Message> {
+    let glyph = svg(icon.handle())
+        .width(14)
+        .height(14)
+        .style(move |_, _| svg::Style {
+            color: Some(palette.text),
+        });
+    let control = button(container(glyph).center(Length::Fill))
+        .width(28)
+        .height(28)
+        .padding(0)
+        .on_press(on_press)
+        .style(move |_, status| button::Style {
+            background: match (active, status) {
+                (true, _) | (false, button::Status::Pressed) => {
+                    Some(Background::Color(palette.surface[2]))
+                }
+                (false, button::Status::Hovered) => Some(Background::Color(palette.surface[1])),
+                _ => None,
+            },
+            text_color: palette.text,
+            border: Border {
+                color: palette.border,
+                width: 1.0,
+                radius: radius::PILL.into(),
+            },
+            shadow: Shadow::default(),
+            snap: true,
+        });
+    hint(control.into(), label, palette)
+}
+
 /// One option of a segmented control.
 pub fn pill<'a, Message: Clone + 'a>(
     label: &'a str,
@@ -187,6 +253,46 @@ pub fn pill<'a, Message: Clone + 'a>(
             },
             shadow: Shadow::default(),
             snap: true,
+        })
+        .into()
+}
+
+/// A slider in the accent color. `on_release` follows the last change of a drag.
+pub fn value_slider<'a, Message: Clone + 'a>(
+    range: std::ops::RangeInclusive<f64>,
+    value: f64,
+    palette: Palette,
+    on_change: impl Fn(f64) -> Message + 'a,
+    on_release: Message,
+) -> Element<'a, Message> {
+    slider(range, value, on_change)
+        .step(0.5)
+        .on_release(on_release)
+        .width(Length::Fill)
+        .style(move |_, status| slider::Style {
+            rail: slider::Rail {
+                backgrounds: (
+                    Background::Color(palette.accent),
+                    Background::Color(palette.surface[2]),
+                ),
+                width: 4.0,
+                border: Border {
+                    radius: radius::PILL.into(),
+                    ..Border::default()
+                },
+            },
+            handle: slider::Handle {
+                shape: slider::HandleShape::Circle {
+                    radius: if status == slider::Status::Dragged {
+                        8.0
+                    } else {
+                        7.0
+                    },
+                },
+                background: Background::Color(palette.accent),
+                border_width: 2.0,
+                border_color: Color::WHITE,
+            },
         })
         .into()
 }
@@ -242,7 +348,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mixing_moves_between_colours() {
+    fn mixing_moves_between_colors() {
         assert_eq!(mix(Color::BLACK, Color::WHITE, 0.0), Color::BLACK);
         assert_eq!(mix(Color::BLACK, Color::WHITE, 1.0), Color::WHITE);
         let half = mix(Color::BLACK, Color::WHITE, 0.5);

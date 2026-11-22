@@ -3,8 +3,8 @@
 
 use kurbo::{BezPath, Point, Rect, Vec2};
 
-use super::{Context, Rng, arrow_wings, ellipse_points, halo_for, smooth};
-use crate::primitive::{FillRule, Font, Primitive};
+use super::{Context, Rng, arrow_wings, ellipse_points, smooth};
+use crate::primitive::{Align, FillRule, Font, Primitive};
 use crate::shape::{Kind, Rgba};
 
 /// The hatching angle, as in rough.js.
@@ -16,16 +16,16 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
     let color = context.color();
     let stroke = |path: BezPath| Primitive::Stroke { path, color, width };
     match kind {
-        Kind::Line { from, to } => double_line(&mut rng, *from, *to, context.unit)
+        Kind::Line { from, to } => double_line(&mut rng, *from, *to, context.unit, width)
             .into_iter()
             .map(stroke)
             .collect(),
         Kind::Arrow { from, to } => {
-            let mut paths = double_line(&mut rng, *from, *to, context.unit);
+            let mut paths = double_line(&mut rng, *from, *to, context.unit, width);
             let head = (context.width() * 4.0).max(16.0 * context.unit);
             if let Some((left, right)) = arrow_wings(*from, *to, head, 0.5) {
-                paths.extend(double_line(&mut rng, *to, left, context.unit));
-                paths.extend(double_line(&mut rng, *to, right, context.unit));
+                paths.extend(double_line(&mut rng, *to, left, context.unit, width));
+                paths.extend(double_line(&mut rng, *to, right, context.unit, width));
             }
             paths.into_iter().map(stroke).collect()
         }
@@ -36,9 +36,15 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
                 let (a, b) = (corners[index], corners[(index + 1) % 4]);
                 let overshoot = (b - a).normalize() * 3.0 * context.unit;
                 drawn.extend(
-                    double_line(&mut rng, a - overshoot * 0.5, b + overshoot, context.unit)
-                        .into_iter()
-                        .map(stroke),
+                    double_line(
+                        &mut rng,
+                        a - overshoot * 0.5,
+                        b + overshoot,
+                        context.unit,
+                        width,
+                    )
+                    .into_iter()
+                    .map(stroke),
                 );
             }
             drawn
@@ -54,15 +60,6 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
         }
         Kind::Pen { points } => vec![stroke(smooth(points))],
         Kind::Highlighter { points } => vec![super::marker(points, context)],
-        Kind::Text { at, text } => vec![Primitive::Text {
-            at: *at,
-            text: text.clone(),
-            size: context.text_size() * 1.35,
-            color,
-            font: Font::Hand,
-            halo: Some(halo_for(color)),
-            centered: false,
-        }],
         Kind::Counter { at, number } => {
             let radius = context.counter_radius();
             let rect = Rect::from_center_size(*at, (radius * 2.0, radius * 2.0));
@@ -80,6 +77,7 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
                     size: radius * 1.6,
                     color,
                     font: Font::Hand,
+                    align: Align::Left,
                     halo: None,
                     centered: true,
                 },
@@ -103,7 +101,9 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
                 rule: FillRule::NonZero,
             }]
         }
-        Kind::Blur { .. } | Kind::Pixelate { .. } | Kind::Spotlight { .. } => Vec::new(),
+        Kind::Text { .. } | Kind::Blur { .. } | Kind::Pixelate { .. } | Kind::Spotlight { .. } => {
+            Vec::new()
+        }
     }
 }
 
@@ -122,6 +122,10 @@ fn jitter(rng: &mut Rng, amount: f64) -> Vec2 {
 
 /// One wobbly stroke from `a` to `b`, bowed a little to one side.
 fn rough_line(rng: &mut Rng, a: Point, b: Point, unit: f64) -> BezPath {
+    cubic(rough_controls(rng, a, b, unit))
+}
+
+fn rough_controls(rng: &mut Rng, a: Point, b: Point, unit: f64) -> [Point; 4] {
     let along = b - a;
     let length = along.hypot();
     let offset = (length * 0.02).clamp(0.6, 3.0) * unit;
@@ -131,18 +135,27 @@ fn rough_line(rng: &mut Rng, a: Point, b: Point, unit: f64) -> BezPath {
         Vec2::ZERO
     };
     let bow = normal * rng.signed() * (length * 0.015).min(4.0 * unit);
-    let mut path = BezPath::new();
-    path.move_to(a + jitter(rng, offset * 0.5));
-    path.curve_to(
+    [
+        a + jitter(rng, offset * 0.5),
         a + along * 0.5 + bow + jitter(rng, offset),
         a + along * 0.75 + bow + jitter(rng, offset),
         b + jitter(rng, offset * 0.5),
-    );
+    ]
+}
+
+fn cubic([start, first, second, end]: [Point; 4]) -> BezPath {
+    let mut path = BezPath::new();
+    path.move_to(start);
+    path.curve_to(first, second, end);
     path
 }
 
-fn double_line(rng: &mut Rng, a: Point, b: Point, unit: f64) -> Vec<BezPath> {
-    vec![rough_line(rng, a, b, unit), rough_line(rng, a, b, unit)]
+/// A line traced twice, the second pass close enough to the first that the two strokes of
+/// `width` always overlap and read as one uneven line.
+fn double_line(rng: &mut Rng, a: Point, b: Point, unit: f64, width: f64) -> Vec<BezPath> {
+    let first = rough_controls(rng, a, b, unit);
+    let retrace = first.map(|point| point + jitter(rng, width * 0.35));
+    vec![cubic(first), cubic(retrace)]
 }
 
 /// An ellipse drawn in one go that overshoots where it started.
@@ -235,6 +248,7 @@ mod tests {
             paint: Paint::default(),
             unit: 1.0,
             seed: 3,
+            shadow: true,
         };
         assert!(hachure(&mut rng, &square, &plain).is_empty());
         let filled = Context {
@@ -258,5 +272,28 @@ mod tests {
         }
         let dot = rough_line(&mut rng, Point::ORIGIN, Point::ORIGIN, 1.0);
         assert!(kurbo::Shape::bounding_box(&dot).width() < 2.0);
+    }
+
+    #[test]
+    fn both_passes_of_a_long_line_overlap() {
+        use kurbo::ParamCurve;
+        let width = 2.1;
+        for seed in 0..200 {
+            let mut rng = Rng::new(seed);
+            let passes = double_line(
+                &mut rng,
+                Point::new(80.0, 280.0),
+                Point::new(1200.0, 170.0),
+                1.0,
+                width,
+            );
+            let [first, second] = [&passes[0], &passes[1]]
+                .map(|path| path.segments().next().expect("a pass is one curve"));
+            for step in 0..=20 {
+                let t = f64::from(step) / 20.0;
+                let gap = first.eval(t).distance(second.eval(t));
+                assert!(gap < width, "seed {seed}, t {t}: passes {gap} apart");
+            }
+        }
     }
 }

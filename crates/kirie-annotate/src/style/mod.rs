@@ -3,13 +3,14 @@
 mod clean;
 mod ink;
 mod sketch;
+mod spotlight;
 
-use kurbo::{BezPath, Point, Rect, Shape as _, Vec2};
+use kurbo::{BezPath, Point, Rect, Vec2};
 use serde::{Deserialize, Serialize};
 
 use crate::document::Document;
-use crate::primitive::{Effect, FillRule, Primitive};
-use crate::shape::{Kind, Rgba, Shape};
+use crate::primitive::{Effect, FillRule, Font, Primitive};
+use crate::shape::{Kind, PALETTE, Rgba, Shape, SpotShape};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum StyleId {
@@ -33,57 +34,125 @@ impl StyleId {
         }
     }
 
-    /// The colour the highlighter starts with.
-    pub const fn highlight(self) -> Rgba {
+    /// The standard colors in this style's shades, in the order of [`PALETTE`]: bright pastels
+    /// for pencil, the pigments of ink painting for ink.
+    pub const fn palette(self) -> [Rgba; 6] {
         match self {
-            StyleId::Clean => Rgba::rgb(0xf2, 0xd1, 0x3a),
-            StyleId::Sketch => Rgba::rgb(0xf5, 0xd7, 0x1f),
-            StyleId::Ink => Rgba::rgb(0xe8, 0xc5, 0x4a),
+            StyleId::Clean => PALETTE,
+            StyleId::Sketch => [
+                Rgba::rgb(0xf2, 0x70, 0x6d),
+                Rgba::rgb(0xf5, 0xc4, 0x51),
+                Rgba::rgb(0x5f, 0xc8, 0x8f),
+                Rgba::rgb(0x6a, 0xa6, 0xf8),
+                Rgba::rgb(0xff, 0xfc, 0xf5),
+                Rgba::rgb(0x3b, 0x3f, 0x48),
+            ],
+            StyleId::Ink => [
+                Rgba::rgb(0xc7, 0x3a, 0x2c),
+                Rgba::rgb(0xc9, 0x95, 0x2a),
+                Rgba::rgb(0x2c, 0x7a, 0x54),
+                Rgba::rgb(0x2b, 0x4f, 0x8f),
+                Rgba::rgb(0xf5, 0xf0, 0xe6),
+                Rgba::rgb(0x1f, 0x1d, 0x1a),
+            ],
         }
     }
 
-    /// The colours offered for this style, the first being the default.
-    pub const fn palette(self) -> [Rgba; 6] {
+    /// The face text is set in unless a mark picks one.
+    pub const fn font(self) -> Font {
         match self {
-            StyleId::Clean => [
-                Rgba::rgb(0xe4, 0x57, 0x2e),
-                Rgba::rgb(0xf2, 0xb1, 0x34),
-                Rgba::rgb(0x2f, 0xb3, 0x72),
-                Rgba::rgb(0x3b, 0x82, 0xf6),
-                Rgba::rgb(0xff, 0xff, 0xff),
-                Rgba::rgb(0x16, 0x18, 0x1d),
-            ],
-            StyleId::Sketch => [
-                Rgba::rgb(0xe0, 0x31, 0x31),
-                Rgba::rgb(0x1e, 0x6f, 0xd9),
-                Rgba::rgb(0x2b, 0x8a, 0x3e),
-                Rgba::rgb(0xf0, 0x8c, 0x00),
-                Rgba::rgb(0x86, 0x3b, 0xd6),
-                Rgba::rgb(0x1e, 0x1e, 0x1e),
-            ],
-            StyleId::Ink => [
-                Rgba::rgb(0xe4, 0x57, 0x2e),
-                Rgba::rgb(0x1f, 0x1d, 0x1a),
-                Rgba::rgb(0x2a, 0x4d, 0x7a),
-                Rgba::rgb(0x3f, 0x6b, 0x3a),
-                Rgba::rgb(0xb8, 0x8a, 0x2b),
-                Rgba::rgb(0xf4, 0xef, 0xe6),
-            ],
+            StyleId::Clean => Font::Sans,
+            StyleId::Sketch | StyleId::Ink => Font::Hand,
         }
     }
 }
 
 /// Everything the document's marks draw, bottom to top, in image coordinates.
 pub fn render_list(document: &Document) -> Vec<Primitive> {
+    let stage = Stage::new(document, document.visible(), document.shapes());
     document
         .shapes()
-        .flat_map(|shape| primitives(shape, document.style, document.unit, document.visible()))
+        .flat_map(|shape| primitives(shape, document.style, document.unit, &stage))
         .collect()
 }
 
-/// What one mark draws. `visible` is the image area shown, which a spotlight dims around.
-pub fn primitives(shape: &Shape, style: StyleId, unit: f64, visible: Rect) -> Vec<Primitive> {
-    let drawn = unturned(shape, style, unit, visible);
+/// What marks are drawn onto: the image area shown, whether marks cast shadows, and the
+/// spotlights. All spotlights dim that area once, together, where the lowest of them sits, so
+/// overlapping spotlights never darken it twice.
+#[derive(Debug, Clone)]
+pub struct Stage {
+    visible: Rect,
+    shadow: bool,
+    /// The opacity of the shade spotlights put over the rest.
+    dim: f64,
+    holes: Vec<spotlight::Hole>,
+    lowest: Option<crate::shape::ShapeId>,
+}
+
+impl Default for Stage {
+    fn default() -> Self {
+        Self {
+            visible: Rect::ZERO,
+            shadow: false,
+            dim: 1.0 - Document::SPOTLIGHT_BRIGHTNESS,
+            holes: Vec::new(),
+            lowest: None,
+        }
+    }
+}
+
+impl Stage {
+    /// The stage for `document`'s look, showing `visible`, with `shapes` bottom to top.
+    pub fn new<'a>(
+        document: &Document,
+        visible: Rect,
+        shapes: impl IntoIterator<Item = &'a Shape>,
+    ) -> Self {
+        let mut stage = Self {
+            visible,
+            shadow: document.shadow,
+            dim: 1.0 - Document::spotlight_brightness(document.spotlight_brightness),
+            ..Self::default()
+        };
+        for shape in shapes {
+            if let Kind::Spotlight { rect } = shape.kind {
+                stage.lowest.get_or_insert(shape.id);
+                stage.holes.push(spotlight::Hole {
+                    rect: rect.abs(),
+                    oval: shape.paint.spot == SpotShape::Ellipse,
+                });
+            }
+        }
+        stage
+    }
+}
+
+/// The area `shape` covers in `style` on an image of `unit`, before stroke width; text is
+/// measured in its face and size.
+pub fn bounds(shape: &Shape, style: StyleId, unit: f64) -> Rect {
+    let Kind::Text { at, text } = &shape.kind else {
+        return shape.kind.bounds();
+    };
+    let font = text_font(shape, style);
+    let size = crate::text::measure(text, font, text_size(shape, font, unit));
+    Rect::from_origin_size(*at, size)
+}
+
+fn text_font(shape: &Shape, style: StyleId) -> Font {
+    shape
+        .paint
+        .text
+        .font
+        .unwrap_or(shape.style.unwrap_or(style).font())
+}
+
+fn text_size(shape: &Shape, font: Font, unit: f64) -> f64 {
+    shape.paint.text.size * unit * font.scale()
+}
+
+/// What one mark draws on `stage`.
+pub fn primitives(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Vec<Primitive> {
+    let drawn = unturned(shape, style, unit, stage);
     if shape.rotation == 0.0 {
         return drawn;
     }
@@ -106,11 +175,12 @@ pub fn primitives(shape: &Shape, style: StyleId, unit: f64, visible: Rect) -> Ve
         .collect()
 }
 
-fn unturned(shape: &Shape, style: StyleId, unit: f64, visible: Rect) -> Vec<Primitive> {
+fn unturned(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Vec<Primitive> {
     let context = Context {
         paint: shape.paint,
         unit,
         seed: shape.id.0,
+        shadow: stage.shadow,
     };
     match &shape.kind {
         Kind::Blur { rect } => vec![Primitive::Effect {
@@ -123,7 +193,25 @@ fn unturned(shape: &Shape, style: StyleId, unit: f64, visible: Rect) -> Vec<Prim
             rect: rect.abs(),
             effect: Effect::Pixelate { cell: 12.0 * unit },
         }],
-        Kind::Spotlight { rect } => vec![spotlight(visible, rect.abs(), 6.0 * unit)],
+        Kind::Spotlight { .. } if stage.lowest == Some(shape.id) => {
+            vec![spotlight::shade(
+                stage.visible,
+                &stage.holes,
+                6.0 * unit,
+                stage.dim,
+            )]
+        }
+        Kind::Spotlight { .. } => Vec::new(),
+        Kind::Text { at, text } => {
+            let font = text_font(shape, style);
+            vec![text_mark(
+                *at,
+                text,
+                font,
+                text_size(shape, font, unit),
+                &context,
+            )]
+        }
         kind => match shape.style.unwrap_or(style) {
             StyleId::Clean => clean::primitives(kind, &context),
             StyleId::Sketch => sketch::primitives(kind, &context),
@@ -139,6 +227,8 @@ struct Context {
     unit: f64,
     /// Makes hand-drawn wobble the same on every redraw of the same mark.
     seed: u64,
+    /// Whether marks cast a shadow, in the styles that draw one.
+    shadow: bool,
 }
 
 impl Context {
@@ -154,17 +244,24 @@ impl Context {
         self.paint.color.with_alpha(0x40)
     }
 
-    fn text_size(&self) -> f64 {
-        let size = match self.paint.weight {
-            crate::shape::Weight::Thin => 16.0,
-            crate::shape::Weight::Medium => 22.0,
-            crate::shape::Weight::Thick => 32.0,
-        };
-        size * self.unit
-    }
-
     fn counter_radius(&self) -> f64 {
         (10.0 + self.paint.weight.base() * 1.5) * self.unit
+    }
+}
+
+/// A text mark, the same in every style but for its face.
+fn text_mark(at: Point, text: &str, font: Font, size: f64, context: &Context) -> Primitive {
+    let look = context.paint.text;
+    let color = context.color();
+    Primitive::Text {
+        at,
+        text: text.to_owned(),
+        size,
+        color,
+        font,
+        align: look.align,
+        halo: look.outlined.then(|| halo_for(color)),
+        centered: false,
     }
 }
 
@@ -205,17 +302,7 @@ fn chaikin(points: &[Point], rounds: usize) -> Vec<Point> {
     points
 }
 
-fn spotlight(visible: Rect, hole: Rect, radius: f64) -> Primitive {
-    let mut path = visible.to_path(0.1);
-    path.extend(kurbo::RoundedRect::from_rect(hole, radius).path_elements(0.1));
-    Primitive::Fill {
-        path,
-        color: Rgba::rgb(0, 0, 0).with_alpha(0x8c),
-        rule: FillRule::EvenOdd,
-    }
-}
-
-/// A dark or light outline colour that sets `color` apart from any background.
+/// A dark or light outline color that sets `color` apart from any background.
 fn halo_for(color: Rgba) -> Rgba {
     let luminance =
         0.2126 * f64::from(color.r) + 0.7152 * f64::from(color.g) + 0.0722 * f64::from(color.b);
@@ -326,6 +413,8 @@ impl Rng {
 
 #[cfg(test)]
 mod tests {
+    use kurbo::Shape as _;
+
     use super::*;
     use crate::document::Op;
     use crate::shape::{Paint, ShapeId, Weight};
@@ -369,8 +458,12 @@ mod tests {
                         style: None,
                         rotation: 0.0,
                     };
-                    let visible = Rect::new(0.0, 0.0, 100.0, 100.0);
-                    let drawn = primitives(&shape, style, 1.0, visible);
+                    let stage = Stage::new(
+                        &Document::new(100, 100, 1.0),
+                        Rect::new(0.0, 0.0, 100.0, 100.0),
+                        [&shape],
+                    );
+                    let drawn = primitives(&shape, style, 1.0, &stage);
                     assert!(!drawn.is_empty(), "{style:?} drew nothing for {kind:?}");
                 }
             }
@@ -380,7 +473,10 @@ mod tests {
     #[test]
     fn drawing_is_deterministic() {
         let document = Document::new(100, 100, 1.0)
-            .apply(Op::SetStyle(StyleId::Sketch))
+            .apply(Op::SetStyle {
+                style: StyleId::Sketch,
+                recolor: Vec::new(),
+            })
             .apply(Op::Add {
                 kind: Kind::Rectangle {
                     rect: Rect::new(10.0, 10.0, 50.0, 50.0),
@@ -402,7 +498,7 @@ mod tests {
             style: Some(StyleId::Sketch),
             rotation: 0.0,
         };
-        let drawn = primitives(&shape, StyleId::Clean, 1.0, Rect::ZERO);
+        let drawn = primitives(&shape, StyleId::Clean, 1.0, &Stage::default());
         assert!(drawn.iter().any(|primitive| matches!(
             primitive,
             Primitive::Text {
@@ -413,10 +509,80 @@ mod tests {
     }
 
     #[test]
-    fn styles_have_names_and_palettes() {
+    fn spotlights_dim_once_together_from_the_lowest() {
+        let spot = |x0: f64, x1: f64| Op::Add {
+            kind: Kind::Spotlight {
+                rect: Rect::new(x0, 20.0, x1, 80.0),
+            },
+            paint: Paint::default(),
+        };
+        let document = Document::new(100, 100, 1.0)
+            .apply(spot(10.0, 60.0))
+            .apply(spot(40.0, 90.0));
+        let drawn = render_list(&document);
+        let [Primitive::Fill { path, rule, .. }] = drawn.as_slice() else {
+            panic!("one dimming for both spotlights: {drawn:?}");
+        };
+        assert_eq!(*rule, FillRule::NonZero);
+        let winding = |x, y| path.winding(Point::new(x, y));
+        assert_eq!(winding(5.0, 5.0).abs(), 1, "outside both");
+        assert_eq!(winding(50.0, 50.0), 0, "where they overlap");
+        assert_eq!(winding(20.0, 50.0), 0, "inside the first");
+        assert_eq!(winding(80.0, 50.0), 0, "inside the second");
+        assert_eq!(
+            winding(95.0, 50.0).abs(),
+            1,
+            "outside both, between them and the edge"
+        );
+        assert_eq!(winding(10.5, 20.5).abs(), 1, "a rounded-off corner");
+        assert_eq!(
+            winding(40.5, 20.5),
+            0,
+            "a corner inside the other spotlight"
+        );
+    }
+
+    #[test]
+    fn spotlights_dim_as_bright_as_asked() {
+        let shade = |brightness: f64| {
+            let document = Document::new(100, 100, 1.0)
+                .apply(Op::SetSpotlightBrightness(brightness))
+                .apply(Op::Add {
+                    kind: Kind::Spotlight {
+                        rect: Rect::new(10.0, 10.0, 50.0, 50.0),
+                    },
+                    paint: Paint::default(),
+                });
+            match render_list(&document).as_slice() {
+                [Primitive::Fill { color, .. }] => color.a,
+                drawn => panic!("{drawn:?}"),
+            }
+        };
+        assert_eq!(shade(Document::SPOTLIGHT_BRIGHTNESS), 0x8c);
+        assert!(shade(0.8) < shade(0.2));
+    }
+
+    #[test]
+    fn styles_have_names() {
         for style in StyleId::ALL {
             assert!(!style.name().is_empty());
-            assert_eq!(style.palette().len(), 6);
+        }
+    }
+
+    #[test]
+    fn every_style_shades_the_standard_colors_its_own_way() {
+        assert_eq!(StyleId::Clean.palette(), PALETTE);
+        for style in StyleId::ALL {
+            let palette = style.palette();
+            for (index, color) in palette.iter().enumerate() {
+                assert!(!palette[index + 1..].contains(color), "{style:?} repeats");
+            }
+            for other in StyleId::ALL.into_iter().filter(|other| *other != style) {
+                assert!(
+                    palette.iter().all(|color| !other.palette().contains(color)),
+                    "{style:?} and {other:?} share a shade"
+                );
+            }
         }
     }
 
@@ -436,9 +602,6 @@ mod tests {
         assert_eq!(smoothed.first(), shaky.first());
         assert_eq!(smoothed.last(), shaky.last());
         assert_eq!(chaikin(&shaky[..2], 3), shaky[..2].to_vec());
-        for style in StyleId::ALL {
-            assert_eq!(style.highlight().a, 255);
-        }
     }
 
     #[test]
@@ -483,14 +646,14 @@ mod tests {
         assert!(values.iter().any(|v| *v < 0.0) && values.iter().any(|v| *v > 0.0));
         let context = Context {
             paint: Paint {
-                weight: Weight::Thick,
+                weight: Weight::THICK,
                 ..Paint::default()
             },
             unit: 2.0,
             seed: 0,
+            shadow: true,
         };
         assert!((context.width() - 14.0).abs() < 1e-9);
-        assert!((context.text_size() - 64.0).abs() < 1e-9);
         assert_eq!(context.tint().a, 0x40);
     }
 }

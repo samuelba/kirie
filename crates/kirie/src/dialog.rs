@@ -7,7 +7,7 @@ use kirie_capture::CaptureError;
 use kirie_capture::portal;
 use zbus::Variant;
 
-/// Asks for an image or a `.kirie` project; `None` when the dialog was cancelled.
+/// Asks for an image or a `.kirie` project; `None` when the dialog was canceled.
 pub async fn open_image() -> Result<Option<PathBuf>, String> {
     let token = portal::token();
     let filters: Vec<(&str, Vec<(u32, &str)>)> = vec![
@@ -36,7 +36,7 @@ pub async fn open_image() -> Result<Option<PathBuf>, String> {
     .await
     {
         Ok(results) => results,
-        Err(CaptureError::Cancelled) => return Ok(None),
+        Err(CaptureError::Canceled) => return Ok(None),
         Err(error) => return Err(error.to_string()),
     };
     let uris: Vec<String> = results

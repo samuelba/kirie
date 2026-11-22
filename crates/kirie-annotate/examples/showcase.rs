@@ -45,7 +45,7 @@ fn marks(x: f64) -> Vec<(Kind, Paint)> {
                 to: p(380.0, 110.0),
             },
             Paint {
-                weight: Weight::Thin,
+                weight: Weight::THIN,
                 ..plain
             },
         ),
@@ -71,7 +71,7 @@ fn marks(x: f64) -> Vec<(Kind, Paint)> {
                     .collect(),
             },
             Paint {
-                weight: Weight::Thick,
+                weight: Weight::THICK,
                 ..plain
             },
         ),
@@ -104,7 +104,7 @@ fn marks(x: f64) -> Vec<(Kind, Paint)> {
                 number: 2,
             },
             Paint {
-                weight: Weight::Thick,
+                weight: Weight::THICK,
                 ..plain
             },
         ),
@@ -138,16 +138,11 @@ fn main() {
     let mut typesetter = Typesetter::new();
     for (column, style) in StyleId::ALL.into_iter().enumerate() {
         let x = COLUMN * column as f64;
-        let mut document = Document::new(width, height, 1.0).apply(Op::SetStyle(style));
+        let mut document = Document::new(width, height, 1.0).apply(Op::SetStyle {
+            style,
+            recolor: Vec::new(),
+        });
         for (kind, paint) in marks(x) {
-            let paint = Paint {
-                color: if paint.color == Paint::default().color {
-                    style.palette()[0]
-                } else {
-                    paint.color
-                },
-                ..paint
-            };
             document = document.apply(Op::Add { kind, paint });
         }
         document = document.apply(Op::Add {
@@ -157,8 +152,13 @@ fn main() {
             },
             paint: Paint {
                 color: kirie_annotate::Rgba::rgb(0x16, 0x18, 0x1d),
-                weight: Weight::Thin,
+                weight: Weight::THIN,
                 filled: false,
+                text: kirie_annotate::TextLook {
+                    size: 16.0,
+                    ..kirie_annotate::TextLook::default()
+                },
+                ..Paint::default()
             },
         });
         image = render(&document, &image, &mut typesetter).expect("renders");

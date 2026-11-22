@@ -1,4 +1,4 @@
-//! Line icons from Lucide (ISC), drawn in the current text or accent colour.
+//! Line icons from Lucide (ISC), drawn in the current text or accent color.
 
 use iced::widget::svg;
 
@@ -53,6 +53,13 @@ icons! {
     Project => "file-archive",
     Delete => "trash",
     Image => "image",
+    Plus => "plus",
+    AlignLeft => "text-align-start",
+    AlignCenter => "text-align-center",
+    AlignRight => "text-align-end",
+    TextOutline => "type-outline",
+    Shadow => "shadow",
+    Grip => "grip-vertical",
 }
 
 impl Icon {

@@ -3,9 +3,10 @@
 use kurbo::{Point, Rect, Vec2};
 use serde::{Deserialize, Serialize};
 
+use crate::primitive::{Align, Font};
 use crate::style::StyleId;
 
-/// An 8-bit sRGB colour with straight alpha.
+/// An 8-bit sRGB color with straight alpha.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Rgba {
     pub r: u8,
@@ -27,6 +28,9 @@ impl Rgba {
     /// `#rrggbb` or `#rrggbbaa`.
     pub fn from_hex(hex: &str) -> Option<Self> {
         let hex = hex.strip_prefix('#')?;
+        if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
         let byte = |at: usize| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok();
         match hex.len() {
             6 => Some(Self::rgb(byte(0)?, byte(2)?, byte(4)?)),
@@ -44,41 +48,173 @@ impl Rgba {
     }
 }
 
-/// How heavy a mark is; each style turns it into a width.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-pub enum Weight {
-    Thin,
-    #[default]
-    Medium,
-    Thick,
-}
+/// How heavy a mark is: its stroke width in logical pixels before the style and the image
+/// scale apply.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct Weight(f64);
 
 impl Weight {
-    /// The stroke width in logical pixels before the style and the image scale apply.
+    pub const THIN: Weight = Weight(2.0);
+    pub const MEDIUM: Weight = Weight(4.0);
+    pub const THICK: Weight = Weight(7.0);
+    pub const MIN: f64 = 1.0;
+    pub const MAX: f64 = 24.0;
+
+    pub fn new(width: f64) -> Self {
+        if width.is_finite() {
+            Self(width.clamp(Self::MIN, Self::MAX))
+        } else {
+            Self::MEDIUM
+        }
+    }
+
     pub const fn base(self) -> f64 {
-        match self {
-            Weight::Thin => 2.0,
-            Weight::Medium => 4.0,
-            Weight::Thick => 7.0,
+        self.0
+    }
+
+    /// The text size a weight gave before text had a size of its own: 16, 22 and 32 for the
+    /// thin, medium and thick weights there were then.
+    fn legacy_text_size(self) -> f64 {
+        if self.0 <= 4.0 {
+            16.0 + (self.0 - 2.0) * 3.0
+        } else {
+            22.0 + (self.0 - 4.0) * 10.0 / 3.0
         }
     }
 }
 
+impl Default for Weight {
+    fn default() -> Self {
+        Self::MEDIUM
+    }
+}
+
+impl<'de> Deserialize<'de> for Weight {
+    /// A width, or the name of one of the three weights older projects knew.
+    fn deserialize<D: serde::Deserializer<'de>>(from: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Stored {
+            Width(f64),
+            Named(Named),
+        }
+        #[derive(Deserialize)]
+        enum Named {
+            Thin,
+            Medium,
+            Thick,
+        }
+        Ok(match Stored::deserialize(from)? {
+            Stored::Width(width) => Self::new(width),
+            Stored::Named(Named::Thin) => Self::THIN,
+            Stored::Named(Named::Medium) => Self::MEDIUM,
+            Stored::Named(Named::Thick) => Self::THICK,
+        })
+    }
+}
+
+/// The standard colors as the clean style shades them, the first being the default; the other
+/// styles shade them their own way, see [`StyleId::palette`].
+pub const PALETTE: [Rgba; 6] = [
+    Rgba::rgb(0xe4, 0x57, 0x2e),
+    Rgba::rgb(0xf2, 0xb1, 0x34),
+    Rgba::rgb(0x2f, 0xb3, 0x72),
+    Rgba::rgb(0x3b, 0x82, 0xf6),
+    Rgba::rgb(0xff, 0xff, 0xff),
+    Rgba::rgb(0x16, 0x18, 0x1d),
+];
+
+/// The color the highlighter starts with.
+pub const HIGHLIGHT: Rgba = Rgba::rgb(0xf2, 0xd1, 0x3a);
+
+/// How text marks look, besides their color.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TextLook {
+    /// The size in logical pixels.
+    pub size: f64,
+    /// `None` sets text in the style's own face.
+    pub font: Option<Font>,
+    pub align: Align,
+    /// An outline in a contrasting color, so the text reads on any background.
+    pub outlined: bool,
+}
+
+impl TextLook {
+    pub const MIN_SIZE: f64 = 8.0;
+    pub const MAX_SIZE: f64 = 120.0;
+}
+
+impl Default for TextLook {
+    fn default() -> Self {
+        Self {
+            size: 22.0,
+            font: None,
+            align: Align::Left,
+            outlined: true,
+        }
+    }
+}
+
+/// The outline a spotlight lights.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum SpotShape {
+    #[default]
+    Rectangle,
+    Ellipse,
+}
+
 /// The paint a mark was made with.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(from = "StoredPaint")]
 pub struct Paint {
     pub color: Rgba,
     pub weight: Weight,
-    /// Closed shapes are filled with a translucent tint of the colour.
+    /// Closed shapes are filled with a translucent tint of the color.
     pub filled: bool,
+    pub text: TextLook,
+    pub spot: SpotShape,
 }
 
 impl Default for Paint {
     fn default() -> Self {
         Self {
-            color: Rgba::rgb(0xe4, 0x57, 0x2e),
-            weight: Weight::Medium,
+            color: PALETTE[0],
+            weight: Weight::MEDIUM,
             filled: false,
+            text: TextLook::default(),
+            spot: SpotShape::default(),
+        }
+    }
+}
+
+/// A paint as projects keep it; older ones sized text by the weight.
+#[derive(Deserialize)]
+struct StoredPaint {
+    color: Rgba,
+    weight: Weight,
+    filled: bool,
+    #[serde(default, deserialize_with = "present")]
+    text: Option<TextLook>,
+    #[serde(default)]
+    spot: SpotShape,
+}
+
+fn present<'de, D: serde::Deserializer<'de>>(from: D) -> Result<Option<TextLook>, D::Error> {
+    TextLook::deserialize(from).map(Some)
+}
+
+impl From<StoredPaint> for Paint {
+    fn from(stored: StoredPaint) -> Self {
+        Self {
+            color: stored.color,
+            weight: stored.weight,
+            filled: stored.filled,
+            text: stored.text.unwrap_or(TextLook {
+                size: stored.weight.legacy_text_size(),
+                ..TextLook::default()
+            }),
+            spot: stored.spot,
         }
     }
 }
@@ -140,13 +276,13 @@ pub struct Shape {
     pub paint: Paint,
     /// Overrides the document's style for this mark.
     pub style: Option<StyleId>,
-    /// Turn in radians around the centre of the mark's bounds; only boxes and ellipses turn.
+    /// Turn in radians around the center of the mark's bounds; only boxes and ellipses turn.
     #[serde(default)]
     pub rotation: f64,
 }
 
 impl Shape {
-    /// The turn about the mark's centre, as an affine map.
+    /// The turn about the mark's center, as an affine map.
     pub fn turn(&self) -> kurbo::Affine {
         if self.rotation == 0.0 {
             kurbo::Affine::IDENTITY
@@ -157,12 +293,21 @@ impl Shape {
 
     /// How far `point` is from the mark, taking its turn into account.
     pub fn distance(&self, point: Point) -> f64 {
-        self.kind.distance(self.turn().inverse() * point)
+        let point = self.turn().inverse() * point;
+        match self.kind {
+            Kind::Spotlight { rect } if self.paint.spot == SpotShape::Ellipse => {
+                Kind::Ellipse { rect }.distance(point)
+            }
+            _ => self.kind.distance(point),
+        }
     }
 }
 
 impl Kind {
-    /// The area the mark covers, before stroke width.
+    /// The area the mark covers, before stroke width. Text covers only its anchor here: how
+    /// far it reaches depends on its face and size, which [`Document::bounds`] measures.
+    ///
+    /// [`Document::bounds`]: crate::Document::bounds
     pub fn bounds(&self) -> Rect {
         match self {
             Kind::Arrow { from, to } | Kind::Line { from, to } => Rect::from_points(*from, *to),
@@ -173,13 +318,7 @@ impl Kind {
             | Kind::Redact { rect }
             | Kind::Spotlight { rect } => rect.abs(),
             Kind::Pen { points } | Kind::Highlighter { points } => points_bounds(points),
-            Kind::Text { at, text } => {
-                let longest = text.lines().map(|line| line.chars().count()).max();
-                let lines = text.lines().count().max(1);
-                #[allow(clippy::cast_precision_loss)]
-                let size = (longest.unwrap_or(0) as f64 * 10.0, lines as f64 * 20.0);
-                Rect::from_origin_size(*at, size)
-            }
+            Kind::Text { at, .. } => Rect::from_origin_size(*at, (0.0, 0.0)),
             Kind::Counter { at, .. } => Rect::from_center_size(*at, (28.0, 28.0)),
         }
     }
@@ -333,13 +472,71 @@ mod tests {
         assert_eq!(Rgba::from_hex("e4572e"), None);
         assert_eq!(Rgba::from_hex("#e457"), None);
         assert_eq!(Rgba::from_hex("#zz572e"), None);
+        assert_eq!(Rgba::from_hex("#+1+2+3"), None);
+    }
+
+    #[test]
+    fn older_paints_size_text_by_weight() {
+        let old = "(color: (r: 1, g: 2, b: 3, a: 255), weight: Thick, filled: true)";
+        let paint: Paint = ron::from_str(old).unwrap();
+        assert!((paint.text.size - 32.0).abs() < f64::EPSILON);
+        assert!(paint.text.outlined && paint.text.font.is_none());
+        assert_eq!(paint.spot, SpotShape::Rectangle);
+        let oval = Paint {
+            spot: SpotShape::Ellipse,
+            ..Paint::default()
+        };
+        let saved = ron::to_string(&oval).unwrap();
+        assert_eq!(ron::from_str::<Paint>(&saved).unwrap(), oval);
+    }
+
+    #[test]
+    fn oval_spotlights_are_hit_inside_the_ellipse() {
+        let spotlight = |spot| Shape {
+            id: ShapeId(1),
+            kind: Kind::Spotlight {
+                rect: Rect::new(0.0, 0.0, 20.0, 20.0),
+            },
+            paint: Paint {
+                spot,
+                ..Paint::default()
+            },
+            style: None,
+            rotation: 0.0,
+        };
+        let corner = Point::new(1.0, 1.0);
+        assert!(spotlight(SpotShape::Rectangle).distance(corner) < 1e-9);
+        assert!(spotlight(SpotShape::Ellipse).distance(corner) > 1.0);
+    }
+
+    #[test]
+    fn weights_keep_any_width_within_bounds() {
+        assert!((Weight::new(5.5).base() - 5.5).abs() < f64::EPSILON);
+        assert!((Weight::new(0.0).base() - Weight::MIN).abs() < f64::EPSILON);
+        assert!((Weight::new(99.0).base() - Weight::MAX).abs() < f64::EPSILON);
+        assert_eq!(Weight::new(f64::NAN), Weight::MEDIUM);
+        for (old, weight) in [
+            ("Thin", Weight::THIN),
+            ("Medium", Weight::MEDIUM),
+            ("Thick", Weight::THICK),
+        ] {
+            assert_eq!(ron::from_str::<Weight>(old).unwrap(), weight);
+        }
+        assert_eq!(ron::to_string(&Weight::new(5.5)).unwrap(), "5.5");
+        assert_eq!(ron::from_str::<Weight>("5.5").unwrap(), Weight::new(5.5));
+        assert_eq!(
+            ron::from_str::<Weight>("50").unwrap(),
+            Weight::new(Weight::MAX)
+        );
+        assert!((Weight::MEDIUM.legacy_text_size() - 22.0).abs() < 1e-9);
+        assert!((Weight::THICK.legacy_text_size() - 32.0).abs() < 1e-9);
     }
 
     #[test]
     fn weights_grow() {
-        assert!(Weight::Thin.base() < Weight::Medium.base());
-        assert!(Weight::Medium.base() < Weight::Thick.base());
-        assert_eq!(Weight::default(), Weight::Medium);
+        assert!(Weight::THIN.base() < Weight::MEDIUM.base());
+        assert!(Weight::MEDIUM.base() < Weight::THICK.base());
+        assert_eq!(Weight::default(), Weight::MEDIUM);
         assert!(!Paint::default().filled);
     }
 
@@ -363,10 +560,10 @@ mod tests {
         assert_eq!(Kind::Pen { points: vec![] }.bounds(), Rect::ZERO);
         assert_eq!(Kind::Counter { at: a, number: 1 }.bounds().center(), a);
         let text = Kind::Text {
-            at: Point::ORIGIN,
+            at: a,
             text: "ab\nc".into(),
         };
-        assert_eq!(text.bounds(), Rect::new(0.0, 0.0, 20.0, 40.0));
+        assert_eq!(text.bounds(), Rect::from_origin_size(a, (0.0, 0.0)));
     }
 
     #[test]

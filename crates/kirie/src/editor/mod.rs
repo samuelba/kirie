@@ -1,6 +1,7 @@
 //! App mode: a window to mark up any image or screenshot, keep it editable, and export it.
 
 mod canvas;
+mod closing;
 mod view;
 mod viewport;
 
@@ -19,7 +20,12 @@ use kirie_annotate::{
 };
 use kirie_ui::{Palette, Scheme};
 
+use self::closing::{Answer, Closing};
 use self::viewport::Viewport;
+use crate::controls;
+use crate::picker::{self, Picker, Target};
+use crate::swatches::Swatches;
+use crate::typing::{self, Typing};
 
 /// How close to a mark a click picks it, in screen pixels.
 const MARK_REACH: f64 = 6.0;
@@ -96,11 +102,18 @@ pub enum Message {
     Modifiers(keyboard::Modifiers),
     PickTool(Tool),
     PickStyle(StyleId),
+    ToggleShadow,
     PickColor(Rgba),
-    PickWeight(Weight),
+    /// Opens the color picker on a swatch, or to add one.
+    EditColor(Target),
+    Picker(picker::Event),
+    Weight(crate::controls::WeightEvent),
     ToggleFill,
+    Brightness(controls::BrightnessEvent),
+    Spot(kirie_annotate::SpotShape),
+    Look(controls::TextEvent),
     ToggleScheme,
-    TextChanged(String),
+    TextEdit(iced::widget::text_editor::Action),
     TextDone,
     Undo,
     Redo,
@@ -112,7 +125,12 @@ pub enum Message {
     Save,
     SaveProject,
     Done(Result<String, String>),
+    /// The image left the editor, saved or copied, as this document had it.
+    Exported(String, Box<Document>),
+    CloseRequested,
+    Close(Answer),
     Opened(Result<Loaded, String>),
+    Dropped(crate::drops::Dropped),
     ToastExpired(u64),
     Ipc(crate::ipc::Request),
     /// The desktop switched between light and dark.
@@ -120,12 +138,6 @@ pub enum Message {
     /// Hides the window and opens the overlay; the capture comes back over D-Bus.
     Capture,
     CaptureEnded(Result<(), String>),
-}
-
-#[derive(Debug, Clone)]
-struct Typing {
-    at: kurbo::Point,
-    text: String,
 }
 
 #[derive(Debug, Clone)]
@@ -140,12 +152,23 @@ pub struct Editor {
     image: Option<(RgbaImage, image::Handle)>,
     path: Option<PathBuf>,
     history: History,
+    /// The document as last opened, saved or copied, to tell unsaved changes.
+    kept: Document,
+    closing: Closing,
+    /// An image to open once the question about unsaved changes is answered.
+    then_open: Option<Box<Loaded>>,
     viewport: Viewport,
     tool: Tool,
     paint: Paint,
+    swatches: Swatches,
+    picker: Option<Picker>,
     draft: Option<Draft>,
     picked: Option<ShapeId>,
+    /// A slider is being dragged; its moves undo as one step.
+    sliding: bool,
     typing: Option<Typing>,
+    /// The last press, to tell a double click.
+    last_click: Option<iced::advanced::mouse::Click>,
     modifiers: keyboard::Modifiers,
     toast: Option<Toast>,
     toasts: u64,
@@ -166,17 +189,28 @@ impl std::fmt::Debug for Editor {
 
 impl Editor {
     pub fn boot(loaded: Option<Loaded>) -> (Self, Task<Message>) {
+        let swatches = Swatches::load();
         let mut editor = Self {
             palette: Palette::DARK,
             image: None,
             path: None,
             history: History::new(Document::new(1, 1, 1.0)),
+            kept: Document::new(1, 1, 1.0),
+            closing: Closing::No,
+            then_open: None,
             viewport: Viewport::fitted(),
             tool: Tool::Arrow,
-            paint: Paint::default(),
+            paint: Paint {
+                color: swatches.first(StyleId::default()),
+                ..Paint::default()
+            },
+            swatches,
+            picker: None,
             draft: None,
             picked: None,
+            sliding: false,
             typing: None,
+            last_click: None,
             modifiers: keyboard::Modifiers::default(),
             toast: None,
             toasts: 0,
@@ -187,7 +221,7 @@ impl Editor {
         if let Some(loaded) = loaded {
             editor.open(loaded);
         }
-        (editor, Task::none())
+        (editor, take_drops())
     }
 
     fn open(&mut self, mut loaded: Loaded) {
@@ -199,14 +233,19 @@ impl Editor {
             loaded.image.height(),
             loaded.image.as_raw().clone(),
         );
-        self.paint.color = loaded.document.style.palette()[0];
+        let before = self.document().style;
+        self.kept = loaded.document.clone();
         self.history = History::new(loaded.document);
+        self.follow_style(before);
         self.image = Some((loaded.image, handle));
         self.path = loaded.path;
         self.viewport = Viewport::fitted();
         self.draft = None;
         self.picked = None;
         self.typing = None;
+        self.sliding = false;
+        self.closing = Closing::No;
+        self.then_open = None;
         self.patches.borrow_mut().clear();
     }
 
@@ -247,44 +286,47 @@ impl Editor {
             Message::PickTool(tool) => {
                 self.commit_text();
                 self.tool = tool;
-                self.paint.color = crate::controls::tool_color(
+                self.paint.color = controls::tool_color(
                     Some(tool),
                     self.paint.color,
-                    self.document().style,
+                    self.swatches.first(self.document().style),
                 );
                 self.draft = None;
                 if tool != Tool::Select {
                     self.picked = None;
                 }
             }
-            Message::PickStyle(style) => {
-                self.history.apply(Op::SetStyle(style));
-                self.paint.color = style.palette()[0];
-            }
-            Message::PickColor(color) => self.repaint(|paint| paint.color = color),
-            Message::PickWeight(weight) => self.repaint(|paint| paint.weight = weight),
-            Message::ToggleFill => self.repaint(|paint| paint.filled = !paint.filled),
+            Message::PickStyle(_)
+            | Message::ToggleShadow
+            | Message::PickColor(_)
+            | Message::EditColor(_)
+            | Message::Picker(_)
+            | Message::Weight(_)
+            | Message::ToggleFill
+            | Message::Brightness(_)
+            | Message::Spot(_)
+            | Message::Look(_) => return self.restyle(message),
             Message::SystemScheme(scheme) => self.follow(Some(scheme)),
             Message::ToggleScheme => self.follow(None),
-            Message::TextChanged(text) => {
+            Message::TextEdit(action) => {
                 if let Some(typing) = &mut self.typing {
-                    typing.text = text;
+                    typing.content.perform(action);
                 }
             }
             Message::TextDone => self.commit_text(),
-            Message::Undo => {
-                self.history.undo();
-            }
-            Message::Redo => {
-                self.history.redo();
-            }
+            Message::Undo => self.travel(true),
+            Message::Redo => self.travel(false),
             Message::Delete => {
                 if let Some(id) = self.picked.take() {
                     self.history.apply(Op::Remove { ids: vec![id] });
                 }
             }
+            Message::Escape if self.closing == Closing::Asking => self.closing = Closing::No,
             Message::Escape => {
-                if self.typing.take().is_none() && self.draft.take().is_none() {
+                if self.picker.take().is_none()
+                    && self.typing.take().is_none()
+                    && self.draft.take().is_none()
+                {
                     self.picked = None;
                 }
             }
@@ -292,13 +334,14 @@ impl Editor {
             | Message::Open
             | Message::Paste
             | Message::Save
-            | Message::SaveProject => return self.files(&message),
+            | Message::SaveProject
+            | Message::Dropped(_) => return self.files(message),
             Message::Done(Ok(text)) if text.is_empty() => {}
-            Message::Done(result) => return self.toast(result),
-            Message::Opened(Ok(loaded)) => {
-                self.open(loaded);
-                return present();
-            }
+            Message::Done(_)
+            | Message::Exported(..)
+            | Message::CloseRequested
+            | Message::Close(_) => return self.finish(message),
+            Message::Opened(Ok(loaded)) => return self.replace(loaded),
             Message::Ipc(crate::ipc::Request::Open(path)) => {
                 return Task::perform(load_async(path), Message::Opened);
             }
@@ -325,8 +368,100 @@ impl Editor {
         Task::none()
     }
 
+    /// What became of an export, and closing the window.
+    fn finish(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Done(result) => {
+                if result.is_err() {
+                    self.closing = Closing::No;
+                    self.then_open = None;
+                }
+                self.toast(result)
+            }
+            Message::Exported(text, kept) => {
+                self.kept = *kept;
+                if self.closing == Closing::Saving {
+                    self.closing = Closing::No;
+                    let Some(next) = self.then_open.take() else {
+                        return iced::exit();
+                    };
+                    self.open(*next);
+                }
+                self.toast(Ok(text))
+            }
+            Message::CloseRequested => self.close_requested(),
+            Message::Close(answer) => self.answer(answer),
+            _ => Task::none(),
+        }
+    }
+
+    /// Changes to the style, colors, weight, fill and text look.
+    fn restyle(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::PickStyle(style) => {
+                let before = self.document().style;
+                let recolor = self.swatches.recolor(before, style);
+                self.history.apply(Op::SetStyle { style, recolor });
+                self.follow_style(before);
+            }
+            Message::ToggleShadow => {
+                let shadow = !self.document().shadow;
+                self.history.apply(Op::SetShadow(shadow));
+            }
+            Message::PickColor(color) => self.repaint(|paint| paint.color = color),
+            Message::EditColor(target) => {
+                self.picker = Some(Picker::new(
+                    target,
+                    self.document().style,
+                    &self.swatches,
+                    self.paint.color,
+                ));
+            }
+            Message::Picker(event) => return self.edit_color(event),
+            Message::Weight(controls::WeightEvent::Done)
+            | Message::Brightness(controls::BrightnessEvent::Done)
+            | Message::Look(controls::TextEvent::SizeDone) => self.sliding = false,
+            Message::Brightness(controls::BrightnessEvent::Slide(brightness)) => {
+                self.history
+                    .apply_gradually(Op::SetSpotlightBrightness(brightness), self.sliding);
+                self.sliding = true;
+            }
+            Message::Weight(controls::WeightEvent::Pick(weight)) => {
+                self.repaint(|paint| paint.weight = weight);
+            }
+            Message::Weight(controls::WeightEvent::Slide(width)) => {
+                self.repaint_gradually(|paint| paint.weight = Weight::new(width), true);
+            }
+            Message::ToggleFill => self.repaint(|paint| paint.filled = !paint.filled),
+            Message::Spot(spot) => self.repaint(|paint| paint.spot = spot),
+            Message::Look(event) => {
+                self.repaint_gradually(
+                    |paint| paint.text = event.apply(paint.text),
+                    event.gradual(),
+                );
+            }
+            _ => {}
+        }
+        Task::none()
+    }
+
+    fn edit_color(&mut self, event: picker::Event) -> Task<Message> {
+        let picker::Outcome::Changed { pick } =
+            picker::update(&mut self.picker, &mut self.swatches, event)
+        else {
+            return Task::none();
+        };
+        if let Some(color) = pick {
+            self.repaint(|paint| paint.color = color);
+        }
+        match self.swatches.save() {
+            Ok(()) => Task::none(),
+            Err(error) => self.toast(Err(error)),
+        }
+    }
+
     /// Copying, saving, opening and pasting.
-    fn files(&mut self, message: &Message) -> Task<Message> {
+    fn files(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Copy => self.export(Export::Copy),
             Message::Open => Task::perform(crate::dialog::open_image(), |picked| match picked {
@@ -339,6 +474,17 @@ impl Editor {
             }),
             Message::Save => self.export(Export::Save),
             Message::SaveProject => self.export(Export::Project),
+            Message::Dropped(crate::drops::Dropped::Files(paths)) => {
+                paths.into_iter().next().map_or_else(Task::none, |path| {
+                    Task::perform(load_async(path), Message::Opened)
+                })
+            }
+            Message::Dropped(crate::drops::Dropped::Png(bytes)) => {
+                let decoded = ::image::load_from_memory(&bytes)
+                    .map(|image| Loaded::image(image.to_rgba8(), None))
+                    .map_err(|error| format!("cannot open the dropped image: {error}"));
+                self.update(Message::Opened(decoded))
+            }
             _ => Task::none(),
         }
     }
@@ -358,19 +504,76 @@ impl Editor {
         }
     }
 
+    /// Undoes or redoes a step; the drawing color follows the style there.
+    fn travel(&mut self, undo: bool) {
+        let before = self.document().style;
+        if undo {
+            self.history.undo();
+        } else {
+            self.history.redo();
+        }
+        self.follow_style(before);
+    }
+
+    /// Keeps drawing in the standard color drawn with before the style changed from `before`,
+    /// in the new style's shade of it.
+    fn follow_style(&mut self, before: StyleId) {
+        let now = self.document().style;
+        if now != before {
+            let recolor = self.swatches.recolor(before, now);
+            self.paint.color = crate::controls::restyled(self.paint.color, &recolor);
+        }
+    }
+
     /// Changes the paint for new marks, and the picked mark's paint too.
     fn repaint(&mut self, change: impl Fn(&mut Paint)) {
+        self.repaint_gradually(change, false);
+    }
+
+    /// Like [`Self::repaint`]; a `gradual` change joins the step the slider drag began.
+    fn repaint_gradually(&mut self, change: impl Fn(&mut Paint), gradual: bool) {
         change(&mut self.paint);
-        if let Some(id) = self.picked
-            && let Some(shape) = self.document().shape(id)
-        {
-            let mut paint = shape.paint;
-            change(&mut paint);
-            self.history.apply(Op::Repaint {
-                ids: vec![id],
-                paint,
-            });
+        let Some(shape) = self.picked.and_then(|id| self.document().shape(id)) else {
+            return;
+        };
+        let mut paint = shape.paint;
+        change(&mut paint);
+        let op = Op::Repaint {
+            ids: vec![shape.id],
+            paint,
+        };
+        if gradual {
+            self.history.apply_gradually(op, self.sliding);
+        } else {
+            self.history.apply(op);
         }
+        self.sliding = gradual;
+    }
+
+    /// The paint the controls show: the picked mark's, else the one new marks get.
+    fn shown_paint(&self) -> Paint {
+        self.picked
+            .and_then(|id| self.document().shape(id))
+            .map_or(self.paint, |shape| shape.paint)
+    }
+
+    /// Whether the text controls apply: to text being typed, a picked text mark, or the next.
+    fn texting(&self) -> bool {
+        self.tool == Tool::Text
+            || self.typing.is_some()
+            || self
+                .picked
+                .and_then(|id| self.document().shape(id))
+                .is_some_and(|shape| matches!(shape.kind, Kind::Text { .. }))
+    }
+
+    /// Whether the spotlight controls apply: to the spotlight tool or a picked spotlight.
+    fn spotlighting(&self) -> bool {
+        self.tool == Tool::Spotlight
+            || self
+                .picked
+                .and_then(|id| self.document().shape(id))
+                .is_some_and(|shape| matches!(shape.kind, Kind::Spotlight { .. }))
     }
 
     fn pointer(&mut self, pointer: Pointer, scale: f32) -> Task<Message> {
@@ -381,6 +584,19 @@ impl Editor {
             Pointer::Pressed(at) => {
                 self.commit_text();
                 let reach = MARK_REACH / f64::from(scale.max(0.01));
+                #[allow(clippy::cast_possible_truncation)]
+                let double = typing::double_click(
+                    &mut self.last_click,
+                    Point::new(at.x as f32, at.y as f32),
+                );
+                let words = match self.tool {
+                    Tool::Text => typing::text_at(self.document(), at, reach),
+                    Tool::Select if double => typing::text_at(self.document(), at, reach),
+                    _ => None,
+                };
+                if let Some(id) = words {
+                    return self.edit_text(id);
+                }
                 match kirie_annotate::tools::press(
                     self.tool,
                     at,
@@ -395,12 +611,11 @@ impl Editor {
                         }
                         self.draft = Some(draft);
                     }
-                    Press::Done(op) => self.history.apply(op),
+                    Press::Done(op) => {
+                        self.history.apply(op);
+                    }
                     Press::TypeAt(at) => {
-                        self.typing = Some(Typing {
-                            at,
-                            text: String::new(),
-                        });
+                        self.typing = Some(Typing::new(at));
                         return iced::widget::operation::focus(view::TEXT_INPUT);
                     }
                     Press::Nothing => self.picked = None,
@@ -423,19 +638,24 @@ impl Editor {
     }
 
     fn commit_text(&mut self) {
-        let Some(typing) = self.typing.take() else {
-            return;
-        };
-        if typing.text.trim().is_empty() {
-            return;
+        if let Some(op) = self
+            .typing
+            .take()
+            .and_then(|typing| typing.finish(self.paint))
+        {
+            self.history.apply(op);
         }
-        self.history.apply(Op::Add {
-            kind: Kind::Text {
-                at: typing.at,
-                text: typing.text,
-            },
-            paint: self.paint,
-        });
+    }
+
+    /// Opens the words of a placed text mark for typing.
+    fn edit_text(&mut self, id: ShapeId) -> Task<Message> {
+        let Some(typing) = self.document().shape(id).and_then(Typing::edit) else {
+            return Task::none();
+        };
+        self.typing = Some(typing);
+        self.picked = Some(id);
+        self.draft = None;
+        iced::widget::operation::focus(view::TEXT_INPUT)
     }
 
     fn export(&mut self, export: Export) -> Task<Message> {
@@ -443,13 +663,19 @@ impl Editor {
         let Some((image, _)) = &self.image else {
             return Task::none();
         };
+        let kept = Box::new(self.document().clone());
+        let exported = move |done: Result<String, String>| match done {
+            Ok(text) => Message::Exported(text, kept),
+            Err(error) => Message::Done(Err(error)),
+        };
+        let saved = |path: std::path::PathBuf| format!("Saved {}", crate::save::pretty(&path));
         if export == Export::Project {
             let project = Project {
                 image: image.clone(),
                 document: self.document().clone(),
             };
-            return Task::perform(crate::save::save_project(project), |saved| {
-                Message::Done(saved.map(|path| format!("Saved {}", crate::save::pretty(&path))))
+            return Task::perform(crate::save::save_project(project), move |done| {
+                exported(done.map(saved))
             });
         }
         let rendered = kirie_annotate::render::render(
@@ -459,15 +685,20 @@ impl Editor {
         );
         let picture = match rendered {
             Ok(picture) => picture,
-            Err(error) => return self.toast(Err(error.to_string())),
+            Err(error) => {
+                self.closing = Closing::No;
+                return self.toast(Err(error.to_string()));
+            }
         };
         match export {
-            Export::Copy => Task::perform(crate::clipboard::copy(picture), |copied| {
-                Message::Done(copied.map(|()| "Copied to the clipboard".to_owned()))
+            Export::Copy => Task::perform(crate::clipboard::copy(picture), move |copied| {
+                exported(copied.map(|()| "Copied to the clipboard".to_owned()))
             }),
-            Export::Save | Export::Project => Task::perform(crate::save::save(picture), |saved| {
-                Message::Done(saved.map(|path| format!("Saved {}", crate::save::pretty(&path))))
-            }),
+            Export::Save | Export::Project => {
+                Task::perform(crate::save::save(picture), move |done| {
+                    exported(done.map(saved))
+                })
+            }
         }
     }
 
@@ -485,7 +716,8 @@ impl Editor {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let keys = if self.typing.is_some() {
+        let quiet = self.typing.is_some() || self.picker.is_some() || self.closing != Closing::No;
+        let keys = if quiet {
             event::listen_with(typing_key)
         } else {
             event::listen_with(key)
@@ -494,6 +726,7 @@ impl Editor {
             keys,
             Subscription::run(crate::ipc::requests).map(Message::Ipc),
             Subscription::run(crate::appearance::changes).map(Message::SystemScheme),
+            window::close_requests().map(|_| Message::CloseRequested),
         ])
     }
 
@@ -509,6 +742,17 @@ async fn load_async(path: PathBuf) -> Result<Loaded, String> {
     tokio::task::spawn_blocking(move || load(&path))
         .await
         .map_err(|error| error.to_string())?
+}
+
+/// Opens what is dropped on the editor's window, once it is open.
+fn take_drops() -> Task<Message> {
+    window::oldest()
+        .then(|id| id.map_or_else(Task::none, |id| window::run(id, crate::drops::display)))
+        .then(|display| {
+            display.map_or_else(Task::none, |display| {
+                Task::run(crate::drops::drops(display), Message::Dropped)
+            })
+        })
 }
 
 /// Raises and focuses the editor window.
@@ -612,6 +856,7 @@ pub fn run(loaded: Option<Loaded>) -> iced::Result {
     .window(window::Settings {
         size: Size::new(1280.0, 840.0),
         min_size: Some(Size::new(760.0, 520.0)),
+        exit_on_close_request: false,
         platform_specific: window::settings::PlatformSpecific {
             application_id: crate::APP_ID.to_owned(),
             ..window::settings::PlatformSpecific::default()

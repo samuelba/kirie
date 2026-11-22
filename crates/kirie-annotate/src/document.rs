@@ -6,7 +6,7 @@ use std::sync::Arc;
 use kurbo::{Rect, Vec2};
 use serde::{Deserialize, Serialize};
 
-use crate::shape::{Kind, Paint, Shape, ShapeId};
+use crate::shape::{Kind, Paint, Rgba, Shape, ShapeId};
 use crate::style::StyleId;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -17,6 +17,12 @@ pub struct Document {
     /// Image pixels per logical pixel, so marks look the same size on high-density captures.
     pub unit: f64,
     pub style: StyleId,
+    /// Whether marks cast a shadow, in the styles that draw one.
+    #[serde(default = "casts_shadows")]
+    pub shadow: bool,
+    /// How bright spotlights leave the rest of the image, from black at 0 to untouched at 1.
+    #[serde(default = "usual_spotlight_brightness")]
+    pub spotlight_brightness: f64,
     /// The part of the image that is kept, if cropped.
     pub crop: Option<Rect>,
     shapes: Vec<Arc<Shape>>,
@@ -56,11 +62,41 @@ pub enum Op {
         ids: Vec<ShapeId>,
     },
     Clear,
-    SetStyle(StyleId),
+    /// Changes the style. Marks in the document's style painted the first color of a pair in
+    /// `recolor` take the second: the old style's shade of a standard color becomes the new one's.
+    SetStyle {
+        style: StyleId,
+        recolor: Vec<(Rgba, Rgba)>,
+    },
+    SetShadow(bool),
+    SetSpotlightBrightness(f64),
     Crop(Option<Rect>),
 }
 
+fn casts_shadows() -> bool {
+    true
+}
+
+fn usual_spotlight_brightness() -> f64 {
+    Document::SPOTLIGHT_BRIGHTNESS
+}
+
 impl Document {
+    pub const SPOTLIGHT_BRIGHTNESS: f64 = 0.45;
+    pub const SPOTLIGHT_BRIGHTNESS_RANGE: std::ops::RangeInclusive<f64> = 0.05..=0.9;
+
+    /// `brightness` kept within [`Self::SPOTLIGHT_BRIGHTNESS_RANGE`].
+    pub fn spotlight_brightness(brightness: f64) -> f64 {
+        if brightness.is_finite() {
+            brightness.clamp(
+                *Self::SPOTLIGHT_BRIGHTNESS_RANGE.start(),
+                *Self::SPOTLIGHT_BRIGHTNESS_RANGE.end(),
+            )
+        } else {
+            Self::SPOTLIGHT_BRIGHTNESS
+        }
+    }
+
     pub fn new(width: u32, height: u32, unit: f64) -> Self {
         Self {
             width,
@@ -71,6 +107,8 @@ impl Document {
                 1.0
             },
             style: StyleId::default(),
+            shadow: true,
+            spotlight_brightness: Self::SPOTLIGHT_BRIGHTNESS,
             crop: None,
             shapes: Vec::new(),
             next_id: 1,
@@ -98,8 +136,26 @@ impl Document {
     pub fn hit(&self, point: kurbo::Point, reach: f64) -> Option<ShapeId> {
         self.shapes()
             .rev()
-            .find(|shape| shape.distance(point) <= reach)
+            .find(|shape| self.distance(shape, point) <= reach)
             .map(|shape| shape.id)
+    }
+
+    /// The area `shape` covers here, before stroke width, with text measured in its face.
+    pub fn bounds(&self, shape: &Shape) -> Rect {
+        crate::style::bounds(shape, self.style, self.unit)
+    }
+
+    /// How far `point` is from `shape`, 0 when on or inside it.
+    pub fn distance(&self, shape: &Shape, point: kurbo::Point) -> f64 {
+        match shape.kind {
+            Kind::Text { .. } => {
+                let area = self.bounds(shape);
+                let dx = (area.x0 - point.x).max(point.x - area.x1).max(0.0);
+                let dy = (area.y0 - point.y).max(point.y - area.y1).max(0.0);
+                dx.hypot(dy)
+            }
+            _ => shape.distance(point),
+        }
     }
 
     /// The next number for a step counter.
@@ -132,6 +188,8 @@ impl Document {
     ) -> Document {
         let mut next = Document::new(width, height, unit);
         next.style = self.style;
+        next.shadow = self.shadow;
+        next.spotlight_brightness = self.spotlight_brightness;
         next.next_id = self.next_id;
         next.shapes = self
             .shapes
@@ -188,7 +246,32 @@ impl Document {
                 next.shapes = kept.into_iter().chain(raised).collect();
             }
             Op::Clear => next.shapes.clear(),
-            Op::SetStyle(style) => next.style = style,
+            Op::SetStyle { style, recolor } => {
+                next.style = style;
+                let painted = |shape: &Shape| {
+                    recolor
+                        .iter()
+                        .find(|(from, _)| *from == shape.paint.color)
+                        .filter(|_| shape.style.is_none())
+                        .map(|(_, to)| *to)
+                };
+                let ids: Vec<ShapeId> = next
+                    .shapes()
+                    .filter(|shape| painted(shape).is_some())
+                    .map(|shape| shape.id)
+                    .collect();
+                next.map(&ids, |shape| Shape {
+                    paint: Paint {
+                        color: painted(shape).unwrap_or(shape.paint.color),
+                        ..shape.paint
+                    },
+                    ..shape.clone()
+                });
+            }
+            Op::SetShadow(shadow) => next.shadow = shadow,
+            Op::SetSpotlightBrightness(brightness) => {
+                next.spotlight_brightness = Self::spotlight_brightness(brightness);
+            }
             Op::Crop(crop) => {
                 next.crop = crop
                     .map(|rect| self.clamp(rect))
@@ -218,6 +301,8 @@ pub struct History {
     current: Document,
     past: Vec<Document>,
     future: Vec<Document>,
+    /// The last step was made gradually and nothing has happened since, so it can still grow.
+    gradual: bool,
 }
 
 impl History {
@@ -229,6 +314,7 @@ impl History {
             current: document,
             past: Vec::new(),
             future: Vec::new(),
+            gradual: false,
         }
     }
 
@@ -244,19 +330,35 @@ impl History {
         !self.future.is_empty()
     }
 
-    /// Applies an edit as one undo step. Edits that change nothing leave no step.
-    pub fn apply(&mut self, op: Op) {
+    /// Applies an edit as one undo step. Edits that change nothing leave no step; returns
+    /// whether this one did.
+    pub fn apply(&mut self, op: Op) -> bool {
+        self.gradual = false;
         let next = self.current.apply(op);
-        if next != self.current {
-            self.past.push(std::mem::replace(&mut self.current, next));
-            if self.past.len() > Self::LIMIT {
-                self.past.remove(0);
-            }
-            self.future.clear();
+        if next == self.current {
+            return false;
+        }
+        self.past.push(std::mem::replace(&mut self.current, next));
+        if self.past.len() > Self::LIMIT {
+            self.past.remove(0);
+        }
+        self.future.clear();
+        true
+    }
+
+    /// Applies one move of an edit made in many, like dragging a slider, so they all undo in
+    /// one step. A move `continuing` the same drag joins the step the drag began, unless
+    /// something else happened since, such as an undo; then it begins a step of its own.
+    pub fn apply_gradually(&mut self, op: Op, continuing: bool) {
+        if continuing && self.gradual {
+            self.current = self.current.apply(op);
+        } else {
+            self.gradual = self.apply(op);
         }
     }
 
     pub fn undo(&mut self) -> bool {
+        self.gradual = false;
         let Some(previous) = self.past.pop() else {
             return false;
         };
@@ -266,6 +368,7 @@ impl History {
     }
 
     pub fn redo(&mut self) -> bool {
+        self.gradual = false;
         let Some(next) = self.future.pop() else {
             return false;
         };
@@ -277,6 +380,8 @@ impl History {
 #[cfg(test)]
 mod tests {
     use kurbo::Point;
+
+    use crate::shape::PALETTE;
 
     use super::*;
 
@@ -376,6 +481,39 @@ mod tests {
     }
 
     #[test]
+    fn text_is_hit_where_its_letters_are() {
+        let doc = Document::new(400, 200, 1.0).apply(Op::Add {
+            kind: Kind::Text {
+                at: Point::new(10.0, 10.0),
+                text: "a fairly long line".into(),
+            },
+            paint: Paint::default(),
+        });
+        let text = doc.shape(ShapeId(1)).unwrap();
+        let area = doc.bounds(text);
+        assert!(area.width() > 150.0 && area.height() > 20.0, "{area:?}");
+        assert_eq!(doc.hit(Point::new(150.0, 20.0), 2.0), Some(ShapeId(1)));
+        assert_eq!(doc.hit(Point::new(10.0, 60.0), 2.0), None);
+        let bigger = doc.apply(Op::Repaint {
+            ids: vec![ShapeId(1)],
+            paint: Paint {
+                text: crate::shape::TextLook {
+                    size: 44.0,
+                    ..crate::shape::TextLook::default()
+                },
+                ..Paint::default()
+            },
+        });
+        let grown = bigger.bounds(bigger.shape(ShapeId(1)).unwrap());
+        assert!(grown.width() > area.width() * 1.8);
+        let sketched = doc.apply(Op::SetStyle {
+            style: StyleId::Sketch,
+            recolor: Vec::new(),
+        });
+        assert_ne!(sketched.bounds(text), area, "measured in the style's face");
+    }
+
+    #[test]
     fn counters_count_up() {
         let doc = Document::new(10, 10, 1.0);
         assert_eq!(doc.next_counter(), 1);
@@ -390,6 +528,36 @@ mod tests {
     }
 
     #[test]
+    fn a_new_style_reshades_standard_colors_and_keeps_the_rest() {
+        let red = (PALETTE[0], StyleId::Ink.palette()[0]);
+        let teal = Rgba::rgb(0x14, 0xb8, 0xa6);
+        let painted = |color| Op::Add {
+            kind: Kind::Rectangle {
+                rect: Rect::new(0.0, 0.0, 5.0, 5.0),
+            },
+            paint: Paint {
+                color,
+                ..Paint::default()
+            },
+        };
+        let doc = Document::new(10, 10, 1.0)
+            .apply(painted(red.0))
+            .apply(painted(teal))
+            .apply(painted(red.0));
+        let own = doc.shapes().last().unwrap().id;
+        let mut doc = doc;
+        Arc::make_mut(&mut doc.shapes[2]).style = Some(StyleId::Clean);
+        let inked = doc.apply(Op::SetStyle {
+            style: StyleId::Ink,
+            recolor: vec![red],
+        });
+        assert_eq!(inked.style, StyleId::Ink);
+        let colors: Vec<Rgba> = inked.shapes().map(|shape| shape.paint.color).collect();
+        assert_eq!(colors, [red.1, teal, red.0]);
+        assert_eq!(inked.shape(own).unwrap().style, Some(StyleId::Clean));
+    }
+
+    #[test]
     fn crops_stay_inside_the_image() {
         let doc = Document::new(100, 50, 1.0);
         assert_eq!(doc.visible(), Rect::new(0.0, 0.0, 100.0, 50.0));
@@ -399,14 +567,41 @@ mod tests {
         let outside = doc.apply(Op::Crop(Some(Rect::new(200.0, 200.0, 300.0, 300.0))));
         assert_eq!(outside.crop, None);
         assert_eq!(cropped.apply(Op::Crop(None)).crop, None);
-        let styled = doc.apply(Op::SetStyle(StyleId::Sketch));
+        let styled = doc.apply(Op::SetStyle {
+            style: StyleId::Sketch,
+            recolor: Vec::new(),
+        });
         assert_eq!(styled.style, StyleId::Sketch);
+        assert!(doc.shadow);
+        let flat = doc.apply(Op::SetShadow(false));
+        assert!(!flat.shadow);
+        assert!(
+            !flat
+                .transformed(kurbo::Affine::IDENTITY, 100, 50, 1.0)
+                .shadow
+        );
+    }
+
+    #[test]
+    fn spotlight_brightness_stays_within_range() {
+        let doc = Document::new(10, 10, 1.0);
+        let dark = doc.apply(Op::SetSpotlightBrightness(-1.0));
+        assert!((dark.spotlight_brightness - 0.05).abs() < 1e-9);
+        let bright = doc.apply(Op::SetSpotlightBrightness(0.7));
+        assert!((bright.spotlight_brightness - 0.7).abs() < 1e-9);
+        let kept = bright.transformed(kurbo::Affine::IDENTITY, 10, 10, 1.0);
+        assert!((kept.spotlight_brightness - 0.7).abs() < 1e-9);
+        let broken = doc.apply(Op::SetSpotlightBrightness(f64::NAN));
+        assert!((broken.spotlight_brightness - Document::SPOTLIGHT_BRIGHTNESS).abs() < 1e-9);
     }
 
     #[test]
     fn transformed_documents_keep_their_marks() {
         let doc = Document::new(100, 100, 1.0)
-            .apply(Op::SetStyle(StyleId::Ink))
+            .apply(Op::SetStyle {
+                style: StyleId::Ink,
+                recolor: Vec::new(),
+            })
             .apply(line(10.0));
         let moved = doc.transformed(
             kurbo::Affine::translate((-5.0, 0.0)).then_scale(2.0),
@@ -451,6 +646,42 @@ mod tests {
             ids: vec![ShapeId(9)],
         });
         assert!(!history.can_undo());
+    }
+
+    #[test]
+    fn a_drag_undoes_in_one_step() {
+        let mut history = History::new(Document::new(10, 10, 1.0));
+        history.apply(line(1.0));
+        history.apply_gradually(line(2.0), false);
+        history.apply_gradually(line(3.0), true);
+        history.apply_gradually(line(4.0), true);
+        assert_eq!(history.current().shapes().len(), 4);
+        history.undo();
+        assert_eq!(history.current().shapes().len(), 1);
+        assert!(!History::new(Document::new(1, 1, 1.0)).apply(Op::Clear));
+    }
+
+    #[test]
+    fn a_drag_never_joins_a_step_it_did_not_begin() {
+        let mut history = History::new(Document::new(10, 10, 1.0));
+        history.apply(line(1.0));
+        history.apply_gradually(line(2.0), false);
+        history.undo();
+        history.apply_gradually(line(3.0), true);
+        assert!(
+            history.undo(),
+            "the move after the undo is a step of its own"
+        );
+        assert_eq!(
+            history.current().shapes().len(),
+            1,
+            "the first line is kept"
+        );
+        history.apply_gradually(line(5.0), false);
+        history.apply(line(6.0));
+        history.apply_gradually(line(7.0), true);
+        history.undo();
+        assert_eq!(history.current().shapes().len(), 3);
     }
 
     #[test]

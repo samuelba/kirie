@@ -23,6 +23,9 @@ use kirie_capture::{Frame, geometry};
 use kirie_ui::Palette;
 
 use self::selection::{Release, Selection};
+use crate::picker::{self, Picker, Target};
+use crate::swatches::Swatches;
+use crate::typing::{self, Typing};
 
 pub const NAMESPACE: &str = "kirie-overlay";
 /// How close to a handle a press grabs it, in logical pixels.
@@ -60,10 +63,17 @@ pub enum Message {
     Modifiers(keyboard::Modifiers),
     PickTool(Option<Tool>),
     PickStyle(StyleId),
+    ToggleShadow,
     PickColor(kirie_annotate::Rgba),
-    PickWeight(Weight),
+    /// Opens the color picker on a swatch, or to add one.
+    EditColor(Target),
+    Picker(picker::Event),
+    Weight(crate::controls::WeightEvent),
     ToggleFill,
-    TextChanged(String),
+    Brightness(crate::controls::BrightnessEvent),
+    Spot(kirie_annotate::SpotShape),
+    Look(crate::controls::TextEvent),
+    TextEdit(iced::widget::text_editor::Action),
     TextDone,
     Undo,
     Redo,
@@ -76,6 +86,12 @@ pub enum Message {
     Nudge(Vector),
     Finished(Result<Outcome, String>),
     Resized(window::Id, Size),
+    /// The pointer over the toolbar's grip, in the grip's coordinates.
+    GripHover(Point),
+    ToolbarGrab,
+    /// The pointer while the toolbar is dragged, in the coordinates of a surface.
+    ToolbarMoved(window::Id, Point),
+    ToolbarDropped,
     Layer(LayerShellCustomActionWithId),
 }
 
@@ -107,19 +123,12 @@ impl TryInto<LayerShellCustomActionWithId> for Message {
 #[derive(Debug, Clone, Default)]
 pub enum Outcome {
     #[default]
-    Cancelled,
+    Canceled,
     Saved(PathBuf),
     Copied,
     /// A project for the editor to open.
     Edit(PathBuf),
     Failed(String),
-}
-
-/// Text being typed for a text mark.
-#[derive(Debug, Clone)]
-struct Typing {
-    at: kurbo::Point,
-    text: String,
 }
 
 pub struct Overlay {
@@ -135,13 +144,25 @@ pub struct Overlay {
     palette: Palette,
     tool: Option<Tool>,
     paint: Paint,
+    swatches: Swatches,
+    picker: Option<Picker>,
     history: History,
     draft: Option<Draft>,
     /// The tool the current pointer gesture draws with, if it draws at all.
     drawing: Option<Tool>,
     /// The mark the select tool picked, whose grips are showing.
     picked: Option<kirie_annotate::ShapeId>,
+    /// A slider is being dragged; its moves undo as one step.
+    sliding: bool,
     typing: Option<Typing>,
+    /// Where the toolbar was dragged to, in desktop coordinates.
+    toolbar_at: Option<Point>,
+    /// While the toolbar is dragged: where it is held, from its top left.
+    toolbar_drag: Option<Vector>,
+    /// The pointer over the grip, from the grip's top left.
+    grip_at: Point,
+    /// The last press, to tell a double click.
+    last_click: Option<iced::advanced::mouse::Click>,
     busy: bool,
     /// What Enter does.
     primary: Action,
@@ -249,6 +270,7 @@ impl Overlay {
             .into_iter()
             .map(|window| (area(window.rect), window.title))
             .collect();
+        let swatches = Swatches::load();
         let overlay = Self {
             windows,
             captures: frames,
@@ -260,12 +282,22 @@ impl Overlay {
             modifiers: keyboard::Modifiers::default(),
             palette: Palette::DARK,
             tool: None,
-            paint: Paint::default(),
+            paint: Paint {
+                color: swatches.first(document.style),
+                ..Paint::default()
+            },
+            swatches,
+            picker: None,
             history: History::new(document),
             draft: None,
             drawing: None,
             picked: None,
+            sliding: false,
             typing: None,
+            toolbar_at: None,
+            toolbar_drag: None,
+            grip_at: Point::ORIGIN,
+            last_click: None,
             busy: false,
             primary,
             typesetter: RefCell::new(Typesetter::new()),
@@ -342,7 +374,20 @@ impl Overlay {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Pointer(pointer) if self.toolbar_drag.is_some() => {
+                if let Pointer::Released(_) = pointer {
+                    self.drag_toolbar(&Message::ToolbarDropped);
+                }
+                Task::none()
+            }
             Message::Pointer(pointer) => self.pointer(pointer),
+            Message::GripHover(_)
+            | Message::ToolbarGrab
+            | Message::ToolbarMoved(..)
+            | Message::ToolbarDropped => {
+                self.drag_toolbar(&message);
+                Task::none()
+            }
             Message::Modifiers(modifiers) => {
                 self.modifiers = modifiers;
                 Task::none()
@@ -353,31 +398,30 @@ impl Overlay {
                     self.picked = None;
                 }
                 self.tool = tool;
-                self.paint.color =
-                    crate::controls::tool_color(tool, self.paint.color, self.style());
+                self.paint.color = crate::controls::tool_color(
+                    tool,
+                    self.paint.color,
+                    self.swatches.first(self.style()),
+                );
                 self.draft = None;
                 Task::none()
             }
-            Message::PickStyle(style) => {
-                self.history.apply(Op::SetStyle(style));
-                self.paint.color = style.palette()[0];
+            Message::PickStyle(_)
+            | Message::ToggleShadow
+            | Message::PickColor(_)
+            | Message::EditColor(_)
+            | Message::Picker(_)
+            | Message::Weight(_)
+            | Message::ToggleFill
+            | Message::Brightness(_)
+            | Message::Spot(_)
+            | Message::Look(_) => {
+                self.restyle(message);
                 Task::none()
             }
-            Message::PickColor(color) => {
-                self.paint.color = color;
-                Task::none()
-            }
-            Message::PickWeight(weight) => {
-                self.paint.weight = weight;
-                Task::none()
-            }
-            Message::ToggleFill => {
-                self.paint.filled = !self.paint.filled;
-                Task::none()
-            }
-            Message::TextChanged(text) => {
+            Message::TextEdit(action) => {
                 if let Some(typing) = &mut self.typing {
-                    typing.text = text;
+                    typing.content.perform(action);
                 }
                 Task::none()
             }
@@ -386,11 +430,11 @@ impl Overlay {
                 Task::none()
             }
             Message::Undo => {
-                self.history.undo();
+                self.travel(true);
                 Task::none()
             }
             Message::Redo => {
-                self.history.redo();
+                self.travel(false);
                 Task::none()
             }
             Message::Delete => {
@@ -420,6 +464,173 @@ impl Overlay {
         }
     }
 
+    /// Moving the toolbar by its grip.
+    fn drag_toolbar(&mut self, message: &Message) {
+        match *message {
+            Message::GripHover(at) => self.grip_at = at,
+            Message::ToolbarGrab => {
+                if let Some((at, _)) = self.toolbar_place() {
+                    self.toolbar_at = Some(at);
+                    self.toolbar_drag = Some(Vector::new(
+                        self.grip_at.x + kirie_ui::space::S,
+                        self.grip_at.y + kirie_ui::space::S,
+                    ));
+                }
+            }
+            Message::ToolbarMoved(id, at) => {
+                let surface = self
+                    .surfaces
+                    .get(&id)
+                    .map(|&index| self.screens[index].area);
+                if let (Some(held), Some(surface)) = (self.toolbar_drag, surface) {
+                    let desktop = Point::new(at.x + surface.x, at.y + surface.y);
+                    self.toolbar_at = Some(desktop - held);
+                }
+            }
+            Message::ToolbarDropped => {
+                self.toolbar_drag = None;
+                self.toolbar_at = self.toolbar_place().map(|(at, _)| at);
+            }
+            _ => {}
+        }
+    }
+
+    /// Changes to the style, colors, weight, fill and text look.
+    fn restyle(&mut self, message: Message) {
+        match message {
+            Message::PickStyle(style) => {
+                let before = self.style();
+                let recolor = self.swatches.recolor(before, style);
+                self.history.apply(Op::SetStyle { style, recolor });
+                self.follow_style(before);
+            }
+            Message::ToggleShadow => {
+                let shadow = !self.document().shadow;
+                self.history.apply(Op::SetShadow(shadow));
+            }
+            Message::PickColor(color) => {
+                self.repaint(|paint| paint.color = color);
+            }
+            Message::EditColor(target) => {
+                self.picker = Some(Picker::new(
+                    target,
+                    self.style(),
+                    &self.swatches,
+                    self.paint.color,
+                ));
+            }
+            Message::Picker(event) => {
+                if let picker::Outcome::Changed { pick } =
+                    picker::update(&mut self.picker, &mut self.swatches, event)
+                {
+                    if let Some(color) = pick {
+                        self.repaint(|paint| paint.color = color);
+                    }
+                    if let Err(error) = self.swatches.save() {
+                        tracing::warn!(%error, "colors not saved");
+                    }
+                }
+            }
+            Message::Weight(crate::controls::WeightEvent::Done)
+            | Message::Brightness(crate::controls::BrightnessEvent::Done)
+            | Message::Look(crate::controls::TextEvent::SizeDone) => self.sliding = false,
+            Message::Brightness(crate::controls::BrightnessEvent::Slide(brightness)) => {
+                self.history
+                    .apply_gradually(Op::SetSpotlightBrightness(brightness), self.sliding);
+                self.sliding = true;
+            }
+            Message::Weight(crate::controls::WeightEvent::Pick(weight)) => {
+                self.repaint(|paint| paint.weight = weight);
+            }
+            Message::Weight(crate::controls::WeightEvent::Slide(width)) => {
+                self.repaint_gradually(|paint| paint.weight = Weight::new(width), true);
+            }
+            Message::ToggleFill => {
+                self.repaint(|paint| paint.filled = !paint.filled);
+            }
+            Message::Spot(spot) => self.repaint(|paint| paint.spot = spot),
+            Message::Look(event) => {
+                self.repaint_gradually(
+                    |paint| paint.text = event.apply(paint.text),
+                    event.gradual(),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    /// Undoes or redoes a step; the drawing color follows the style there.
+    fn travel(&mut self, undo: bool) {
+        let before = self.document().style;
+        if undo {
+            self.history.undo();
+        } else {
+            self.history.redo();
+        }
+        self.follow_style(before);
+    }
+
+    /// Keeps drawing in the standard color drawn with before the style changed from `before`,
+    /// in the new style's shade of it.
+    fn follow_style(&mut self, before: StyleId) {
+        let now = self.document().style;
+        if now != before {
+            let recolor = self.swatches.recolor(before, now);
+            self.paint.color = crate::controls::restyled(self.paint.color, &recolor);
+        }
+    }
+
+    /// Changes the paint for new marks, and the picked mark's paint too.
+    fn repaint(&mut self, change: impl Fn(&mut Paint)) {
+        self.repaint_gradually(change, false);
+    }
+
+    /// Like [`Self::repaint`]; a `gradual` change joins the step the slider drag began.
+    fn repaint_gradually(&mut self, change: impl Fn(&mut Paint), gradual: bool) {
+        change(&mut self.paint);
+        let Some(shape) = self.picked.and_then(|id| self.document().shape(id)) else {
+            return;
+        };
+        let mut paint = shape.paint;
+        change(&mut paint);
+        let op = Op::Repaint {
+            ids: vec![shape.id],
+            paint,
+        };
+        if gradual {
+            self.history.apply_gradually(op, self.sliding);
+        } else {
+            self.history.apply(op);
+        }
+        self.sliding = gradual;
+    }
+
+    /// The paint the controls show: the picked mark's, else the one new marks get.
+    fn shown_paint(&self) -> Paint {
+        self.picked
+            .and_then(|id| self.document().shape(id))
+            .map_or(self.paint, |shape| shape.paint)
+    }
+
+    /// Whether the text controls apply: to text being typed, a picked text mark, or the next.
+    fn texting(&self) -> bool {
+        self.tool == Some(Tool::Text)
+            || self.typing.is_some()
+            || self
+                .picked
+                .and_then(|id| self.document().shape(id))
+                .is_some_and(|shape| matches!(shape.kind, Kind::Text { .. }))
+    }
+
+    /// Whether the spotlight controls apply: to the spotlight tool or a picked spotlight.
+    fn spotlighting(&self) -> bool {
+        self.tool == Some(Tool::Spotlight)
+            || self
+                .picked
+                .and_then(|id| self.document().shape(id))
+                .is_some_and(|shape| matches!(shape.kind, Kind::Spotlight { .. }))
+    }
+
     /// Shows the screen a fullscreen window landed on: the one with the window's size.
     fn place(&mut self, id: window::Id, size: Size) {
         let Some(index) = self.screens.iter().position(|screen| {
@@ -443,11 +654,16 @@ impl Overlay {
     }
 
     fn escape(&mut self) -> Task<Message> {
+        if self.toolbar_drag.is_some() {
+            self.drag_toolbar(&Message::ToolbarDropped);
+            return Task::none();
+        }
         // A save or copy on its way finishes first; leaving now would drop it half done.
         if self.busy {
             return Task::none();
         }
-        if self.typing.take().is_some()
+        if self.picker.take().is_some()
+            || self.typing.take().is_some()
             || self.draft.take().is_some()
             || self.picked.take().is_some()
         {
@@ -456,7 +672,7 @@ impl Overlay {
         if self.tool.take().is_some() {
             return Task::none();
         }
-        self.close(Outcome::Cancelled)
+        self.close(Outcome::Canceled)
     }
 
     fn pointer(&mut self, pointer: Pointer) -> Task<Message> {
@@ -533,6 +749,17 @@ impl Overlay {
         match pointer {
             Pointer::Pressed(at) => {
                 self.commit_text();
+                let double = typing::double_click(&mut self.last_click, at);
+                let words = match tool {
+                    Tool::Text => typing::text_at(self.document(), to_kurbo(at), MARK_REACH),
+                    Tool::Select if double => {
+                        typing::text_at(self.document(), to_kurbo(at), MARK_REACH)
+                    }
+                    _ => None,
+                };
+                if let Some(id) = words {
+                    return self.edit_text(id);
+                }
                 let press = kirie_annotate::tools::press(
                     tool,
                     to_kurbo(at),
@@ -548,12 +775,11 @@ impl Overlay {
                         }
                         self.draft = Some(draft);
                     }
-                    Press::Done(op) => self.history.apply(op),
+                    Press::Done(op) => {
+                        self.history.apply(op);
+                    }
                     Press::TypeAt(at) => {
-                        self.typing = Some(Typing {
-                            at,
-                            text: String::new(),
-                        });
+                        self.typing = Some(Typing::new(at));
                         return iced::widget::operation::focus(view::TEXT_INPUT);
                     }
                     Press::Nothing => self.picked = None,
@@ -577,19 +803,24 @@ impl Overlay {
     }
 
     fn commit_text(&mut self) {
-        let Some(typing) = self.typing.take() else {
-            return;
-        };
-        if typing.text.trim().is_empty() {
-            return;
+        if let Some(op) = self
+            .typing
+            .take()
+            .and_then(|typing| typing.finish(self.paint))
+        {
+            self.history.apply(op);
         }
-        self.history.apply(Op::Add {
-            kind: Kind::Text {
-                at: typing.at,
-                text: typing.text,
-            },
-            paint: self.paint,
-        });
+    }
+
+    /// Opens the words of a placed text mark for typing.
+    fn edit_text(&mut self, id: kirie_annotate::ShapeId) -> Task<Message> {
+        let Some(typing) = self.document().shape(id).and_then(Typing::edit) else {
+            return Task::none();
+        };
+        self.typing = Some(typing);
+        self.picked = Some(id);
+        self.draft = None;
+        iced::widget::operation::focus(view::TEXT_INPUT)
     }
 
     /// The selection's pixels at the highest scale of the screens it covers, and the marks
@@ -656,13 +887,19 @@ impl Overlay {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let keys = if self.typing.is_some() {
+        let keys = if self.typing.is_some() || self.picker.is_some() {
             event::listen_with(typing_key)
         } else {
             event::listen_with(key)
         };
+        let toolbar = if self.toolbar_drag.is_some() {
+            event::listen_with(dragging_toolbar)
+        } else {
+            Subscription::none()
+        };
         Subscription::batch([
             keys,
+            toolbar,
             window::resize_events().map(|(id, size)| Message::Resized(id, size)),
         ])
     }
@@ -710,6 +947,19 @@ fn surface_settings(output: &str) -> NewLayerShellSettings {
         output_option: OutputOption::OutputName(output.to_owned()),
         events_transparent: false,
         namespace: Some(NAMESPACE.to_owned()),
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn dragging_toolbar(event: Event, _: event::Status, id: window::Id) -> Option<Message> {
+    match event {
+        Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+            Some(Message::ToolbarMoved(id, position))
+        }
+        Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+            Some(Message::ToolbarDropped)
+        }
+        _ => None,
     }
 }
 
@@ -775,7 +1025,7 @@ pub fn run(
 ) -> Result<Outcome, String> {
     use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
 
-    let outcome = Arc::new(Mutex::new(Outcome::Cancelled));
+    let outcome = Arc::new(Mutex::new(Outcome::Canceled));
     let shared = outcome.clone();
     let start = Mutex::new(Some((frames, windows)));
     let boot = move || {

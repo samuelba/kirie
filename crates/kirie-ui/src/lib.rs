@@ -33,7 +33,7 @@ pub enum Scheme {
     Light,
 }
 
-/// The colours of one scheme.
+/// The colors of one scheme.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Palette {
     pub scheme: Scheme,
