@@ -154,20 +154,24 @@ impl Painter<'_> {
             _ => None,
         };
         let edited = marks.draft.and_then(Draft::edited);
-        let mut picked = None;
-        let shapes = document.shapes().cloned().chain(marks.preview);
-        for shape in shapes {
-            let shape = match (moving, edited) {
+        let shapes: Vec<Shape> = document
+            .shapes()
+            .cloned()
+            .chain(marks.preview)
+            .map(|shape| match (moving, edited) {
                 (Some((ids, by)), _) if ids.contains(&shape.id) => Shape {
                     kind: shape.kind.translated(by),
                     ..shape
                 },
                 (_, Some(edited)) if edited.id == shape.id => edited.clone(),
                 _ => shape,
-            };
+            })
+            .collect();
+        let stage = style::Stage::new(marks.visible, &shapes);
+        let mut picked = None;
+        for shape in shapes {
             let draft = shape.id == document.next_id();
-            for primitive in style::primitives(&shape, document.style, document.unit, marks.visible)
-            {
+            for primitive in style::primitives(&shape, document.style, document.unit, &stage) {
                 if draft {
                     self.draw_draft(frame, &primitive, transform);
                 } else {

@@ -276,6 +276,21 @@ mod tests {
     }
 
     #[test]
+    fn overlapping_spotlights_dim_evenly() {
+        let spot = |x0: f64, x1: f64| Kind::Spotlight {
+            rect: Rect::new(x0, 10.0, x1, 30.0),
+        };
+        let one = add(&Document::new(60, 40, 1.0), spot(5.0, 30.0));
+        let two = add(&one, spot(20.0, 50.0));
+        let single = render(&one, &white(60, 40), &mut Typesetter::new()).unwrap();
+        let double = render(&two, &white(60, 40), &mut Typesetter::new()).unwrap();
+        assert_eq!(double.get_pixel(25, 20), &Pixel([255, 255, 255, 255]));
+        assert_eq!(double.get_pixel(45, 20), &Pixel([255, 255, 255, 255]));
+        assert_eq!(double.get_pixel(55, 2), single.get_pixel(55, 2));
+        assert!(single.get_pixel(55, 2)[0] < 150);
+    }
+
+    #[test]
     fn effects_change_only_their_region() {
         let mut base = white(40, 40);
         for x in 0..40 {
