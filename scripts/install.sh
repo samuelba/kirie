@@ -23,7 +23,7 @@ repo="https://github.com/samuelba/kirie"
 app_id="dev.samuelba.Kirie"
 uuid="kirie@samuelba.dev"
 # The release key's public half, the same as packaging/minisign.pub.
-public_key=""
+public_key="RWQnRRohusKyNk1BV+AejdPK/q7tZpn//TYfCMQyIpBQACHZapjioxdi"
 bin_dir="${XDG_BIN_HOME:-$HOME/.local/bin}"
 data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
 config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"

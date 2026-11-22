@@ -11,16 +11,12 @@ use sha2::{Digest, Sha256};
 
 const REPO: &str = "samuelba/kirie";
 /// The release key's public half: the second line of packaging/minisign.pub. CI checks that the
-/// two match. Empty until the key exists, and then nothing can be updated.
-const RELEASE_KEY: &str = "";
+/// two match.
+const RELEASE_KEY: &str = "RWQnRRohusKyNk1BV+AejdPK/q7tZpn//TYfCMQyIpBQACHZapjioxdi";
 /// Downloads larger than this are refused.
 const MAX_DOWNLOAD: u64 = 16 * 1024 * 1024;
 
 pub fn run() -> anyhow::Result<()> {
-    anyhow::ensure!(
-        !RELEASE_KEY.is_empty(),
-        "this build of Kirie has no release key, so it cannot check an update; reinstall with the install script"
-    );
     let marker = directories::BaseDirs::new()
         .map(|dirs| dirs.data_dir().join("kirie/install-method"))
         .ok_or_else(|| anyhow::anyhow!("cannot find the data folder"))?;
@@ -174,6 +170,11 @@ fn sha256_hex(content: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_key_parses() {
+        assert!(PublicKey::from_base64(RELEASE_KEY).is_ok());
+    }
 
     #[test]
     fn checksum_lines_parse() {
