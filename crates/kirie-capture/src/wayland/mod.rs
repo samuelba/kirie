@@ -2,9 +2,13 @@
 //! `ext-image-copy-capture-v1` (COSMIC, newer wlroots and niri) or the older
 //! `wlr-screencopy-unstable-v1` (wlroots compositors, Hyprland).
 
+mod cosmic;
 mod ext;
 mod shm;
+mod toplevels;
 mod wlr;
+
+pub use toplevels::{Toplevels, toplevels};
 
 use wayland_client::globals::{GlobalList, GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{wl_output, wl_registry, wl_shm::WlShm};
@@ -12,7 +16,7 @@ use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, WEnum, deleg
 use wayland_protocols::xdg::xdg_output::zv1::client::{zxdg_output_manager_v1, zxdg_output_v1};
 
 use crate::geometry::{Frame, Output, Rect, Transform};
-use crate::pixels::to_rgba;
+use crate::pixels::{View, to_rgba};
 use crate::{CaptureError, Cursor};
 
 pub(crate) const EXT_SOURCES: &str = "ext_output_image_capture_source_manager_v1";
@@ -88,6 +92,9 @@ pub(crate) struct Pending {
 pub(crate) struct State {
     outputs: Vec<OutputState>,
     pending: Vec<Pending>,
+    toplevels: toplevels::Listing,
+    /// A time to give up waiting before `ANSWER_TIMEOUT`, for answers Kirie can do without.
+    give_up: Option<std::time::Instant>,
 }
 
 /// Lists the globals of the session's compositor (`WAYLAND_DISPLAY`).
@@ -209,10 +216,22 @@ fn wait(
     queue: &mut EventQueue<State>,
     done: impl Fn(&Pending) -> bool,
 ) -> Result<(), CaptureError> {
+    wait_until(state, queue, |state| state.pending.iter().all(&done))
+}
+
+/// Dispatches until `done` holds, or fails after `ANSWER_TIMEOUT`.
+fn wait_until(
+    state: &mut State,
+    queue: &mut EventQueue<State>,
+    done: impl Fn(&State) -> bool,
+) -> Result<(), CaptureError> {
     let deadline = std::time::Instant::now() + ANSWER_TIMEOUT;
+    let deadline = state
+        .give_up
+        .map_or(deadline, |give_up| give_up.min(deadline));
     loop {
         queue.dispatch_pending(state)?;
-        if state.pending.iter().all(&done) {
+        if done(state) {
             return Ok(());
         }
         queue
@@ -247,34 +266,68 @@ fn wait(
 }
 
 fn frames(state: &State) -> Result<Vec<Frame>, CaptureError> {
-    let mut frames = Vec::new();
-    for (output, pending) in state.outputs.iter().zip(&state.pending) {
-        match &pending.finished {
-            Some(Ok(())) => {}
-            Some(Err(reason)) => {
-                return Err(CaptureError::Failed(format!("{}: {reason}", output.name)));
-            }
-            None => return Err(CaptureError::Failed(format!("{}: no answer", output.name))),
-        }
-        let buffer = pending
-            .buffer
-            .as_ref()
-            .ok_or_else(|| CaptureError::Failed(format!("{}: no buffer", output.name)))?;
-        let image = to_rgba(
-            buffer.format,
-            buffer.width,
-            buffer.height,
-            buffer.stride,
-            &buffer.read()?,
-            pending.y_invert,
-        )?;
-        let transform = pending.transform.unwrap_or(output.transform);
-        frames.push(Frame {
-            output: output.output(),
-            image: transform.apply(&image),
-        });
+    state
+        .outputs
+        .iter()
+        .zip(&state.pending)
+        .map(|(output, pending)| {
+            let image = pending
+                .image()
+                .map_err(|reason| CaptureError::Failed(format!("{}: {reason}", output.name)))?;
+            let transform = pending.transform.unwrap_or(output.transform);
+            Ok(Frame {
+                output: output.output(),
+                image: transform.apply(&image),
+            })
+        })
+        .collect()
+}
+
+impl Pending {
+    /// The copied pixels, as the compositor laid them out in the buffer.
+    fn image(&self) -> Result<image::RgbaImage, String> {
+        self.read(|buffer, bytes| {
+            to_rgba(
+                buffer.format,
+                buffer.width,
+                buffer.height,
+                buffer.stride,
+                bytes,
+                self.y_invert,
+            )
+            .map_err(|error| error.to_string())
+        })
     }
-    Ok(frames)
+
+    /// Looks at the copied pixels in place, for when only a few of them matter.
+    fn view<T>(&self, look: impl FnOnce(&View) -> T) -> Result<T, String> {
+        self.read(|buffer, bytes| {
+            let view = View::new(
+                buffer.format,
+                buffer.width,
+                buffer.height,
+                buffer.stride,
+                bytes,
+                self.y_invert,
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(look(&view))
+        })
+    }
+
+    fn read<T>(
+        &self,
+        convert: impl FnOnce(&shm::ShmBuffer, &[u8]) -> Result<T, String>,
+    ) -> Result<T, String> {
+        match &self.finished {
+            Some(Ok(())) => {}
+            Some(Err(reason)) => return Err(reason.clone()),
+            None => return Err("no answer".into()),
+        }
+        let buffer = self.buffer.as_ref().ok_or("no buffer")?;
+        let bytes = buffer.read().map_err(|error| error.to_string())?;
+        convert(buffer, &bytes)
+    }
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {

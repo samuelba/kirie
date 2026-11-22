@@ -2020,9 +2020,11 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "wayland-backend",
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
+ "wayland-scanner",
  "zbus",
 ]
 
