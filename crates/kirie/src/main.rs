@@ -4,6 +4,7 @@ mod controls;
 mod editor;
 mod extension;
 mod ipc;
+mod notify;
 mod overlay;
 mod paint;
 mod save;
@@ -208,9 +209,17 @@ fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
     match overlay::run(frames, primary, host).map_err(anyhow::Error::msg)? {
         overlay::Outcome::Saved(path) => {
             println!("{}", path.display());
+            block_on(notify::show("Screenshot saved", &save::pretty(&path)))?;
             Ok(())
         }
-        overlay::Outcome::Copied | overlay::Outcome::Cancelled => Ok(()),
+        overlay::Outcome::Copied => {
+            block_on(notify::show(
+                "Screenshot copied",
+                "Paste it anywhere with Ctrl+V.",
+            ))?;
+            Ok(())
+        }
+        overlay::Outcome::Cancelled => Ok(()),
         overlay::Outcome::Edit(path) => {
             if !block_on(ipc::hand_over(Some(&path)))? {
                 std::process::Command::new(std::env::current_exe()?)
