@@ -1,7 +1,7 @@
 //! Kirie's controls: flat icon buttons, color swatches, segmented pills and the floating panel
 //! they sit on.
 
-use iced::widget::{button, container, row, svg, text, tooltip};
+use iced::widget::{button, container, row, slider, svg, text, tooltip};
 use iced::{Background, Border, Color, Element, Length, Shadow, Vector};
 
 use crate::icon::Icon;
@@ -226,6 +226,46 @@ pub fn pill<'a, Message: Clone + 'a>(
             },
             shadow: Shadow::default(),
             snap: true,
+        })
+        .into()
+}
+
+/// A slider in the accent color. `on_release` follows the last change of a drag.
+pub fn value_slider<'a, Message: Clone + 'a>(
+    range: std::ops::RangeInclusive<f64>,
+    value: f64,
+    palette: Palette,
+    on_change: impl Fn(f64) -> Message + 'a,
+    on_release: Message,
+) -> Element<'a, Message> {
+    slider(range, value, on_change)
+        .step(0.5)
+        .on_release(on_release)
+        .width(Length::Fill)
+        .style(move |_, status| slider::Style {
+            rail: slider::Rail {
+                backgrounds: (
+                    Background::Color(palette.accent),
+                    Background::Color(palette.surface[2]),
+                ),
+                width: 4.0,
+                border: Border {
+                    radius: radius::PILL.into(),
+                    ..Border::default()
+                },
+            },
+            handle: slider::Handle {
+                shape: slider::HandleShape::Circle {
+                    radius: if status == slider::Status::Dragged {
+                        8.0
+                    } else {
+                        7.0
+                    },
+                },
+                background: Background::Color(palette.accent),
+                border_width: 2.0,
+                border_color: Color::WHITE,
+            },
         })
         .into()
 }

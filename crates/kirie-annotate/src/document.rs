@@ -218,6 +218,8 @@ pub struct History {
     current: Document,
     past: Vec<Document>,
     future: Vec<Document>,
+    /// The last step was made gradually and nothing has happened since, so it can still grow.
+    gradual: bool,
 }
 
 impl History {
@@ -229,6 +231,7 @@ impl History {
             current: document,
             past: Vec::new(),
             future: Vec::new(),
+            gradual: false,
         }
     }
 
@@ -244,19 +247,35 @@ impl History {
         !self.future.is_empty()
     }
 
-    /// Applies an edit as one undo step. Edits that change nothing leave no step.
-    pub fn apply(&mut self, op: Op) {
+    /// Applies an edit as one undo step. Edits that change nothing leave no step; returns
+    /// whether this one did.
+    pub fn apply(&mut self, op: Op) -> bool {
+        self.gradual = false;
         let next = self.current.apply(op);
-        if next != self.current {
-            self.past.push(std::mem::replace(&mut self.current, next));
-            if self.past.len() > Self::LIMIT {
-                self.past.remove(0);
-            }
-            self.future.clear();
+        if next == self.current {
+            return false;
+        }
+        self.past.push(std::mem::replace(&mut self.current, next));
+        if self.past.len() > Self::LIMIT {
+            self.past.remove(0);
+        }
+        self.future.clear();
+        true
+    }
+
+    /// Applies one move of an edit made in many, like dragging a slider, so they all undo in
+    /// one step. A move `continuing` the same drag joins the step the drag began, unless
+    /// something else happened since, such as an undo; then it begins a step of its own.
+    pub fn apply_gradually(&mut self, op: Op, continuing: bool) {
+        if continuing && self.gradual {
+            self.current = self.current.apply(op);
+        } else {
+            self.gradual = self.apply(op);
         }
     }
 
     pub fn undo(&mut self) -> bool {
+        self.gradual = false;
         let Some(previous) = self.past.pop() else {
             return false;
         };
@@ -266,6 +285,7 @@ impl History {
     }
 
     pub fn redo(&mut self) -> bool {
+        self.gradual = false;
         let Some(next) = self.future.pop() else {
             return false;
         };
@@ -451,6 +471,42 @@ mod tests {
             ids: vec![ShapeId(9)],
         });
         assert!(!history.can_undo());
+    }
+
+    #[test]
+    fn a_drag_undoes_in_one_step() {
+        let mut history = History::new(Document::new(10, 10, 1.0));
+        history.apply(line(1.0));
+        history.apply_gradually(line(2.0), false);
+        history.apply_gradually(line(3.0), true);
+        history.apply_gradually(line(4.0), true);
+        assert_eq!(history.current().shapes().len(), 4);
+        history.undo();
+        assert_eq!(history.current().shapes().len(), 1);
+        assert!(!History::new(Document::new(1, 1, 1.0)).apply(Op::Clear));
+    }
+
+    #[test]
+    fn a_drag_never_joins_a_step_it_did_not_begin() {
+        let mut history = History::new(Document::new(10, 10, 1.0));
+        history.apply(line(1.0));
+        history.apply_gradually(line(2.0), false);
+        history.undo();
+        history.apply_gradually(line(3.0), true);
+        assert!(
+            history.undo(),
+            "the move after the undo is a step of its own"
+        );
+        assert_eq!(
+            history.current().shapes().len(),
+            1,
+            "the first line is kept"
+        );
+        history.apply_gradually(line(5.0), false);
+        history.apply(line(6.0));
+        history.apply_gradually(line(7.0), true);
+        history.undo();
+        assert_eq!(history.current().shapes().len(), 3);
     }
 
     #[test]

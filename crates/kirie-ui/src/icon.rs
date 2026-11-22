@@ -54,6 +54,10 @@ icons! {
     Delete => "trash",
     Image => "image",
     Plus => "plus",
+    AlignLeft => "text-align-start",
+    AlignCenter => "text-align-center",
+    AlignRight => "text-align-end",
+    TextOutline => "type-outline",
 }
 
 impl Icon {

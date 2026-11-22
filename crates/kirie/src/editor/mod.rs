@@ -20,6 +20,7 @@ use kirie_annotate::{
 use kirie_ui::{Palette, Scheme};
 
 use self::viewport::Viewport;
+use crate::controls;
 use crate::picker::{self, Picker, Target};
 use crate::swatches::Swatches;
 
@@ -104,6 +105,7 @@ pub enum Message {
     Picker(picker::Event),
     PickWeight(Weight),
     ToggleFill,
+    Look(controls::TextEvent),
     ToggleScheme,
     TextChanged(String),
     TextDone,
@@ -152,6 +154,8 @@ pub struct Editor {
     picker: Option<Picker>,
     draft: Option<Draft>,
     picked: Option<ShapeId>,
+    /// A slider is being dragged; its moves undo as one step.
+    sliding: bool,
     typing: Option<Typing>,
     modifiers: keyboard::Modifiers,
     toast: Option<Toast>,
@@ -189,6 +193,7 @@ impl Editor {
             picker: None,
             draft: None,
             picked: None,
+            sliding: false,
             typing: None,
             modifiers: keyboard::Modifiers::default(),
             toast: None,
@@ -259,26 +264,20 @@ impl Editor {
             Message::PickTool(tool) => {
                 self.commit_text();
                 self.tool = tool;
-                self.paint.color = crate::controls::tool_color(
-                    Some(tool),
-                    self.paint.color,
-                    self.swatches.first(),
-                );
+                self.paint.color =
+                    controls::tool_color(Some(tool), self.paint.color, self.swatches.first());
                 self.draft = None;
                 if tool != Tool::Select {
                     self.picked = None;
                 }
             }
-            Message::PickStyle(style) => {
-                self.history.apply(Op::SetStyle(style));
-            }
-            Message::PickColor(color) => self.repaint(|paint| paint.color = color),
-            Message::EditColor(target) => {
-                self.picker = Some(Picker::new(target, &self.swatches, self.paint.color));
-            }
-            Message::Picker(event) => return self.edit_color(event),
-            Message::PickWeight(weight) => self.repaint(|paint| paint.weight = weight),
-            Message::ToggleFill => self.repaint(|paint| paint.filled = !paint.filled),
+            Message::PickStyle(_)
+            | Message::PickColor(_)
+            | Message::EditColor(_)
+            | Message::Picker(_)
+            | Message::PickWeight(_)
+            | Message::ToggleFill
+            | Message::Look(_) => return self.restyle(message),
             Message::SystemScheme(scheme) => self.follow(Some(scheme)),
             Message::ToggleScheme => self.follow(None),
             Message::TextChanged(text) => {
@@ -343,6 +342,31 @@ impl Editor {
         Task::none()
     }
 
+    /// Changes to the style, colors, weight, fill and text look.
+    fn restyle(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::PickStyle(style) => {
+                self.history.apply(Op::SetStyle(style));
+            }
+            Message::PickColor(color) => self.repaint(|paint| paint.color = color),
+            Message::EditColor(target) => {
+                self.picker = Some(Picker::new(target, &self.swatches, self.paint.color));
+            }
+            Message::Picker(event) => return self.edit_color(event),
+            Message::PickWeight(weight) => self.repaint(|paint| paint.weight = weight),
+            Message::ToggleFill => self.repaint(|paint| paint.filled = !paint.filled),
+            Message::Look(controls::TextEvent::SizeDone) => self.sliding = false,
+            Message::Look(event) => {
+                self.repaint_gradually(
+                    |paint| paint.text = event.apply(paint.text),
+                    event.gradual(),
+                );
+            }
+            _ => {}
+        }
+        Task::none()
+    }
+
     fn edit_color(&mut self, event: picker::Event) -> Task<Message> {
         let picker::Outcome::Changed { pick } =
             picker::update(&mut self.picker, &mut self.swatches, event)
@@ -393,17 +417,44 @@ impl Editor {
 
     /// Changes the paint for new marks, and the picked mark's paint too.
     fn repaint(&mut self, change: impl Fn(&mut Paint)) {
+        self.repaint_gradually(change, false);
+    }
+
+    /// Like [`Self::repaint`]; a `gradual` change joins the step the slider drag began.
+    fn repaint_gradually(&mut self, change: impl Fn(&mut Paint), gradual: bool) {
         change(&mut self.paint);
-        if let Some(id) = self.picked
-            && let Some(shape) = self.document().shape(id)
-        {
-            let mut paint = shape.paint;
-            change(&mut paint);
-            self.history.apply(Op::Repaint {
-                ids: vec![id],
-                paint,
-            });
+        let Some(shape) = self.picked.and_then(|id| self.document().shape(id)) else {
+            return;
+        };
+        let mut paint = shape.paint;
+        change(&mut paint);
+        let op = Op::Repaint {
+            ids: vec![shape.id],
+            paint,
+        };
+        if gradual {
+            self.history.apply_gradually(op, self.sliding);
+        } else {
+            self.history.apply(op);
         }
+        self.sliding = gradual;
+    }
+
+    /// The paint the controls show: the picked mark's, else the one new marks get.
+    fn shown_paint(&self) -> Paint {
+        self.picked
+            .and_then(|id| self.document().shape(id))
+            .map_or(self.paint, |shape| shape.paint)
+    }
+
+    /// Whether the text controls apply: to text being typed, a picked text mark, or the next.
+    fn texting(&self) -> bool {
+        self.tool == Tool::Text
+            || self.typing.is_some()
+            || self
+                .picked
+                .and_then(|id| self.document().shape(id))
+                .is_some_and(|shape| matches!(shape.kind, Kind::Text { .. }))
     }
 
     fn pointer(&mut self, pointer: Pointer, scale: f32) -> Task<Message> {
@@ -428,7 +479,9 @@ impl Editor {
                         }
                         self.draft = Some(draft);
                     }
-                    Press::Done(op) => self.history.apply(op),
+                    Press::Done(op) => {
+                        self.history.apply(op);
+                    }
                     Press::TypeAt(at) => {
                         self.typing = Some(Typing {
                             at,

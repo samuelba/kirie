@@ -2,8 +2,8 @@
 
 use kurbo::{BezPath, Point, RoundedRect, Shape as _, Vec2};
 
-use super::{Context, arrow_wings, halo_for, smooth, text_on};
-use crate::primitive::{FillRule, Font, Primitive};
+use super::{Context, arrow_wings, smooth, text_on};
+use crate::primitive::{Align, FillRule, Font, Primitive};
 use crate::shape::{Kind, Rgba};
 
 const SHADOW: Rgba = Rgba {
@@ -50,22 +50,15 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
         }
         Kind::Pen { points } => stroke(smooth(points)),
         Kind::Highlighter { points } => vec![super::marker(points, context)],
-        Kind::Text { at, text } => vec![Primitive::Text {
-            at: *at,
-            text: text.clone(),
-            size: context.text_size(),
-            color: context.color(),
-            font: Font::Sans,
-            halo: Some(halo_for(context.color())),
-            centered: false,
-        }],
         Kind::Counter { at, number } => counter(*at, *number, context),
         Kind::Redact { rect } => vec![Primitive::Fill {
             path: RoundedRect::from_rect(rect.abs(), 2.0 * context.unit).to_path(0.1),
             color: Rgba::rgb(0x16, 0x18, 0x1d),
             rule: FillRule::NonZero,
         }],
-        Kind::Blur { .. } | Kind::Pixelate { .. } | Kind::Spotlight { .. } => Vec::new(),
+        Kind::Text { .. } | Kind::Blur { .. } | Kind::Pixelate { .. } | Kind::Spotlight { .. } => {
+            Vec::new()
+        }
     }
 }
 
@@ -164,6 +157,7 @@ fn counter(at: Point, number: u32, context: &Context) -> Vec<Primitive> {
             size: radius * 1.15,
             color: text_on(context.color()),
             font: Font::Sans,
+            align: Align::Left,
             halo: None,
             centered: true,
         },

@@ -68,6 +68,7 @@ pub enum Message {
     Picker(picker::Event),
     PickWeight(Weight),
     ToggleFill,
+    Look(crate::controls::TextEvent),
     TextChanged(String),
     TextDone,
     Undo,
@@ -148,6 +149,8 @@ pub struct Overlay {
     drawing: Option<Tool>,
     /// The mark the select tool picked, whose grips are showing.
     picked: Option<kirie_annotate::ShapeId>,
+    /// A slider is being dragged; its moves undo as one step.
+    sliding: bool,
     typing: Option<Typing>,
     busy: bool,
     /// What Enter does.
@@ -278,6 +281,7 @@ impl Overlay {
             draft: None,
             drawing: None,
             picked: None,
+            sliding: false,
             typing: None,
             busy: false,
             primary,
@@ -371,37 +375,14 @@ impl Overlay {
                 self.draft = None;
                 Task::none()
             }
-            Message::PickStyle(style) => {
-                self.history.apply(Op::SetStyle(style));
-                Task::none()
-            }
-            Message::PickColor(color) => {
-                self.paint.color = color;
-                Task::none()
-            }
-            Message::EditColor(target) => {
-                self.picker = Some(Picker::new(target, &self.swatches, self.paint.color));
-                Task::none()
-            }
-            Message::Picker(event) => {
-                if let picker::Outcome::Changed { pick } =
-                    picker::update(&mut self.picker, &mut self.swatches, event)
-                {
-                    if let Some(color) = pick {
-                        self.paint.color = color;
-                    }
-                    if let Err(error) = self.swatches.save() {
-                        tracing::warn!(%error, "colors not saved");
-                    }
-                }
-                Task::none()
-            }
-            Message::PickWeight(weight) => {
-                self.paint.weight = weight;
-                Task::none()
-            }
-            Message::ToggleFill => {
-                self.paint.filled = !self.paint.filled;
+            Message::PickStyle(_)
+            | Message::PickColor(_)
+            | Message::EditColor(_)
+            | Message::Picker(_)
+            | Message::PickWeight(_)
+            | Message::ToggleFill
+            | Message::Look(_) => {
+                self.restyle(message);
                 Task::none()
             }
             Message::TextChanged(text) => {
@@ -447,6 +428,91 @@ impl Overlay {
             }
             Message::Layer(_) => Task::none(),
         }
+    }
+
+    /// Changes to the style, colors, weight, fill and text look.
+    fn restyle(&mut self, message: Message) {
+        match message {
+            Message::PickStyle(style) => {
+                self.history.apply(Op::SetStyle(style));
+            }
+            Message::PickColor(color) => {
+                self.repaint(|paint| paint.color = color);
+            }
+            Message::EditColor(target) => {
+                self.picker = Some(Picker::new(target, &self.swatches, self.paint.color));
+            }
+            Message::Picker(event) => {
+                if let picker::Outcome::Changed { pick } =
+                    picker::update(&mut self.picker, &mut self.swatches, event)
+                {
+                    if let Some(color) = pick {
+                        self.repaint(|paint| paint.color = color);
+                    }
+                    if let Err(error) = self.swatches.save() {
+                        tracing::warn!(%error, "colors not saved");
+                    }
+                }
+            }
+            Message::PickWeight(weight) => {
+                self.repaint(|paint| paint.weight = weight);
+            }
+            Message::ToggleFill => {
+                self.repaint(|paint| paint.filled = !paint.filled);
+            }
+            Message::Look(crate::controls::TextEvent::SizeDone) => {
+                self.sliding = false;
+            }
+            Message::Look(event) => {
+                self.repaint_gradually(
+                    |paint| paint.text = event.apply(paint.text),
+                    event.gradual(),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    /// Changes the paint for new marks, and the picked mark's paint too.
+    fn repaint(&mut self, change: impl Fn(&mut Paint)) {
+        self.repaint_gradually(change, false);
+    }
+
+    /// Like [`Self::repaint`]; a `gradual` change joins the step the slider drag began.
+    fn repaint_gradually(&mut self, change: impl Fn(&mut Paint), gradual: bool) {
+        change(&mut self.paint);
+        let Some(shape) = self.picked.and_then(|id| self.document().shape(id)) else {
+            return;
+        };
+        let mut paint = shape.paint;
+        change(&mut paint);
+        let op = Op::Repaint {
+            ids: vec![shape.id],
+            paint,
+        };
+        if gradual {
+            self.history.apply_gradually(op, self.sliding);
+        } else {
+            self.history.apply(op);
+        }
+        self.sliding = gradual;
+    }
+
+    /// The paint the controls show: the picked mark's, else the one new marks get.
+    fn shown_paint(&self) -> Paint {
+        self.picked
+            .and_then(|id| self.document().shape(id))
+            .map_or(self.paint, |shape| shape.paint)
+    }
+
+    /// Whether the text controls apply: to text being typed, a picked text mark, or the next.
+    fn texting(&self) -> bool {
+        self.tool == Some(Tool::Text)
+            || self.typing.is_some()
+            || self
+                .picked
+                .and_then(|id| self.document().shape(id))
+                .is_some_and(|shape| matches!(shape.kind, Kind::Text { .. }))
     }
 
     /// Shows the screen a fullscreen window landed on: the one with the window's size.
@@ -578,7 +644,9 @@ impl Overlay {
                         }
                         self.draft = Some(draft);
                     }
-                    Press::Done(op) => self.history.apply(op),
+                    Press::Done(op) => {
+                        self.history.apply(op);
+                    }
                     Press::TypeAt(at) => {
                         self.typing = Some(Typing {
                             at,

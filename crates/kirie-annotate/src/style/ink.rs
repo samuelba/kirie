@@ -2,8 +2,8 @@
 
 use kurbo::{BezPath, Point, Rect, RoundedRect, Shape as _, Vec2};
 
-use super::{Context, Rng, arrow_wings, ellipse_points, halo_for, text_on, thin_out};
-use crate::primitive::{FillRule, Font, Primitive};
+use super::{Context, Rng, arrow_wings, ellipse_points, text_on, thin_out};
+use crate::primitive::{Align, FillRule, Font, Primitive};
 use crate::shape::{Kind, Rgba};
 
 /// How the brush presses along a stroke: light at the start, full in the middle, lifting off.
@@ -83,15 +83,6 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
         }
         Kind::Pen { points } => vec![ink(brush(points, width, STROKE))],
         Kind::Highlighter { points } => vec![super::marker(points, context)],
-        Kind::Text { at, text } => vec![Primitive::Text {
-            at: *at,
-            text: text.clone(),
-            size: context.text_size() * 1.35,
-            color,
-            font: Font::Hand,
-            halo: Some(halo_for(color)),
-            centered: false,
-        }],
         Kind::Counter { at, number } => {
             let radius = context.counter_radius();
             vec![
@@ -106,6 +97,7 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
                     size: radius * 1.6,
                     color: text_on(color),
                     font: Font::Hand,
+                    align: Align::Left,
                     halo: None,
                     centered: true,
                 },
@@ -116,7 +108,9 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
             color: Rgba::rgb(0x1f, 0x1d, 0x1a),
             rule: FillRule::NonZero,
         }],
-        Kind::Blur { .. } | Kind::Pixelate { .. } | Kind::Spotlight { .. } => Vec::new(),
+        Kind::Text { .. } | Kind::Blur { .. } | Kind::Pixelate { .. } | Kind::Spotlight { .. } => {
+            Vec::new()
+        }
     }
 }
 

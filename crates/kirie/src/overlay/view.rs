@@ -18,6 +18,8 @@ const TOOLBAR: iced::Size = iced::Size::new(800.0, 92.0);
 const GAP: f32 = 12.0;
 /// A swatch and the space after it.
 const SWATCH: f32 = 30.0;
+/// How much wider the text controls are than the weight and fill controls they replace.
+const TEXT_CONTROLS: f32 = 260.0;
 /// Custom swatches that fit in [`TOOLBAR`] before it grows.
 const ROOM_FOR_CUSTOM: usize = 4;
 
@@ -95,12 +97,12 @@ impl Overlay {
         } else {
             0.0
         };
-        iced::Size::new(TOOLBAR.width + extra, TOOLBAR.height + picker)
+        let text = if self.texting() { TEXT_CONTROLS } else { 0.0 };
+        iced::Size::new(TOOLBAR.width + extra + text, TOOLBAR.height + picker)
     }
 
     fn toolbar(&self) -> Element<'_, Message> {
         let palette = self.palette;
-        let style = self.style();
         let tools = row(Tool::ALL.into_iter().map(|tool| {
             let active = self.tool == Some(tool);
             icon_button(
@@ -153,33 +155,7 @@ impl Overlay {
             .spacing(space::S)
             .align_y(iced::Alignment::Center);
 
-        let styles = controls::styles(style, palette, Message::PickStyle);
-        let colors = controls::colors(
-            &self.swatches,
-            self.paint,
-            palette,
-            self.picker.as_ref().map(Picker::target),
-            Message::PickColor,
-            Message::EditColor,
-        );
-        let weights = controls::weights(self.paint, palette, Message::PickWeight);
-        let properties = row![
-            styles,
-            divider(palette),
-            colors,
-            divider(palette),
-            weights,
-            divider(palette),
-            icon_button(
-                Icon::Fill,
-                "Fill shapes",
-                palette,
-                self.paint.filled,
-                Some(Message::ToggleFill)
-            ),
-        ]
-        .spacing(space::S)
-        .align_y(iced::Alignment::Center);
+        let properties = self.properties();
 
         let mut panel = column![].spacing(space::XS);
         if let Some(open) = &self.picker {
@@ -192,6 +168,54 @@ impl Overlay {
             .padding(space::S)
             .style(floating(palette))
             .into()
+    }
+
+    /// Style, color, and the text look or the weight and fill.
+    fn properties(&self) -> Element<'_, Message> {
+        let palette = self.palette;
+        let style = self.style();
+        let paint = self.shown_paint();
+        let styles = controls::styles(style, palette, Message::PickStyle);
+        let colors = controls::colors(
+            &self.swatches,
+            paint,
+            palette,
+            self.picker.as_ref().map(Picker::target),
+            Message::PickColor,
+            Message::EditColor,
+        );
+        let mut properties = row![styles, divider(palette), colors, divider(palette)]
+            .spacing(space::S)
+            .align_y(iced::Alignment::Center);
+        if self.texting() {
+            properties = properties
+                .push(controls::fonts(
+                    paint.text,
+                    style.font(),
+                    palette,
+                    Message::Look,
+                ))
+                .push(divider(palette))
+                .push(controls::text_size(
+                    paint.text,
+                    palette,
+                    96.0,
+                    Message::Look,
+                ))
+                .push(controls::text_layout(paint.text, palette, Message::Look));
+        } else {
+            properties = properties
+                .push(controls::weights(paint, palette, Message::PickWeight))
+                .push(divider(palette))
+                .push(icon_button(
+                    Icon::Fill,
+                    "Fill shapes",
+                    palette,
+                    paint.filled,
+                    Some(Message::ToggleFill),
+                ));
+        }
+        properties.into()
     }
 
     fn text_box(&self) -> Element<'_, Message> {

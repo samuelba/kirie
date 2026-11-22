@@ -3,8 +3,8 @@
 
 use kurbo::{BezPath, Point, Rect, Vec2};
 
-use super::{Context, Rng, arrow_wings, ellipse_points, halo_for, smooth};
-use crate::primitive::{FillRule, Font, Primitive};
+use super::{Context, Rng, arrow_wings, ellipse_points, smooth};
+use crate::primitive::{Align, FillRule, Font, Primitive};
 use crate::shape::{Kind, Rgba};
 
 /// The hatching angle, as in rough.js.
@@ -60,15 +60,6 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
         }
         Kind::Pen { points } => vec![stroke(smooth(points))],
         Kind::Highlighter { points } => vec![super::marker(points, context)],
-        Kind::Text { at, text } => vec![Primitive::Text {
-            at: *at,
-            text: text.clone(),
-            size: context.text_size() * 1.35,
-            color,
-            font: Font::Hand,
-            halo: Some(halo_for(color)),
-            centered: false,
-        }],
         Kind::Counter { at, number } => {
             let radius = context.counter_radius();
             let rect = Rect::from_center_size(*at, (radius * 2.0, radius * 2.0));
@@ -86,6 +77,7 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
                     size: radius * 1.6,
                     color,
                     font: Font::Hand,
+                    align: Align::Left,
                     halo: None,
                     centered: true,
                 },
@@ -109,7 +101,9 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
                 rule: FillRule::NonZero,
             }]
         }
-        Kind::Blur { .. } | Kind::Pixelate { .. } | Kind::Spotlight { .. } => Vec::new(),
+        Kind::Text { .. } | Kind::Blur { .. } | Kind::Pixelate { .. } | Kind::Spotlight { .. } => {
+            Vec::new()
+        }
     }
 }
 

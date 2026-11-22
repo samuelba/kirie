@@ -3,6 +3,7 @@
 use kurbo::{Point, Rect, Vec2};
 use serde::{Deserialize, Serialize};
 
+use crate::primitive::{Align, Font};
 use crate::style::StyleId;
 
 /// An 8-bit sRGB color with straight alpha.
@@ -65,6 +66,15 @@ impl Weight {
             Weight::Thick => 7.0,
         }
     }
+
+    /// The text size a weight gave before text had a size of its own.
+    const fn legacy_text_size(self) -> f64 {
+        match self {
+            Weight::Thin => 16.0,
+            Weight::Medium => 22.0,
+            Weight::Thick => 32.0,
+        }
+    }
 }
 
 /// The colors offered in every style, the first being the default.
@@ -80,13 +90,43 @@ pub const PALETTE: [Rgba; 6] = [
 /// The color the highlighter starts with.
 pub const HIGHLIGHT: Rgba = Rgba::rgb(0xf2, 0xd1, 0x3a);
 
+/// How text marks look, besides their color.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TextLook {
+    /// The size in logical pixels.
+    pub size: f64,
+    /// `None` sets text in the style's own face.
+    pub font: Option<Font>,
+    pub align: Align,
+    /// An outline in a contrasting color, so the text reads on any background.
+    pub outlined: bool,
+}
+
+impl TextLook {
+    pub const MIN_SIZE: f64 = 8.0;
+    pub const MAX_SIZE: f64 = 120.0;
+}
+
+impl Default for TextLook {
+    fn default() -> Self {
+        Self {
+            size: 22.0,
+            font: None,
+            align: Align::Left,
+            outlined: true,
+        }
+    }
+}
+
 /// The paint a mark was made with.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(from = "StoredPaint")]
 pub struct Paint {
     pub color: Rgba,
     pub weight: Weight,
     /// Closed shapes are filled with a translucent tint of the color.
     pub filled: bool,
+    pub text: TextLook,
 }
 
 impl Default for Paint {
@@ -95,6 +135,35 @@ impl Default for Paint {
             color: PALETTE[0],
             weight: Weight::Medium,
             filled: false,
+            text: TextLook::default(),
+        }
+    }
+}
+
+/// A paint as projects keep it; older ones sized text by the weight.
+#[derive(Deserialize)]
+struct StoredPaint {
+    color: Rgba,
+    weight: Weight,
+    filled: bool,
+    #[serde(default, deserialize_with = "present")]
+    text: Option<TextLook>,
+}
+
+fn present<'de, D: serde::Deserializer<'de>>(from: D) -> Result<Option<TextLook>, D::Error> {
+    TextLook::deserialize(from).map(Some)
+}
+
+impl From<StoredPaint> for Paint {
+    fn from(stored: StoredPaint) -> Self {
+        Self {
+            color: stored.color,
+            weight: stored.weight,
+            filled: stored.filled,
+            text: stored.text.unwrap_or(TextLook {
+                size: stored.weight.legacy_text_size(),
+                ..TextLook::default()
+            }),
         }
     }
 }
@@ -350,6 +419,16 @@ mod tests {
         assert_eq!(Rgba::from_hex("#e457"), None);
         assert_eq!(Rgba::from_hex("#zz572e"), None);
         assert_eq!(Rgba::from_hex("#+1+2+3"), None);
+    }
+
+    #[test]
+    fn older_paints_size_text_by_weight() {
+        let old = "(color: (r: 1, g: 2, b: 3, a: 255), weight: Thick, filled: true)";
+        let paint: Paint = ron::from_str(old).unwrap();
+        assert!((paint.text.size - 32.0).abs() < f64::EPSILON);
+        assert!(paint.text.outlined && paint.text.font.is_none());
+        let saved = ron::to_string(&Paint::default()).unwrap();
+        assert_eq!(ron::from_str::<Paint>(&saved).unwrap(), Paint::default());
     }
 
     #[test]

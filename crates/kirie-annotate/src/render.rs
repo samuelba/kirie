@@ -73,10 +73,11 @@ pub fn draw(pixmap: &mut Pixmap, primitive: &Primitive, typesetter: &mut Typeset
             size,
             color,
             font,
+            align,
             halo,
             centered,
         } => {
-            let outline = typesetter.outline(text, *font, *size, *at, *centered);
+            let outline = typesetter.outline(text, *font, *size, *at, *align, *centered);
             if let Some(halo) = halo {
                 stroke(pixmap, &outline, *halo, size * 0.16);
             }

@@ -8,7 +8,7 @@ use kurbo::{BezPath, Point, Rect, Shape as _, Vec2};
 use serde::{Deserialize, Serialize};
 
 use crate::document::Document;
-use crate::primitive::{Effect, FillRule, Primitive};
+use crate::primitive::{Effect, FillRule, Font, Primitive};
 use crate::shape::{Kind, Rgba, Shape};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -30,6 +30,14 @@ impl StyleId {
             StyleId::Clean => "Clean",
             StyleId::Sketch => "Sketch",
             StyleId::Ink => "Ink",
+        }
+    }
+
+    /// The face text is set in unless a mark picks one.
+    pub const fn font(self) -> Font {
+        match self {
+            StyleId::Clean => Font::Sans,
+            StyleId::Sketch | StyleId::Ink => Font::Hand,
         }
     }
 }
@@ -115,6 +123,14 @@ fn unturned(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Vec<Prim
             vec![spotlight(stage.visible, &stage.holes, 6.0 * unit)]
         }
         Kind::Spotlight { .. } => Vec::new(),
+        Kind::Text { at, text } => {
+            let font = shape
+                .paint
+                .text
+                .font
+                .unwrap_or(shape.style.unwrap_or(style).font());
+            vec![text_mark(*at, text, font, &context)]
+        }
         kind => match shape.style.unwrap_or(style) {
             StyleId::Clean => clean::primitives(kind, &context),
             StyleId::Sketch => sketch::primitives(kind, &context),
@@ -145,17 +161,24 @@ impl Context {
         self.paint.color.with_alpha(0x40)
     }
 
-    fn text_size(&self) -> f64 {
-        let size = match self.paint.weight {
-            crate::shape::Weight::Thin => 16.0,
-            crate::shape::Weight::Medium => 22.0,
-            crate::shape::Weight::Thick => 32.0,
-        };
-        size * self.unit
-    }
-
     fn counter_radius(&self) -> f64 {
         (10.0 + self.paint.weight.base() * 1.5) * self.unit
+    }
+}
+
+/// A text mark, the same in every style but for its face.
+fn text_mark(at: Point, text: &str, font: Font, context: &Context) -> Primitive {
+    let look = context.paint.text;
+    let color = context.color();
+    Primitive::Text {
+        at,
+        text: text.to_owned(),
+        size: look.size * context.unit * font.scale(),
+        color,
+        font,
+        align: look.align,
+        halo: look.outlined.then(|| halo_for(color)),
+        centered: false,
     }
 }
 
@@ -628,7 +651,6 @@ mod tests {
             seed: 0,
         };
         assert!((context.width() - 14.0).abs() < 1e-9);
-        assert!((context.text_size() - 64.0).abs() < 1e-9);
         assert_eq!(context.tint().a, 0x40);
     }
 }

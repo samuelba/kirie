@@ -231,26 +231,6 @@ impl Editor {
 
     fn inspector(&self) -> Element<'_, Message> {
         let palette = self.palette;
-        let section = |title: &'static str, content: Element<'static, Message>| {
-            column![text(title).size(12).color(palette.muted), content].spacing(space::S)
-        };
-        let fill = row![
-            icon_button(
-                Icon::Fill,
-                "Fill shapes",
-                palette,
-                self.paint.filled,
-                Some(Message::ToggleFill)
-            ),
-            text(if self.paint.filled {
-                "Shapes are filled"
-            } else {
-                "Outlines only"
-            })
-            .size(13),
-        ]
-        .spacing(space::S)
-        .align_y(Alignment::Center);
         let zoom = row![
             icon_button(
                 Icon::Fit,
@@ -270,34 +250,13 @@ impl Editor {
         ]
         .spacing(space::XS)
         .align_y(Alignment::Center);
-        let mut colors = column![
-            controls::colors(
-                &self.swatches,
-                self.paint,
-                palette,
-                self.picker.as_ref().map(Picker::target),
-                Message::PickColor,
-                Message::EditColor,
-            )
-            .wrap()
-        ]
-        .spacing(space::M);
-        if let Some(open) = &self.picker {
-            colors = colors.push(picker::view(open, palette).map(Message::Picker));
-        }
-        let mut content = column![
-            column![text("Color").size(12).color(palette.muted), colors].spacing(space::S),
-            section(
-                "Weight",
-                controls::weights(self.paint, palette, Message::PickWeight)
-            ),
-            section("Fill", fill.into()),
-            rule::horizontal(1),
-            section("View", zoom.into()),
-        ]
-        .spacing(space::L);
+        let mut content = self
+            .paint_sections()
+            .push(rule::horizontal(1))
+            .push(section(palette, "View", zoom.into()));
         if let Some((image, _)) = &self.image {
             content = content.push(section(
+                palette,
                 "Image",
                 text(format!("{} × {} px", image.width(), image.height()))
                     .size(13)
@@ -320,6 +279,74 @@ impl Editor {
             .style(panel(palette))
             .into()
     }
+
+    /// The color, and the text look or the weight and fill, of the picked mark or the next.
+    fn paint_sections(&self) -> iced::widget::Column<'_, Message> {
+        let palette = self.palette;
+        let paint = self.shown_paint();
+        let mut colors = column![
+            controls::colors(
+                &self.swatches,
+                paint,
+                palette,
+                self.picker.as_ref().map(Picker::target),
+                Message::PickColor,
+                Message::EditColor,
+            )
+            .wrap()
+        ]
+        .spacing(space::M);
+        if let Some(open) = &self.picker {
+            colors = colors.push(picker::view(open, palette).map(Message::Picker));
+        }
+        let content = column![section(palette, "Color", colors.into())].spacing(space::L);
+        if self.texting() {
+            let fallback = self.document().style.font();
+            return content.push(section(
+                palette,
+                "Text",
+                column![
+                    controls::fonts(paint.text, fallback, palette, Message::Look),
+                    controls::text_size(paint.text, palette, 150.0, Message::Look),
+                    controls::text_layout(paint.text, palette, Message::Look),
+                ]
+                .spacing(space::S)
+                .into(),
+            ));
+        }
+        let fill = row![
+            icon_button(
+                Icon::Fill,
+                "Fill shapes",
+                palette,
+                paint.filled,
+                Some(Message::ToggleFill)
+            ),
+            text(if paint.filled {
+                "Shapes are filled"
+            } else {
+                "Outlines only"
+            })
+            .size(13),
+        ]
+        .spacing(space::S)
+        .align_y(Alignment::Center);
+        content
+            .push(section(
+                palette,
+                "Weight",
+                controls::weights(paint, palette, Message::PickWeight),
+            ))
+            .push(section(palette, "Fill", fill.into()))
+    }
+}
+
+fn section<'a>(
+    palette: Palette,
+    title: &'static str,
+    content: Element<'a, Message>,
+) -> iced::widget::Column<'a, Message> {
+    column![text(title).size(12).color(palette.muted), content].spacing(space::S)
 }
 
 fn panel(palette: Palette) -> impl Fn(&iced::Theme) -> container::Style {

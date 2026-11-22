@@ -114,13 +114,14 @@ impl Painter<'_> {
                 size,
                 color,
                 font,
+                align,
                 halo,
                 centered,
             } => {
                 let outline = self
                     .typesetter
                     .borrow_mut()
-                    .outline(text, *font, *size, *at, *centered);
+                    .outline(text, *font, *size, *at, *align, *centered);
                 let path = to_iced(&outline, transform);
                 if let Some(halo) = halo {
                     frame.stroke(&path, stroke(*halo, size * 0.16 * scale));

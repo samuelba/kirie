@@ -96,5 +96,5 @@ Smoke tests run Kirie under a headless compositor: `scripts/sway-smoke.sh` (need
 ## License
 
 MIT. The GNOME Shell extension in `gnome-extension/` is GPL-2.0-or-later. The bundled fonts
-(Inter, Caveat) are under the SIL Open Font License, and the icons come from
+(Inter, Caveat, Source Code Pro) are under the SIL Open Font License, and the icons come from
 [Lucide](https://lucide.dev) under the ISC license; their licenses are in `assets/`.

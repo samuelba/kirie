@@ -151,6 +151,10 @@ fn main() {
                 color: kirie_annotate::Rgba::rgb(0x16, 0x18, 0x1d),
                 weight: Weight::Thin,
                 filled: false,
+                text: kirie_annotate::TextLook {
+                    size: 16.0,
+                    ..kirie_annotate::TextLook::default()
+                },
             },
         });
         image = render(&document, &image, &mut typesetter).expect("renders");

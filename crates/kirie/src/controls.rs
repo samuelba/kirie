@@ -2,11 +2,11 @@
 //! weight pickers.
 
 use iced::Element;
-use iced::widget::{Row, mouse_area, row};
-use kirie_annotate::{HIGHLIGHT, Paint, Rgba, StyleId, Tool, Weight};
-use kirie_ui::Palette;
+use iced::widget::{Row, container, mouse_area, row, text};
+use kirie_annotate::{Align, Font, HIGHLIGHT, Paint, Rgba, StyleId, TextLook, Tool, Weight};
 use kirie_ui::icon::Icon;
-use kirie_ui::widget::{pill, swatch, swatch_button};
+use kirie_ui::widget::{icon_button, pill, swatch, swatch_button, value_slider};
+use kirie_ui::{Palette, space};
 
 use crate::paint::color_of;
 use crate::picker::Target;
@@ -109,6 +109,124 @@ pub fn weights<'a, Message: Clone + 'a>(
     .into()
 }
 
+/// A change to how text looks.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextEvent {
+    Font(Font),
+    Size(f64),
+    /// The size slider was let go.
+    SizeDone,
+    Align(Align),
+    ToggleOutline,
+}
+
+impl TextEvent {
+    /// `look` changed by this event.
+    pub fn apply(self, look: TextLook) -> TextLook {
+        match self {
+            TextEvent::Font(font) => TextLook {
+                font: Some(font),
+                ..look
+            },
+            TextEvent::Size(size) => TextLook {
+                size: size.clamp(TextLook::MIN_SIZE, TextLook::MAX_SIZE),
+                ..look
+            },
+            TextEvent::Align(align) => TextLook { align, ..look },
+            TextEvent::ToggleOutline => TextLook {
+                outlined: !look.outlined,
+                ..look
+            },
+            TextEvent::SizeDone => look,
+        }
+    }
+
+    /// Whether the event is one step of a drag, to be undone with the rest of it.
+    pub fn gradual(self) -> bool {
+        matches!(self, TextEvent::Size(_))
+    }
+}
+
+/// The faces to set text in; `fallback` is the style's face, shown while none is picked.
+pub fn fonts<'a, Message: Clone + 'a>(
+    look: TextLook,
+    fallback: Font,
+    palette: Palette,
+    on: impl Fn(TextEvent) -> Message,
+) -> Element<'a, Message> {
+    let current = look.font.unwrap_or(fallback);
+    row(Font::ALL.into_iter().map(|font| {
+        pill(
+            font.name(),
+            font == current,
+            palette,
+            on(TextEvent::Font(font)),
+        )
+    }))
+    .spacing(2)
+    .into()
+}
+
+/// A slider for the text size, with the size beside it.
+pub fn text_size<'a, Message: Clone + 'a>(
+    look: TextLook,
+    palette: Palette,
+    width: f32,
+    on: impl Fn(TextEvent) -> Message + 'a,
+) -> Element<'a, Message> {
+    let done = on(TextEvent::SizeDone);
+    row![
+        container(value_slider(
+            TextLook::MIN_SIZE..=TextLook::MAX_SIZE,
+            look.size,
+            palette,
+            move |size| on(TextEvent::Size(size)),
+            done,
+        ))
+        .width(width),
+        text(format!("{:.0} px", look.size))
+            .size(12)
+            .color(palette.muted)
+            .width(42),
+    ]
+    .spacing(space::S)
+    .align_y(iced::Alignment::Center)
+    .into()
+}
+
+/// How the lines line up, and whether the text is outlined.
+pub fn text_layout<'a, Message: Clone + 'a>(
+    look: TextLook,
+    palette: Palette,
+    on: impl Fn(TextEvent) -> Message,
+) -> Element<'a, Message> {
+    let aligns = [
+        (Align::Left, Icon::AlignLeft, "Align left"),
+        (Align::Center, Icon::AlignCenter, "Center"),
+        (Align::Right, Icon::AlignRight, "Align right"),
+    ]
+    .into_iter()
+    .map(|(align, icon, label)| {
+        icon_button(
+            icon,
+            label,
+            palette,
+            look.align == align,
+            Some(on(TextEvent::Align(align))),
+        )
+    });
+    row(aligns)
+        .push(icon_button(
+            Icon::TextOutline,
+            "Outline the text",
+            palette,
+            look.outlined,
+            Some(on(TextEvent::ToggleOutline)),
+        ))
+        .spacing(2)
+        .into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +243,23 @@ mod tests {
         assert_eq!(tool_color(Some(Tool::Highlighter), blue, default), blue);
         assert_eq!(tool_color(Some(Tool::Arrow), HIGHLIGHT, default), default);
         assert_eq!(tool_color(None, blue, default), blue);
+    }
+
+    #[test]
+    fn text_events_change_only_their_part() {
+        let look = TextLook::default();
+        let mono = TextEvent::Font(Font::Mono).apply(look);
+        assert_eq!(mono.font, Some(Font::Mono));
+        assert!((mono.size - look.size).abs() < f64::EPSILON);
+        let huge = TextEvent::Size(1000.0).apply(look);
+        assert!((huge.size - TextLook::MAX_SIZE).abs() < f64::EPSILON);
+        assert_eq!(
+            TextEvent::Align(Align::Right).apply(look).align,
+            Align::Right
+        );
+        assert!(!TextEvent::ToggleOutline.apply(look).outlined);
+        assert_eq!(TextEvent::SizeDone.apply(look), look);
+        assert!(TextEvent::Size(9.0).gradual() && !TextEvent::SizeDone.gradual());
     }
 
     #[test]
