@@ -1,0 +1,47 @@
+name: Dist
+
+# Builds the release tarballs, so packaging breaks show up before a release. The release
+# workflow calls this one and uploads the results.
+on:
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - crates/kirie/Cargo.toml
+      - gnome-extension/**
+      - packaging/**
+      - scripts/package.sh
+      - .github/workflows/dist.yml
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: dist-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04 keeps the glibc requirement low, so the binaries run on older distributions.
+          - os: ubuntu-22.04
+            arch: x86_64
+          - os: ubuntu-22.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev
+      - run: ./scripts/package.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error

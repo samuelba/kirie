@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup show
+      - run: cargo fmt --all --check
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev
+      - run: cargo clippy --workspace --all-targets --locked
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev
+      - run: cargo nextest run --workspace --locked --no-tests=pass
+      - run: cargo build --workspace --release --locked
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  desktop:
+    name: Desktop files and scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y desktop-file-utils appstream
+      - run: desktop-file-validate packaging/dev.samuelba.Kirie.desktop
+      - run: appstreamcli validate --no-net packaging/dev.samuelba.Kirie.metainfo.xml
+      - name: Shell scripts parse
+        run: for file in scripts/*.sh; do bash -n "$file"; done
+      - name: The installer is POSIX sh
+        run: shellcheck --shell=sh scripts/install.sh
