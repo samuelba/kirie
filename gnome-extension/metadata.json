@@ -1,0 +1,18 @@
+{
+  "uuid": "kirie@samuelba.dev",
+  "name": "Kirie",
+  "description": "Companion for the Kirie screenshot tool: a global shortcut, screenshots without a permission dialog, and an overlay that stays above every window.",
+  "shell-version": [
+    "46",
+    "47",
+    "48",
+    "49",
+    "50"
+  ],
+  "settings-schema": "org.gnome.shell.extensions.kirie",
+  "session-modes": [
+    "user"
+  ],
+  "url": "https://github.com/samuelba/kirie",
+  "version-name": "0.0.0"
+}

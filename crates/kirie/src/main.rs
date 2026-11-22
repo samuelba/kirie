@@ -1,6 +1,7 @@
 mod clipboard;
 mod controls;
 mod editor;
+mod extension;
 mod ipc;
 mod overlay;
 mod paint;
@@ -43,12 +44,23 @@ enum Command {
     },
     /// Open an image in the editor.
     Edit { path: PathBuf },
+    /// Install or remove the companion GNOME Shell extension.
+    #[command(subcommand, name = "gnome-extension")]
+    GnomeExtension(GnomeExtension),
     /// Information for bug reports.
     #[command(subcommand, hide = true)]
     Debug(Debug),
     /// Offers a PNG from stdin on the clipboard until something else is copied.
     #[command(name = "serve-clipboard", hide = true)]
     ServeClipboard,
+}
+
+#[derive(Debug, Subcommand)]
+enum GnomeExtension {
+    /// Install and enable it for this user.
+    Install,
+    /// Disable and remove it.
+    Uninstall,
 }
 
 #[derive(Debug, Subcommand)]
@@ -84,6 +96,8 @@ fn main() -> anyhow::Result<()> {
         }) => capture_region(cursor, edit),
         Some(Command::Debug(Debug::Globals)) => print_globals(),
         Some(Command::ServeClipboard) => clipboard::serve(),
+        Some(Command::GnomeExtension(GnomeExtension::Install)) => extension::install(),
+        Some(Command::GnomeExtension(GnomeExtension::Uninstall)) => extension::uninstall(),
         None => edit(None),
         Some(Command::Edit { path }) => edit(Some(&path)),
         Some(Command::Capture { .. }) => {
@@ -149,6 +163,19 @@ fn block_on<T>(future: impl Future<Output = T>) -> anyhow::Result<T> {
 }
 
 fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
+    // With Kirie's GNOME Shell extension, the extension starts a trusted Kirie for the capture.
+    if !kirie_capture::shell::launched() {
+        let mut args = vec!["region"];
+        if cursor {
+            args.push("--cursor");
+        }
+        if edit {
+            args.push("--edit");
+        }
+        if block_on(kirie_capture::shell::capture(&args))? {
+            return Ok(());
+        }
+    }
     let cursor = if cursor {
         Cursor::Shown
     } else {
@@ -160,7 +187,9 @@ fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
     } else {
         overlay::Action::Copy
     };
-    let host = if kirie_capture::wayland::globals().is_ok_and(|globals| globals.layer_shell)
+    let host = if kirie_capture::shell::launched() {
+        overlay::Host::Shell
+    } else if kirie_capture::wayland::globals().is_ok_and(|globals| globals.layer_shell)
         && std::env::var("KIRIE_OVERLAY").as_deref() != Ok("window")
     {
         overlay::Host::Layer

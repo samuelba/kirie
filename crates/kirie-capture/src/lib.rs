@@ -4,6 +4,7 @@
 pub mod geometry;
 pub mod pixels;
 pub mod portal;
+pub mod shell;
 pub mod wayland;
 
 pub use geometry::{Frame, Output, Rect, Transform};
@@ -34,6 +35,8 @@ pub enum CaptureError {
     Failed(String),
     #[error("the screenshot portal failed: {0}")]
     Portal(String),
+    #[error("the GNOME Shell extension failed: {0}")]
+    Shell(String),
     #[error("the screenshot was cancelled")]
     Cancelled,
     #[error(transparent)]
@@ -46,12 +49,20 @@ pub enum CaptureError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
     Wayland(wayland::Protocol),
+    /// Kirie's GNOME Shell extension.
+    Shell,
     Portal,
 }
 
-/// Captures every screen: through the compositor's capture protocol when it has one, else
-/// through the screenshot portal. `KIRIE_CAPTURE=portal` forces the portal.
+/// Captures every screen: through Kirie's GNOME Shell extension when it started this Kirie,
+/// through the compositor's capture protocol when it has one, else through the screenshot
+/// portal. `KIRIE_CAPTURE=portal` forces the portal.
 pub async fn capture(cursor: Cursor) -> Result<(Backend, Vec<Frame>), CaptureError> {
+    if shell::launched() {
+        // The extension hands its trusted Wayland connection over once (WAYLAND_SOCKET); it
+        // must be left for the overlay's windows, so no other Wayland connection is made here.
+        return Ok((Backend::Shell, shell::screens(&[]).await?));
+    }
     let forced_portal = std::env::var("KIRIE_CAPTURE").is_ok_and(|value| value == "portal");
     if !forced_portal {
         match wayland::capture(cursor) {

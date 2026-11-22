@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.kirie" path="/org/gnome/shell/extensions/kirie/">
+    <key name="capture-shortcut" type="as">
+      <default>['&lt;Shift&gt;Print']</default>
+      <summary>Shortcut that takes a screenshot with Kirie</summary>
+      <description>GNOME's own screenshot tool keeps Print.</description>
+    </key>
+    <key name="command" type="as">
+      <default>[]</default>
+      <summary>Command that starts Kirie</summary>
+      <description>Empty means "kirie" from PATH.</description>
+    </key>
+  </schema>
+</schemalist>

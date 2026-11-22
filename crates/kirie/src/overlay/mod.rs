@@ -86,6 +86,9 @@ pub enum Host {
     /// One fullscreen window, for desktops without layer-shell (GNOME without Kirie's
     /// extension).
     Window,
+    /// A window per screen, titled so Kirie's GNOME Shell extension puts each on its screen
+    /// and above everything.
+    Shell,
 }
 
 impl TryInto<LayerShellCustomActionWithId> for Message {
@@ -220,6 +223,13 @@ impl Overlay {
                 surfaces.insert(id, 0);
                 vec![open.discard()]
             }
+            Host::Shell => (0..frames.len())
+                .map(|index| {
+                    let (id, open) = window::open(window_settings());
+                    surfaces.insert(id, index);
+                    open.discard()
+                })
+                .collect(),
         };
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let document = Document::new(
@@ -383,6 +393,9 @@ impl Overlay {
         }) else {
             return;
         };
+        if self.surfaces.len() > 1 {
+            return;
+        }
         if let Some(shown) = self.surfaces.get_mut(&id)
             && *shown != index
         {
@@ -565,6 +578,14 @@ impl Overlay {
         ])
     }
 
+    /// What Kirie's GNOME Shell extension reads to put a window on its screen.
+    pub fn title(&self, id: window::Id) -> String {
+        format!(
+            "kirie-overlay-{}",
+            self.surfaces.get(&id).copied().unwrap_or(0)
+        )
+    }
+
     #[expect(
         clippy::unused_self,
         reason = "the overlay is always dark over a dimmed screen"
@@ -686,7 +707,8 @@ pub fn run(frames: Vec<Frame>, primary: Action, host: Host) -> Result<Outcome, S
             })
             .run()
             .map_err(|error| error.to_string()),
-        Host::Window => iced::daemon(boot, Overlay::update, Overlay::view)
+        Host::Window | Host::Shell => iced::daemon(boot, Overlay::update, Overlay::view)
+            .title(Overlay::title)
             .theme(Overlay::theme)
             .subscription(Overlay::subscription)
             .style(style)

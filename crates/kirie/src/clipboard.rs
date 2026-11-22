@@ -11,6 +11,14 @@ pub const SERVE: &str = "serve-clipboard";
 
 /// Encodes `image` as PNG and hands it to a background process that offers it on the clipboard.
 pub async fn copy(image: RgbaImage) -> Result<(), String> {
+    if kirie_capture::shell::launched() {
+        let png = tokio::task::spawn_blocking(move || encode_png(&image))
+            .await
+            .map_err(|error| error.to_string())??;
+        return kirie_capture::shell::set_clipboard(&png)
+            .await
+            .map_err(|error| error.to_string());
+    }
     tokio::task::spawn_blocking(move || {
         let png = encode_png(&image)?;
         let exe = std::env::current_exe().map_err(|error| error.to_string())?;
