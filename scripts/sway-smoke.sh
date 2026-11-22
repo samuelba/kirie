@@ -34,7 +34,8 @@ done
 [[ -n "${socket:-}" ]] || { cat "$out/sway.log"; echo "sway did not start" >&2; exit 1; }
 export WAYLAND_DISPLAY="${socket##*/}"
 
-"$kirie" debug globals | head -3
+"$kirie" debug globals >"$out/globals.txt"
+head -n 3 "$out/globals.txt"
 "$kirie" capture all --output "$out/screen.png"
 
 "$kirie" capture >"$out/overlay.log" 2>&1 &
