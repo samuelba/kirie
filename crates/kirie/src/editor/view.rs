@@ -85,11 +85,12 @@ impl Editor {
             false,
             Some(Message::Open),
         );
-        let mut actions = row![open, capture, divider(palette), history, divider(palette)]
+        let mut actions = row![open, capture, divider(palette), history]
             .spacing(space::S)
             .align_y(Alignment::Center);
         if has_image {
             actions = actions
+                .push(divider(palette))
                 .push(icon_button(
                     Icon::Project,
                     "Save editable project (Ctrl+Shift+S)",
