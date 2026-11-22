@@ -2,8 +2,10 @@
 //! weight pickers.
 
 use iced::Element;
-use iced::widget::{Row, container, mouse_area, row, text};
-use kirie_annotate::{Align, Font, HIGHLIGHT, Paint, Rgba, StyleId, TextLook, Tool, Weight};
+use iced::widget::{Row, container, mouse_area, row, svg, text};
+use kirie_annotate::{
+    Align, Document, Font, HIGHLIGHT, Paint, Rgba, StyleId, TextLook, Tool, Weight,
+};
 use kirie_ui::icon::Icon;
 use kirie_ui::widget::{icon_button, pill, swatch, swatch_button, value_slider};
 use kirie_ui::{Palette, space};
@@ -165,6 +167,50 @@ pub fn weights<'a, Message: Clone + 'a>(
     .align_y(iced::Alignment::Center)
     .into();
     (presets, slider)
+}
+
+/// A change to how bright spotlights leave the rest of the image.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BrightnessEvent {
+    Slide(f64),
+    /// The slider was let go.
+    Done,
+}
+
+/// A slider for how bright spotlights leave the rest of the image, with the brightness beside
+/// it; `width` is the slider's.
+pub fn spotlight_brightness<'a, Message: Clone + 'a>(
+    brightness: f64,
+    palette: Palette,
+    width: f32,
+    on: impl Fn(BrightnessEvent) -> Message + 'a,
+) -> Element<'a, Message> {
+    let range = Document::SPOTLIGHT_BRIGHTNESS_RANGE;
+    let percent = brightness * 100.0;
+    let done = on(BrightnessEvent::Done);
+    row![
+        svg(Icon::Light.handle())
+            .width(16)
+            .height(16)
+            .style(move |_, _| svg::Style {
+                color: Some(palette.muted),
+            }),
+        container(value_slider(
+            range.start() * 100.0..=range.end() * 100.0,
+            percent,
+            palette,
+            move |percent| on(BrightnessEvent::Slide(percent / 100.0)),
+            done,
+        ))
+        .width(width),
+        text(format!("{percent:.0} %"))
+            .size(12)
+            .color(palette.muted)
+            .width(42),
+    ]
+    .spacing(space::S)
+    .align_y(iced::Alignment::Center)
+    .into()
 }
 
 /// A change to how text looks.

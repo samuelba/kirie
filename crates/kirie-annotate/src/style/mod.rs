@@ -44,7 +44,7 @@ impl StyleId {
 
 /// Everything the document's marks draw, bottom to top, in image coordinates.
 pub fn render_list(document: &Document) -> Vec<Primitive> {
-    let stage = Stage::new(document.visible(), document.shadow, document.shapes());
+    let stage = Stage::new(document, document.visible(), document.shapes());
     document
         .shapes()
         .flat_map(|shape| primitives(shape, document.style, document.unit, &stage))
@@ -54,24 +54,39 @@ pub fn render_list(document: &Document) -> Vec<Primitive> {
 /// What marks are drawn onto: the image area shown, whether marks cast shadows, and the
 /// spotlights. All spotlights dim that area once, together, where the lowest of them sits, so
 /// overlapping spotlights never darken it twice.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Stage {
     visible: Rect,
     shadow: bool,
+    /// The opacity of the shade spotlights put over the rest.
+    dim: f64,
     holes: Vec<Rect>,
     lowest: Option<crate::shape::ShapeId>,
 }
 
+impl Default for Stage {
+    fn default() -> Self {
+        Self {
+            visible: Rect::ZERO,
+            shadow: false,
+            dim: 1.0 - Document::SPOTLIGHT_BRIGHTNESS,
+            holes: Vec::new(),
+            lowest: None,
+        }
+    }
+}
+
 impl Stage {
-    /// `shapes` bottom to top.
+    /// The stage for `document`'s look, showing `visible`, with `shapes` bottom to top.
     pub fn new<'a>(
+        document: &Document,
         visible: Rect,
-        shadow: bool,
         shapes: impl IntoIterator<Item = &'a Shape>,
     ) -> Self {
         let mut stage = Self {
             visible,
-            shadow,
+            shadow: document.shadow,
+            dim: 1.0 - Document::spotlight_brightness(document.spotlight_brightness),
             ..Self::default()
         };
         for shape in shapes {
@@ -151,7 +166,12 @@ fn unturned(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Vec<Prim
             effect: Effect::Pixelate { cell: 12.0 * unit },
         }],
         Kind::Spotlight { .. } if stage.lowest == Some(shape.id) => {
-            vec![spotlight(stage.visible, &stage.holes, 6.0 * unit)]
+            vec![spotlight(
+                stage.visible,
+                &stage.holes,
+                6.0 * unit,
+                stage.dim,
+            )]
         }
         Kind::Spotlight { .. } => Vec::new(),
         Kind::Text { at, text } => {
@@ -255,9 +275,10 @@ fn chaikin(points: &[Point], rounds: usize) -> Vec<Point> {
 }
 
 /// The dimmed part of `visible`: everything outside the holes, whose corners are rounded by
-/// `radius`. A fill rule cannot cut out overlapping holes, so the dimmed part is built from
-/// pieces that never overlap: grid cells outside every hole, and the rounded-off corners.
-fn spotlight(visible: Rect, holes: &[Rect], radius: f64) -> Primitive {
+/// `radius`, shaded `dim` dark. A fill rule cannot cut out overlapping holes, so the dimmed part
+/// is built from pieces that never overlap: grid cells outside every hole, and the rounded-off
+/// corners.
+fn spotlight(visible: Rect, holes: &[Rect], radius: f64, dim: f64) -> Primitive {
     let inside: Vec<Rect> = holes
         .iter()
         .map(|hole| hole.intersect(visible))
@@ -314,9 +335,14 @@ fn spotlight(visible: Rect, holes: &[Rect], radius: f64) -> Primitive {
     }
     Primitive::Fill {
         path,
-        color: Rgba::rgb(0, 0, 0).with_alpha(0x8c),
+        color: Rgba::rgb(0, 0, 0).with_alpha(opacity(dim)),
         rule: FillRule::NonZero,
     }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn opacity(share: f64) -> u8 {
+    (share.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 /// The bit of a box's corner that rounding cuts away.
@@ -517,7 +543,11 @@ mod tests {
                         style: None,
                         rotation: 0.0,
                     };
-                    let stage = Stage::new(Rect::new(0.0, 0.0, 100.0, 100.0), true, [&shape]);
+                    let stage = Stage::new(
+                        &Document::new(100, 100, 1.0),
+                        Rect::new(0.0, 0.0, 100.0, 100.0),
+                        [&shape],
+                    );
                     let drawn = primitives(&shape, style, 1.0, &stage);
                     assert!(!drawn.is_empty(), "{style:?} drew nothing for {kind:?}");
                 }
@@ -595,10 +625,30 @@ mod tests {
     }
 
     #[test]
+    fn spotlights_dim_as_bright_as_asked() {
+        let shade = |brightness: f64| {
+            let document = Document::new(100, 100, 1.0)
+                .apply(Op::SetSpotlightBrightness(brightness))
+                .apply(Op::Add {
+                    kind: Kind::Spotlight {
+                        rect: Rect::new(10.0, 10.0, 50.0, 50.0),
+                    },
+                    paint: Paint::default(),
+                });
+            match render_list(&document).as_slice() {
+                [Primitive::Fill { color, .. }] => color.a,
+                drawn => panic!("{drawn:?}"),
+            }
+        };
+        assert_eq!(shade(Document::SPOTLIGHT_BRIGHTNESS), 0x8c);
+        assert!(shade(0.8) < shade(0.2));
+    }
+
+    #[test]
     fn a_spotlight_past_the_edge_dims_only_what_is_shown() {
         let visible = Rect::new(0.0, 0.0, 100.0, 100.0);
         let Primitive::Fill { path, .. } =
-            spotlight(visible, &[Rect::new(-20.0, 30.0, 50.0, 70.0)], 6.0)
+            spotlight(visible, &[Rect::new(-20.0, 30.0, 50.0, 70.0)], 6.0, 0.5)
         else {
             panic!()
         };

@@ -20,6 +20,9 @@ pub struct Document {
     /// Whether marks cast a shadow, in the styles that draw one.
     #[serde(default = "casts_shadows")]
     pub shadow: bool,
+    /// How bright spotlights leave the rest of the image, from black at 0 to untouched at 1.
+    #[serde(default = "usual_spotlight_brightness")]
+    pub spotlight_brightness: f64,
     /// The part of the image that is kept, if cropped.
     pub crop: Option<Rect>,
     shapes: Vec<Arc<Shape>>,
@@ -61,6 +64,7 @@ pub enum Op {
     Clear,
     SetStyle(StyleId),
     SetShadow(bool),
+    SetSpotlightBrightness(f64),
     Crop(Option<Rect>),
 }
 
@@ -68,7 +72,26 @@ fn casts_shadows() -> bool {
     true
 }
 
+fn usual_spotlight_brightness() -> f64 {
+    Document::SPOTLIGHT_BRIGHTNESS
+}
+
 impl Document {
+    pub const SPOTLIGHT_BRIGHTNESS: f64 = 0.45;
+    pub const SPOTLIGHT_BRIGHTNESS_RANGE: std::ops::RangeInclusive<f64> = 0.05..=0.9;
+
+    /// `brightness` kept within [`Self::SPOTLIGHT_BRIGHTNESS_RANGE`].
+    pub fn spotlight_brightness(brightness: f64) -> f64 {
+        if brightness.is_finite() {
+            brightness.clamp(
+                *Self::SPOTLIGHT_BRIGHTNESS_RANGE.start(),
+                *Self::SPOTLIGHT_BRIGHTNESS_RANGE.end(),
+            )
+        } else {
+            Self::SPOTLIGHT_BRIGHTNESS
+        }
+    }
+
     pub fn new(width: u32, height: u32, unit: f64) -> Self {
         Self {
             width,
@@ -80,6 +103,7 @@ impl Document {
             },
             style: StyleId::default(),
             shadow: true,
+            spotlight_brightness: Self::SPOTLIGHT_BRIGHTNESS,
             crop: None,
             shapes: Vec::new(),
             next_id: 1,
@@ -160,6 +184,7 @@ impl Document {
         let mut next = Document::new(width, height, unit);
         next.style = self.style;
         next.shadow = self.shadow;
+        next.spotlight_brightness = self.spotlight_brightness;
         next.next_id = self.next_id;
         next.shapes = self
             .shapes
@@ -218,6 +243,9 @@ impl Document {
             Op::Clear => next.shapes.clear(),
             Op::SetStyle(style) => next.style = style,
             Op::SetShadow(shadow) => next.shadow = shadow,
+            Op::SetSpotlightBrightness(brightness) => {
+                next.spotlight_brightness = Self::spotlight_brightness(brightness);
+            }
             Op::Crop(crop) => {
                 next.crop = crop
                     .map(|rect| self.clamp(rect))
@@ -488,6 +516,19 @@ mod tests {
                 .transformed(kurbo::Affine::IDENTITY, 100, 50, 1.0)
                 .shadow
         );
+    }
+
+    #[test]
+    fn spotlight_brightness_stays_within_range() {
+        let doc = Document::new(10, 10, 1.0);
+        let dark = doc.apply(Op::SetSpotlightBrightness(-1.0));
+        assert!((dark.spotlight_brightness - 0.05).abs() < 1e-9);
+        let bright = doc.apply(Op::SetSpotlightBrightness(0.7));
+        assert!((bright.spotlight_brightness - 0.7).abs() < 1e-9);
+        let kept = bright.transformed(kurbo::Affine::IDENTITY, 10, 10, 1.0);
+        assert!((kept.spotlight_brightness - 0.7).abs() < 1e-9);
+        let broken = doc.apply(Op::SetSpotlightBrightness(f64::NAN));
+        assert!((broken.spotlight_brightness - Document::SPOTLIGHT_BRIGHTNESS).abs() < 1e-9);
     }
 
     #[test]

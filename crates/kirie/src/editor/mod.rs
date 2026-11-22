@@ -109,6 +109,7 @@ pub enum Message {
     Picker(picker::Event),
     Weight(crate::controls::WeightEvent),
     ToggleFill,
+    Brightness(controls::BrightnessEvent),
     Look(controls::TextEvent),
     ToggleScheme,
     TextEdit(iced::widget::text_editor::Action),
@@ -296,6 +297,7 @@ impl Editor {
             | Message::Picker(_)
             | Message::Weight(_)
             | Message::ToggleFill
+            | Message::Brightness(_)
             | Message::Look(_) => return self.restyle(message),
             Message::SystemScheme(scheme) => self.follow(Some(scheme)),
             Message::ToggleScheme => self.follow(None),
@@ -406,7 +408,13 @@ impl Editor {
             }
             Message::Picker(event) => return self.edit_color(event),
             Message::Weight(controls::WeightEvent::Done)
+            | Message::Brightness(controls::BrightnessEvent::Done)
             | Message::Look(controls::TextEvent::SizeDone) => self.sliding = false,
+            Message::Brightness(controls::BrightnessEvent::Slide(brightness)) => {
+                self.history
+                    .apply_gradually(Op::SetSpotlightBrightness(brightness), self.sliding);
+                self.sliding = true;
+            }
             Message::Weight(controls::WeightEvent::Pick(weight)) => {
                 self.repaint(|paint| paint.weight = weight);
             }
@@ -524,6 +532,15 @@ impl Editor {
                 .picked
                 .and_then(|id| self.document().shape(id))
                 .is_some_and(|shape| matches!(shape.kind, Kind::Text { .. }))
+    }
+
+    /// Whether the spotlight controls apply: to the spotlight tool or a picked spotlight.
+    fn spotlighting(&self) -> bool {
+        self.tool == Tool::Spotlight
+            || self
+                .picked
+                .and_then(|id| self.document().shape(id))
+                .is_some_and(|shape| matches!(shape.kind, Kind::Spotlight { .. }))
     }
 
     fn pointer(&mut self, pointer: Pointer, scale: f32) -> Task<Message> {

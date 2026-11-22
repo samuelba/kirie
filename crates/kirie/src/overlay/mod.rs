@@ -70,6 +70,7 @@ pub enum Message {
     Picker(picker::Event),
     Weight(crate::controls::WeightEvent),
     ToggleFill,
+    Brightness(crate::controls::BrightnessEvent),
     Look(crate::controls::TextEvent),
     TextEdit(iced::widget::text_editor::Action),
     TextDone,
@@ -408,6 +409,7 @@ impl Overlay {
             | Message::Picker(_)
             | Message::Weight(_)
             | Message::ToggleFill
+            | Message::Brightness(_)
             | Message::Look(_) => {
                 self.restyle(message);
                 Task::none()
@@ -517,7 +519,13 @@ impl Overlay {
                 }
             }
             Message::Weight(crate::controls::WeightEvent::Done)
+            | Message::Brightness(crate::controls::BrightnessEvent::Done)
             | Message::Look(crate::controls::TextEvent::SizeDone) => self.sliding = false,
+            Message::Brightness(crate::controls::BrightnessEvent::Slide(brightness)) => {
+                self.history
+                    .apply_gradually(Op::SetSpotlightBrightness(brightness), self.sliding);
+                self.sliding = true;
+            }
             Message::Weight(crate::controls::WeightEvent::Pick(weight)) => {
                 self.repaint(|paint| paint.weight = weight);
             }
@@ -577,6 +585,15 @@ impl Overlay {
                 .picked
                 .and_then(|id| self.document().shape(id))
                 .is_some_and(|shape| matches!(shape.kind, Kind::Text { .. }))
+    }
+
+    /// Whether the spotlight controls apply: to the spotlight tool or a picked spotlight.
+    fn spotlighting(&self) -> bool {
+        self.tool == Some(Tool::Spotlight)
+            || self
+                .picked
+                .and_then(|id| self.document().shape(id))
+                .is_some_and(|shape| matches!(shape.kind, Kind::Spotlight { .. }))
     }
 
     /// Shows the screen a fullscreen window landed on: the one with the window's size.

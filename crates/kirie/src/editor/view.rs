@@ -300,7 +300,8 @@ impl Editor {
             .into()
     }
 
-    /// The color, and the text look or the weight and fill, of the picked mark or the next.
+    /// The color, and the text look, the spotlight brightness, or the weight and fill, of the
+    /// picked mark or the next.
     fn paint_sections(&self) -> iced::widget::Column<'_, Message> {
         let palette = self.palette;
         let paint = self.shown_paint();
@@ -332,6 +333,18 @@ impl Editor {
                 ]
                 .spacing(space::S)
                 .into(),
+            ));
+        }
+        if self.spotlighting() {
+            return content.push(section(
+                palette,
+                "Brightness around spotlights",
+                controls::spotlight_brightness(
+                    self.document().spotlight_brightness,
+                    palette,
+                    126.0,
+                    Message::Brightness,
+                ),
             ));
         }
         let fill = row![
