@@ -56,8 +56,8 @@ enum Command {
         #[arg(long)]
         edit: bool,
     },
-    /// Open an image in the editor.
-    Edit { path: PathBuf },
+    /// Open the editor, with an image if one is given.
+    Edit { path: Option<PathBuf> },
     /// Install the latest release, after checking its signature.
     #[command(name = "self-update")]
     SelfUpdate,
@@ -127,7 +127,7 @@ fn main() -> anyhow::Result<()> {
         Some(Command::GnomeExtension(GnomeExtension::Install)) => extension::install(),
         Some(Command::GnomeExtension(GnomeExtension::Uninstall)) => extension::uninstall(),
         None => edit(None),
-        Some(Command::Edit { path }) => edit(Some(&path)),
+        Some(Command::Edit { path }) => edit(path.as_deref()),
         Some(Command::Capture { .. }) => {
             anyhow::bail!("this capture mode is not implemented yet")
         }
@@ -245,9 +245,7 @@ fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
         overlay::Outcome::Canceled => Ok(()),
         overlay::Outcome::Edit(path) => {
             if !block_on(ipc::hand_over(Some(&path)))? {
-                std::process::Command::new(std::env::current_exe()?)
-                    .arg("edit")
-                    .arg(&path)
+                editor_command(&std::env::current_exe()?, &path)
                     .spawn()
                     .context("cannot open the editor")?;
             }
@@ -255,6 +253,17 @@ fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
         }
         overlay::Outcome::Failed(error) => anyhow::bail!(error),
     }
+}
+
+/// The editor, for a picture the overlay hands over. The extension trusts only the overlay it
+/// started, so the editor must not pass for it; its captures go through the extension again.
+fn editor_command(exe: &std::path::Path, path: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new(exe);
+    command
+        .arg("edit")
+        .arg(path)
+        .env_remove(kirie_capture::shell::LAUNCHED_ENV);
+    command
 }
 
 fn print_globals() -> anyhow::Result<()> {
@@ -267,4 +276,60 @@ fn print_globals() -> anyhow::Result<()> {
         println!("{interface}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every command line the desktop entry starts, as a launcher runs it with no files.
+    fn desktop_commands() -> Vec<Vec<&'static str>> {
+        include_str!("../../../packaging/dev.samuelba.Kirie.desktop")
+            .lines()
+            .filter_map(|line| line.strip_prefix("Exec="))
+            .map(|exec| {
+                exec.split_whitespace()
+                    .filter(|word| !word.starts_with('%'))
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_desktop_entry_starts_kirie() {
+        let commands = desktop_commands();
+        assert!(!commands.is_empty());
+        for command in commands {
+            assert!(
+                Cli::try_parse_from(&command).is_ok(),
+                "the desktop entry runs {command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_editor_the_overlay_opens_is_not_trusted_by_the_extension() {
+        let command = editor_command(
+            std::path::Path::new("kirie"),
+            std::path::Path::new("a.kirie"),
+        );
+        assert!(
+            command.get_envs().any(|(key, value)| {
+                key == kirie_capture::shell::LAUNCHED_ENV && value.is_none()
+            })
+        );
+        assert_eq!(command.get_args().collect::<Vec<_>>(), ["edit", "a.kirie"]);
+    }
+
+    #[test]
+    fn edit_takes_an_optional_file() {
+        assert!(matches!(
+            Cli::parse_from(["kirie", "edit"]).command,
+            Some(Command::Edit { path: None })
+        ));
+        assert!(matches!(
+            Cli::parse_from(["kirie", "edit", "a.png"]).command,
+            Some(Command::Edit { path: Some(_) })
+        ));
+    }
 }
