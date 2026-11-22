@@ -14,7 +14,7 @@ use crate::picker::{self, Picker};
 
 pub const TEXT_INPUT: &str = "kirie-text";
 /// Room the toolbar takes; used to keep it on screen.
-const TOOLBAR: iced::Size = iced::Size::new(1020.0, 92.0);
+const TOOLBAR: iced::Size = iced::Size::new(1072.0, 92.0);
 /// How much wider "Back to the editor" is than "Copy" on the primary button.
 const BACK_TO_EDITOR: f32 = 96.0;
 const GAP: f32 = 12.0;
@@ -138,10 +138,23 @@ impl Overlay {
             ),
         ]
         .spacing(2);
+        let remember = icon_button(
+            Icon::Pin,
+            if self.remembered.is_some() {
+                "Remembered for the next screenshot until it changes; click to forget it"
+            } else {
+                "Remember this region for the next screenshot"
+            },
+            palette,
+            self.remembered.is_some(),
+            Some(Message::ToggleRemember),
+        );
         let main = row![
             tools,
             divider(palette),
             history,
+            divider(palette),
+            remember,
             divider(palette),
             self.actions()
         ]

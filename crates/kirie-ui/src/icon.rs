@@ -62,6 +62,7 @@ icons! {
     Grip => "grip-vertical",
     Crop => "crop",
     Expand => "expand",
+    Pin => "pin",
 }
 
 impl Icon {

@@ -83,6 +83,8 @@ pub enum Message {
     Accept,
     SelectAll,
     Nudge(Vector),
+    /// Keeps the selection for the next screenshot, or forgets it.
+    ToggleRemember,
     Finished(Result<Outcome, String>),
     Resized(window::Id, Size),
     /// The pointer over the toolbar's grip, in the grip's coordinates.
@@ -138,6 +140,8 @@ pub struct Overlay {
     surfaces: HashMap<window::Id, usize>,
     desktop: Rectangle,
     selection: Selection,
+    /// The selection kept for the next screenshot, while it is unchanged.
+    remembered: Option<Rectangle>,
     pointer: Option<Point>,
     modifiers: keyboard::Modifiers,
     palette: Palette,
@@ -270,13 +274,16 @@ impl Overlay {
             .map(|window| (area(window.rect), window.title))
             .collect();
         let swatches = Swatches::load();
+        let remembered =
+            crate::region::load().and_then(|region| crate::region::within(region, desktop));
         let overlay = Self {
             windows,
             captures: frames,
             screens,
             surfaces,
             desktop,
-            selection: Selection::default(),
+            selection: remembered.map(Selection::selected).unwrap_or_default(),
+            remembered,
             pointer: None,
             modifiers: keyboard::Modifiers::default(),
             palette: Palette::DARK,
@@ -322,6 +329,7 @@ impl Overlay {
             Size::new(area.width * 0.6, area.height * 0.5),
         );
         self.selection = Selection::selected(region);
+        self.remembered = None;
         self.tool = Some(Tool::Select);
         let point = |x: f32, y: f32| {
             kurbo::Point::new(
@@ -445,10 +453,16 @@ impl Overlay {
             Message::Escape => self.escape(),
             Message::Nudge(by) => {
                 self.selection = self.selection.nudge(by, self.desktop);
+                self.keep_remembered();
                 Task::none()
             }
             Message::SelectAll => {
                 self.selection = Selection::selected(self.desktop);
+                self.keep_remembered();
+                Task::none()
+            }
+            Message::ToggleRemember => {
+                self.toggle_remember();
                 Task::none()
             }
             Message::Finish(action) => self.finish(action),
@@ -491,6 +505,26 @@ impl Overlay {
                 self.toolbar_at = self.toolbar_place().map(|(at, _)| at);
             }
             _ => {}
+        }
+    }
+
+    fn toggle_remember(&mut self) {
+        if self.remembered.take().is_some() {
+            crate::region::forget();
+        } else if let Some(region) = self.selection.rect() {
+            crate::region::remember(region);
+            self.remembered = Some(region);
+        }
+    }
+
+    /// Forgets the remembered region once the selection is changed.
+    fn keep_remembered(&mut self) {
+        if self
+            .remembered
+            .is_some_and(|region| self.selection.rect() != Some(region))
+        {
+            self.remembered = None;
+            crate::region::forget();
         }
     }
 
@@ -647,7 +681,10 @@ impl Overlay {
             *shown = index;
             if self.surfaces.len() == 1 {
                 self.desktop = self.screens[index].area;
-                self.selection = Selection::default();
+                // A remembered region on another screen stays remembered for when it fits.
+                self.remembered = crate::region::load()
+                    .and_then(|region| crate::region::within(region, self.desktop));
+                self.selection = self.remembered.map(Selection::selected).unwrap_or_default();
             }
         }
     }
@@ -742,6 +779,7 @@ impl Overlay {
                 }
             }
         }
+        self.keep_remembered();
     }
 
     fn annotate(&mut self, tool: Tool, pointer: Pointer) -> Task<Message> {
