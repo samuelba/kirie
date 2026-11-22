@@ -190,8 +190,13 @@ impl Surface<'_> {
                 },
                 _ => shape,
             };
+            let draft = shape.id == document.next_id();
             for primitive in style::primitives(&shape, document.style, document.unit, visible) {
-                painter.draw(frame, &primitive, transform);
+                if draft {
+                    painter.draw_draft(frame, &primitive, transform);
+                } else {
+                    painter.draw(frame, &primitive, transform);
+                }
             }
         }
     }

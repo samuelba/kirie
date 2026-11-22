@@ -134,6 +134,8 @@ pub struct Overlay {
     paint: Paint,
     history: History,
     draft: Option<Draft>,
+    /// The tool the current pointer gesture draws with, if it draws at all.
+    drawing: Option<Tool>,
     typing: Option<Typing>,
     busy: bool,
     /// What Enter does.
@@ -250,6 +252,7 @@ impl Overlay {
             paint: Paint::default(),
             history: History::new(document),
             draft: None,
+            drawing: None,
             typing: None,
             busy: false,
             primary,
@@ -408,6 +411,10 @@ impl Overlay {
     }
 
     fn escape(&mut self) -> Task<Message> {
+        // A save or copy on its way finishes first; leaving now would drop it half done.
+        if self.busy {
+            return Task::none();
+        }
         if self.typing.take().is_some() || self.draft.take().is_some() {
             return Task::none();
         }
@@ -422,12 +429,24 @@ impl Overlay {
             Pointer::Pressed(at) | Pointer::Moved(at) | Pointer::Released(at) => at,
         };
         self.pointer = Some(at);
-        if let (Some(tool), Some(_)) = (self.tool, self.selection.rect()) {
+        // A gesture stays with what its press started, whatever happens on the way.
+        if let Pointer::Pressed(at) = pointer {
+            let inside = self.selection.hit(at, HANDLE_REACH) == Some(selection::Hit::Inside);
+            self.drawing = match self.tool {
+                Some(tool) if inside => Some(tool),
+                _ => None,
+            };
+        }
+        let task = if let Some(tool) = self.drawing {
             self.annotate(tool, pointer)
         } else {
             self.select(pointer);
             Task::none()
+        };
+        if let Pointer::Released(_) = pointer {
+            self.drawing = None;
         }
+        task
     }
 
     fn select(&mut self, pointer: Pointer) {
@@ -627,6 +646,9 @@ fn surface_settings(output: &str) -> NewLayerShellSettings {
 #[allow(clippy::needless_pass_by_value)]
 fn typing_key(event: Event, _: event::Status, _: window::Id) -> Option<Message> {
     match event {
+        Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
+            Some(Message::Modifiers(modifiers))
+        }
         Event::Keyboard(keyboard::Event::KeyPressed {
             key: keyboard::Key::Named(keyboard::key::Named::Escape),
             ..

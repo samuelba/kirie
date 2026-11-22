@@ -20,6 +20,8 @@ pub(super) struct Board<'a> {
 #[derive(Debug, Default)]
 pub(super) struct State {
     panning: Option<Point>,
+    /// Where the pointer was last seen, for a release that comes after it left the canvas.
+    last: Option<Point>,
 }
 
 impl Board<'_> {
@@ -39,6 +41,9 @@ impl canvas::Program<Message> for Board<'_> {
         cursor: mouse::Cursor,
     ) -> Option<Action<Message>> {
         let local = cursor.position_in(bounds);
+        if let Some(at) = cursor.position_from(bounds.position()) {
+            state.last = Some(at);
+        }
         let canvas = bounds.size();
         let to_image = |at: Point| self.editor.viewport.image_point(at, self.image(), canvas);
         let publish = |message| Some(Action::publish(message).and_capture());
@@ -90,7 +95,7 @@ impl canvas::Program<Message> for Board<'_> {
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
                 if self.editor.draft.is_some() =>
             {
-                let at = cursor.position_from(bounds.position())?;
+                let at = cursor.position_from(bounds.position()).or(state.last)?;
                 publish(Message::Pointer(
                     Pointer::Released(to_image(at)),
                     scale(self.editor, canvas),
@@ -253,8 +258,13 @@ impl Board<'_> {
             if editor.picked == Some(shape.id) {
                 picked_bounds = Some(shape.kind.bounds());
             }
+            let draft = shape.id == document.next_id();
             for primitive in style::primitives(&shape, document.style, document.unit, visible) {
-                painter.draw(frame, &primitive, transform);
+                if draft {
+                    painter.draw_draft(frame, &primitive, transform);
+                } else {
+                    painter.draw(frame, &primitive, transform);
+                }
             }
         }
         picked_bounds

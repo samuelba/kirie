@@ -16,7 +16,12 @@ const LINE_HEIGHT: f32 = 1.25;
 pub struct Typesetter {
     fonts: FontSystem,
     cache: SwashCache,
+    /// Outlines laid out at the origin, by text, font and size; redraws only move them.
+    outlines: std::collections::HashMap<(String, Font, u64), BezPath>,
 }
+
+/// Outlines kept before the cache starts over.
+const OUTLINES: usize = 256;
 
 impl std::fmt::Debug for Typesetter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -38,6 +43,7 @@ impl Typesetter {
         Self {
             fonts: FontSystem::new_with_locale_and_db("en-US".into(), db),
             cache: SwashCache::new(),
+            outlines: std::collections::HashMap::new(),
         }
     }
 
@@ -52,6 +58,29 @@ impl Typesetter {
         at: Point,
         centered: bool,
     ) -> BezPath {
+        let key = (text.to_owned(), font, size.to_bits());
+        let mut path = if let Some(path) = self.outlines.get(&key) {
+            path.clone()
+        } else {
+            let path = self.lay_out(text, font, size);
+            if self.outlines.len() >= OUTLINES {
+                self.outlines.clear();
+            }
+            self.outlines.insert(key, path.clone());
+            path
+        };
+        let offset = if centered {
+            at - path.bounding_box().center()
+        } else {
+            at.to_vec2()
+        };
+        path.apply_affine(kurbo::Affine::translate(offset));
+        path
+    }
+
+    /// The outlines of `text` hung from the origin.
+    #[allow(clippy::cast_possible_truncation)]
+    fn lay_out(&mut self, text: &str, font: Font, size: f64) -> BezPath {
         let size = size.max(1.0) as f32;
         let mut buffer = Buffer::new(&mut self.fonts, Metrics::new(size, size * LINE_HEIGHT));
         buffer.set_size(&mut self.fonts, None, None);
@@ -76,13 +105,6 @@ impl Typesetter {
                 append(&mut path, commands, Point::new(x, y));
             }
         }
-        let offset = if centered {
-            let bounds = path.bounding_box();
-            at - bounds.center()
-        } else {
-            at.to_vec2()
-        };
-        path.apply_affine(kurbo::Affine::translate(offset));
         path
     }
 
@@ -127,6 +149,16 @@ mod tests {
         let path = typesetter.outline("12", Font::Hand, 30.0, Point::new(40.0, 40.0), true);
         let center = path.bounding_box().center();
         assert!((center.x - 40.0).abs() < 0.01 && (center.y - 40.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn cached_outlines_move_with_their_anchor() {
+        let mut typesetter = Typesetter::new();
+        let first = typesetter.bounds("Kirie", Font::Sans, 20.0, Point::new(10.0, 10.0));
+        let again = typesetter.bounds("Kirie", Font::Sans, 20.0, Point::new(110.0, 60.0));
+        assert!((again.x0 - first.x0 - 100.0).abs() < 1e-9);
+        assert!((again.y0 - first.y0 - 50.0).abs() < 1e-9);
+        assert_eq!(typesetter.outlines.len(), 1);
     }
 
     #[test]

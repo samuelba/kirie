@@ -128,6 +128,28 @@ impl Painter<'_> {
         }
     }
 
+    /// Draws a mark still being drawn: like `draw`, but an effect shows as a light veil, so a
+    /// drag does not blur a new patch of pixels on every move.
+    pub fn draw_draft(&self, frame: &mut Frame, primitive: &Primitive, transform: Affine) {
+        let Primitive::Effect { rect, .. } = primitive else {
+            self.draw(frame, primitive, transform);
+            return;
+        };
+        let mapped = transform.transform_rect_bbox(rect.abs());
+        #[allow(clippy::cast_possible_truncation)]
+        let area = Path::rectangle(
+            Point::new(mapped.x0 as f32, mapped.y0 as f32),
+            Size::new(mapped.width() as f32, mapped.height() as f32),
+        );
+        frame.fill(&area, Color::WHITE.scale_alpha(0.28));
+        frame.stroke(
+            &area,
+            Stroke::default()
+                .with_color(Color::WHITE.scale_alpha(0.8))
+                .with_width(1.0),
+        );
+    }
+
     /// The frozen pixels under `rect` with `effect` applied, and where they go.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn patch(&self, rect: kurbo::Rect, effect: Effect) -> Option<(image::Handle, kurbo::Rect)> {

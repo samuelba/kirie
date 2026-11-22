@@ -528,6 +528,9 @@ enum Export {
 #[allow(clippy::needless_pass_by_value)]
 fn typing_key(event: Event, _: event::Status, _: window::Id) -> Option<Message> {
     match event {
+        Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
+            Some(Message::Modifiers(modifiers))
+        }
         Event::Keyboard(keyboard::Event::KeyPressed {
             key: keyboard::Key::Named(keyboard::key::Named::Escape),
             ..
