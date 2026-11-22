@@ -6,7 +6,7 @@ use iced::{Element, Length, Point, Rectangle, Size, mouse, window};
 use kirie_annotate::Tool;
 use kirie_ui::icon::Icon;
 use kirie_ui::space;
-use kirie_ui::widget::{divider, floating, icon_button, primary_button};
+use kirie_ui::widget::{divider, floating, icon_button, primary_button, secondary_button};
 
 use super::{Action, Message, Overlay, canvas};
 use crate::controls;
@@ -66,10 +66,42 @@ impl Overlay {
                 );
             }
         }
+        if self.selection.rect().is_none() {
+            layers = layers.push(self.hint(index));
+        }
         if let Some(at) = self.toolbar_position(screen.area) {
             layers = layers.push(pin(self.toolbar()).position(at));
         }
         layers.into()
+    }
+
+    /// What a click and a drag do, at the foot of each screen until something is selected.
+    /// Where windows cover a whole screen, a click takes a window, so a button takes the screen.
+    fn hint(&self, screen: usize) -> Element<'_, Message> {
+        let words = if self.windows.is_empty() {
+            "Drag to cut a region  ·  Click to take the screen  ·  Esc to cancel"
+        } else {
+            "Drag to cut a region  ·  Click to take a window  ·  Esc to cancel"
+        };
+        let mut content = row![text(words).size(13)]
+            .spacing(space::M)
+            .align_y(iced::Alignment::Center);
+        if !self.windows.is_empty() {
+            content = content.push(secondary_button(
+                "Take this screen",
+                self.palette,
+                Message::SelectScreen(screen),
+            ));
+        }
+        container(
+            container(content)
+                .padding([space::S, space::M])
+                .style(floating(self.palette)),
+        )
+        .center_x(Length::Fill)
+        .align_bottom(Length::Fill)
+        .padding(iced::Padding::ZERO.bottom(space::XL * 2.0))
+        .into()
     }
 
     /// Where the toolbar goes on this screen, if on this one.

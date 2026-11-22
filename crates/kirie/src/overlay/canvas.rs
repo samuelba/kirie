@@ -94,12 +94,9 @@ impl canvas::Program<Message> for Surface<'_> {
 
         if let Some(rect) = selection {
             self.draw_selection(&mut frame, rect);
-        } else {
-            if let Some(at) = cursor.position_in(bounds) {
-                draw_crosshair(&mut frame, at, bounds.size());
-                self.draw_window_under(&mut frame, self.to_desktop(at));
-            }
-            self.draw_hint(&mut frame, bounds.size());
+        } else if let Some(at) = cursor.position_in(bounds) {
+            draw_crosshair(&mut frame, at, bounds.size());
+            self.draw_window_under(&mut frame, self.to_desktop(at));
         }
         vec![frame.into_geometry()]
     }
@@ -271,30 +268,6 @@ impl Surface<'_> {
         frame.fill_text(Text {
             content: label,
             position: Point::new(at.x + size.width / 2.0, at.y + size.height / 2.0),
-            color: palette.text,
-            size: Pixels(LABEL_SIZE),
-            align_x: alignment::Horizontal::Center.into(),
-            align_y: alignment::Vertical::Center,
-            ..Text::default()
-        });
-    }
-
-    fn draw_hint(&self, frame: &mut Frame, size: Size) {
-        let palette = self.overlay.palette;
-        let hint = if self.overlay.windows.is_empty() {
-            "Drag to cut a region  ·  Click to take the screen  ·  Esc to cancel"
-        } else {
-            "Drag to cut a region  ·  Click to take a window or the screen  ·  Esc to cancel"
-        };
-        let pill_size = Size::new(label_width(hint), LABEL_SIZE + space::M * 2.0);
-        let at = Point::new(
-            (size.width - pill_size.width) / 2.0,
-            size.height - pill_size.height - space::XL * 2.0,
-        );
-        pill(frame, at, pill_size, palette.surface[1].scale_alpha(0.92));
-        frame.fill_text(Text {
-            content: hint.to_owned(),
-            position: Point::new(size.width / 2.0, at.y + pill_size.height / 2.0),
             color: palette.text,
             size: Pixels(LABEL_SIZE),
             align_x: alignment::Horizontal::Center.into(),

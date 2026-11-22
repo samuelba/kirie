@@ -46,7 +46,8 @@ This binds **Shift+Print** to `kirie capture`, so your desktop's own screenshot 
 ## Use it
 
 `kirie capture` freezes every screen. Drag to cut out a region, or click to take the window
-under the pointer (on GNOME with the extension, COSMIC, sway and Hyprland) or a whole screen.
+under the pointer (on GNOME with the extension, COSMIC, sway and Hyprland). **Take this screen**
+in the hint at the bottom takes the whole screen; where Kirie cannot see windows, a click does.
 Then mark it up with the toolbar under the selection.
 
 | Key | Does |
