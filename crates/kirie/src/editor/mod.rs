@@ -2,6 +2,7 @@
 
 mod canvas;
 mod closing;
+mod demo;
 mod frame;
 mod view;
 mod viewport;
@@ -309,10 +310,16 @@ impl Editor {
         );
         // The overlay may have changed the options since, in a process of its own.
         let drawing = Drawing::load();
+        let demo = (loaded.fresh || handoff) && demo::wanted();
         let document = match (loaded.fresh, handoff) {
             (true, _) => drawing.framed(drawing.styled(loaded.document)),
             (false, true) => drawing.framed(loaded.document),
             (false, false) => loaded.document,
+        };
+        let document = if demo {
+            demo::marked(document)
+        } else {
+            document
         };
         self.paint = drawing.paint_for(Some(self.tool), &self.swatches);
         self.kept = document.clone();
@@ -324,6 +331,10 @@ impl Editor {
         self.cropping = None;
         self.draft = None;
         self.picked = None;
+        if demo {
+            self.tool = Tool::Select;
+            self.picked = demo::picked(self.document());
+        }
         self.typing = None;
         self.sliding = false;
         self.closing = Closing::No;

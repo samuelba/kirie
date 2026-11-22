@@ -116,6 +116,10 @@ cargo fmt --all --check && cargo clippy --workspace --all-targets && cargo test 
 Smoke tests run Kirie under a headless compositor: `scripts/sway-smoke.sh` (needs sway) and
 `scripts/gnome-smoke.sh` (needs gnome-shell, runs an isolated session with the extension).
 
+For screenshots of Kirie itself, `KIRIE_OVERLAY_DEMO=1 kirie capture` opens the overlay with a
+selection and a few marks, and `KIRIE_EDITOR_DEMO=1 kirie edit picture.png` puts one of each mark
+on every image the editor opens (close a running editor first, or the image goes to that one).
+
 ## License
 
 MIT. The GNOME Shell extension in `gnome-extension/` is GPL-2.0-or-later. The bundled fonts
