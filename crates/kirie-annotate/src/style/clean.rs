@@ -49,11 +49,7 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
                 .collect()
         }
         Kind::Pen { points } => stroke(smooth(points)),
-        Kind::Highlighter { points } => vec![Primitive::Stroke {
-            path: smooth(points),
-            color: context.color().with_alpha(0x66),
-            width: width * 4.0,
-        }],
+        Kind::Highlighter { points } => vec![super::marker(points, context)],
         Kind::Text { at, text } => vec![Primitive::Text {
             at: *at,
             text: text.clone(),

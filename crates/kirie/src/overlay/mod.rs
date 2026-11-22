@@ -329,6 +329,8 @@ impl Overlay {
             Message::PickTool(tool) => {
                 self.commit_text();
                 self.tool = tool;
+                self.paint.color =
+                    crate::controls::tool_color(tool, self.paint.color, self.style());
                 self.draft = None;
                 Task::none()
             }
@@ -725,11 +727,13 @@ pub fn run(frames: Vec<Frame>, primary: Action, host: Host) -> Result<Outcome, S
                     start_mode: StartMode::Background,
                     ..LayerShellSettings::default()
                 },
+                antialiasing: true,
                 ..Settings::default()
             })
             .run()
             .map_err(|error| error.to_string()),
         Host::Window | Host::Shell => iced::daemon(boot, Overlay::update, Overlay::view)
+            .antialiasing(true)
             .title(Overlay::title)
             .theme(Overlay::theme)
             .subscription(Overlay::subscription)

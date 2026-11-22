@@ -28,6 +28,18 @@ pub fn tool_icon(tool: Tool) -> Icon {
     }
 }
 
+/// The colour to draw with after switching tools: the highlighter takes the style's highlight
+/// colour while the colour is still the style's default, and gives it back when put down.
+pub fn tool_color(tool: Option<Tool>, color: Rgba, style: StyleId) -> Rgba {
+    let default = style.palette()[0];
+    match tool {
+        Some(Tool::Highlighter) if color == default => style.highlight(),
+        Some(Tool::Highlighter) => color,
+        _ if color == style.highlight() => default,
+        _ => color,
+    }
+}
+
 pub fn styles<'a, Message: Clone + 'a>(
     current: StyleId,
     palette: Palette,
@@ -77,6 +89,23 @@ pub fn weights<'a, Message: Clone + 'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_highlighter_brings_its_own_colour() {
+        let style = StyleId::Clean;
+        let default = style.palette()[0];
+        assert_eq!(
+            tool_color(Some(Tool::Highlighter), default, style),
+            style.highlight()
+        );
+        let blue = style.palette()[3];
+        assert_eq!(tool_color(Some(Tool::Highlighter), blue, style), blue);
+        assert_eq!(
+            tool_color(Some(Tool::Arrow), style.highlight(), style),
+            default
+        );
+        assert_eq!(tool_color(None, blue, style), blue);
+    }
 
     #[test]
     fn every_tool_has_its_own_icon() {

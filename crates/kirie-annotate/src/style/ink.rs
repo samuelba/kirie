@@ -8,9 +8,9 @@ use crate::shape::{Kind, Rgba};
 
 /// How the brush presses along a stroke: light at the start, full in the middle, lifting off.
 #[derive(Debug, Clone, Copy)]
-struct Taper {
-    start: f64,
-    end: f64,
+pub(super) struct Taper {
+    pub start: f64,
+    pub end: f64,
 }
 
 const STROKE: Taper = Taper {
@@ -82,11 +82,7 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
             drawn
         }
         Kind::Pen { points } => vec![ink(brush(points, width, STROKE))],
-        Kind::Highlighter { points } => vec![Primitive::Stroke {
-            path: super::smooth(points),
-            color: color.with_alpha(0x66),
-            width: context.width() * 4.0,
-        }],
+        Kind::Highlighter { points } => vec![super::marker(points, context)],
         Kind::Text { at, text } => vec![Primitive::Text {
             at: *at,
             text: text.clone(),
@@ -147,7 +143,7 @@ fn enso(rng: &mut Rng, rect: Rect, width: f64) -> BezPath {
 }
 
 /// The outline of a brush stroke along `points`, `width` wide where pressed fully.
-fn brush(points: &[Point], width: f64, taper: Taper) -> BezPath {
+pub(super) fn brush(points: &[Point], width: f64, taper: Taper) -> BezPath {
     let samples = resample(&thin_out(points, 0.5), (width * 0.3).max(0.5));
     let mut path = BezPath::new();
     match samples.as_slice() {

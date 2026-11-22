@@ -246,6 +246,11 @@ impl Editor {
             Message::PickTool(tool) => {
                 self.commit_text();
                 self.tool = tool;
+                self.paint.color = crate::controls::tool_color(
+                    Some(tool),
+                    self.paint.color,
+                    self.document().style,
+                );
                 self.draft = None;
                 if tool != Tool::Select {
                     self.picked = None;
@@ -581,6 +586,7 @@ pub fn run(loaded: Option<Loaded>) -> iced::Result {
         Editor::update,
         Editor::view,
     )
+    .antialiasing(true)
     .title(Editor::title)
     .theme(Editor::theme)
     .subscription(Editor::subscription)

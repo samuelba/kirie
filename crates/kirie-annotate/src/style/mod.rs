@@ -33,6 +33,15 @@ impl StyleId {
         }
     }
 
+    /// The colour the highlighter starts with.
+    pub const fn highlight(self) -> Rgba {
+        match self {
+            StyleId::Clean => Rgba::rgb(0xf2, 0xd1, 0x3a),
+            StyleId::Sketch => Rgba::rgb(0xf5, 0xd7, 0x1f),
+            StyleId::Ink => Rgba::rgb(0xe8, 0xc5, 0x4a),
+        }
+    }
+
     /// The colours offered for this style, the first being the default.
     pub const fn palette(self) -> [Rgba; 6] {
         match self {
@@ -133,6 +142,43 @@ impl Context {
     fn counter_radius(&self) -> f64 {
         (10.0 + self.paint.weight.base() * 1.5) * self.unit
     }
+}
+
+/// A highlighter stroke: the pointer's path smoothed out, drawn as one band of even width with
+/// flat ends, filled once so it never darkens where it crosses itself.
+fn marker(points: &[Point], context: &Context) -> Primitive {
+    let smoothed = chaikin(&thin_out(points, 2.0 * context.unit), 2);
+    Primitive::Fill {
+        path: ink::brush(
+            &smoothed,
+            context.width() * 4.5,
+            ink::Taper {
+                start: 0.0,
+                end: 0.0,
+            },
+        ),
+        color: context.color().with_alpha(0x70),
+        rule: FillRule::NonZero,
+    }
+}
+
+/// Rounds the corners of a polyline `rounds` times, keeping its ends.
+fn chaikin(points: &[Point], rounds: usize) -> Vec<Point> {
+    let mut points = points.to_vec();
+    for _ in 0..rounds {
+        if points.len() < 3 {
+            break;
+        }
+        let mut next = Vec::with_capacity(points.len() * 2);
+        next.push(points[0]);
+        for pair in points.windows(2) {
+            next.push(pair[0].lerp(pair[1], 0.25));
+            next.push(pair[0].lerp(pair[1], 0.75));
+        }
+        next.push(points[points.len() - 1]);
+        points = next;
+    }
+    points
 }
 
 fn spotlight(visible: Rect, hole: Rect, radius: f64) -> Primitive {
@@ -345,6 +391,27 @@ mod tests {
         for style in StyleId::ALL {
             assert!(!style.name().is_empty());
             assert_eq!(style.palette().len(), 6);
+        }
+    }
+
+    #[test]
+    fn markers_are_smooth_even_bands() {
+        let shaky: Vec<Point> = (0..40)
+            .map(|i| Point::new(f64::from(i) * 5.0, if i % 2 == 0 { 0.0 } else { 1.5 }))
+            .collect();
+        let smoothed = chaikin(&shaky, 2);
+        let wobble = |points: &[Point]| {
+            points
+                .windows(2)
+                .map(|p| (p[1].y - p[0].y).abs())
+                .fold(0.0, f64::max)
+        };
+        assert!(wobble(&smoothed) < wobble(&shaky));
+        assert_eq!(smoothed.first(), shaky.first());
+        assert_eq!(smoothed.last(), shaky.last());
+        assert_eq!(chaikin(&shaky[..2], 3), shaky[..2].to_vec());
+        for style in StyleId::ALL {
+            assert_eq!(style.highlight().a, 255);
         }
     }
 
