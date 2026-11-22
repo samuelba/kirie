@@ -245,9 +245,7 @@ fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
         overlay::Outcome::Canceled => Ok(()),
         overlay::Outcome::Edit(path) => {
             if !block_on(ipc::hand_over(Some(&path)))? {
-                std::process::Command::new(std::env::current_exe()?)
-                    .arg("edit")
-                    .arg(&path)
+                editor_command(&std::env::current_exe()?, &path)
                     .spawn()
                     .context("cannot open the editor")?;
             }
@@ -255,6 +253,17 @@ fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
         }
         overlay::Outcome::Failed(error) => anyhow::bail!(error),
     }
+}
+
+/// The editor, for a picture the overlay hands over. The extension trusts only the overlay it
+/// started, so the editor must not pass for it; its captures go through the extension again.
+fn editor_command(exe: &std::path::Path, path: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new(exe);
+    command
+        .arg("edit")
+        .arg(path)
+        .env_remove(kirie_capture::shell::LAUNCHED_ENV);
+    command
 }
 
 fn print_globals() -> anyhow::Result<()> {
@@ -296,6 +305,20 @@ mod tests {
                 "the desktop entry runs {command:?}"
             );
         }
+    }
+
+    #[test]
+    fn an_editor_the_overlay_opens_is_not_trusted_by_the_extension() {
+        let command = editor_command(
+            std::path::Path::new("kirie"),
+            std::path::Path::new("a.kirie"),
+        );
+        assert!(
+            command.get_envs().any(|(key, value)| {
+                key == kirie_capture::shell::LAUNCHED_ENV && value.is_none()
+            })
+        );
+        assert_eq!(command.get_args().collect::<Vec<_>>(), ["edit", "a.kirie"]);
     }
 
     #[test]
