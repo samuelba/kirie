@@ -7,7 +7,7 @@ use kirie_ui::icon::Icon;
 use kirie_ui::widget::{divider, floating, icon_button, primary_button};
 use kirie_ui::{Palette, Scheme, space};
 
-use super::canvas::Board;
+use super::canvas::{Backdrop, Board};
 use super::{Editor, Message};
 use crate::controls;
 
@@ -139,15 +139,18 @@ impl Editor {
 
     fn center(&self) -> Element<'_, Message> {
         let palette = self.palette;
-        let mut layers = stack![if self.image.is_some() {
-            Element::from(
+        let mut layers = if self.image.is_some() {
+            stack![
+                iced::widget::canvas(Backdrop { editor: self })
+                    .width(Length::Fill)
+                    .height(Length::Fill),
                 iced::widget::canvas(Board { editor: self })
                     .width(Length::Fill)
                     .height(Length::Fill),
-            )
+            ]
         } else {
-            self.empty()
-        }];
+            stack![self.empty()]
+        };
         let mut floating_bits = column![].spacing(space::S).align_x(Alignment::Center);
         if let Some(typing) = &self.typing {
             floating_bits = floating_bits.push(
