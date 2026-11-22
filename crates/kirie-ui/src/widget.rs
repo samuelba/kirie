@@ -1,7 +1,8 @@
 //! Kirie's controls: flat icon buttons, color swatches, segmented pills and the floating panel
 //! they sit on.
 
-use iced::widget::{button, container, row, slider, svg, text, tooltip};
+use iced::overlay::menu;
+use iced::widget::{button, container, pick_list, row, slider, svg, text, tooltip};
 use iced::{Background, Border, Color, Element, Length, Shadow, Vector};
 
 use crate::icon::Icon;
@@ -10,6 +11,9 @@ use crate::{Palette, radius, space};
 const ICON: f32 = 18.0;
 /// The side of a square control.
 pub const CONTROL: f32 = 34.0;
+/// The side of a square control in a status bar.
+const SMALL: f32 = 22.0;
+const SMALL_ICON: f32 = 14.0;
 
 /// The panel of a floating toolbar.
 pub fn floating(palette: Palette) -> impl Fn(&iced::Theme) -> container::Style {
@@ -38,18 +42,40 @@ pub fn icon_button<'a, Message: Clone + 'a>(
     active: bool,
     on_press: Option<Message>,
 ) -> Element<'a, Message> {
+    square_button(icon, label, palette, active, on_press, CONTROL, ICON)
+}
+
+/// A small square button with an icon, for a status bar.
+pub fn small_icon_button<'a, Message: Clone + 'a>(
+    icon: Icon,
+    label: &'a str,
+    palette: Palette,
+    on_press: Option<Message>,
+) -> Element<'a, Message> {
+    square_button(icon, label, palette, false, on_press, SMALL, SMALL_ICON)
+}
+
+fn square_button<'a, Message: Clone + 'a>(
+    icon: Icon,
+    label: &'a str,
+    palette: Palette,
+    active: bool,
+    on_press: Option<Message>,
+    side: f32,
+    icon_side: f32,
+) -> Element<'a, Message> {
     let tint = if active {
         palette.on_accent
     } else {
         palette.text
     };
     let glyph = svg(icon.handle())
-        .width(ICON)
-        .height(ICON)
+        .width(icon_side)
+        .height(icon_side)
         .style(move |_, _| svg::Style { color: Some(tint) });
     let control = button(container(glyph).center(Length::Fill))
-        .width(CONTROL)
-        .height(CONTROL)
+        .width(side)
+        .height(side)
         .padding(0)
         .on_press_maybe(on_press)
         .style(move |_, status| {
@@ -294,6 +320,49 @@ pub fn value_slider<'a, Message: Clone + 'a>(
                 border_width: 2.0,
                 border_color: Color::WHITE,
             },
+        })
+        .into()
+}
+
+/// A small drop-down list of `options`, showing `selected`, for a status bar.
+pub fn small_pick_list<'a, T, Message>(
+    options: Vec<T>,
+    selected: T,
+    palette: Palette,
+    on_select: impl Fn(T) -> Message + 'a,
+) -> Element<'a, Message>
+where
+    T: ToString + PartialEq + Clone + 'a,
+    Message: Clone + 'a,
+{
+    pick_list(options, Some(selected), on_select)
+        .text_size(12)
+        .padding([2.0, space::S])
+        .style(move |_, status| pick_list::Style {
+            text_color: palette.text,
+            placeholder_color: palette.muted,
+            handle_color: palette.muted,
+            background: Background::Color(match status {
+                pick_list::Status::Active => palette.surface[0],
+                _ => palette.surface[1],
+            }),
+            border: Border {
+                color: palette.border,
+                width: 1.0,
+                radius: radius::CONTROL.into(),
+            },
+        })
+        .menu_style(move |_| menu::Style {
+            background: Background::Color(palette.surface[1]),
+            border: Border {
+                color: palette.border,
+                width: 1.0,
+                radius: radius::CONTROL.into(),
+            },
+            text_color: palette.text,
+            selected_text_color: palette.on_accent,
+            selected_background: Background::Color(palette.accent),
+            shadow: Shadow::default(),
         })
         .into()
 }

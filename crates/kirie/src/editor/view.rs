@@ -4,10 +4,14 @@ use iced::widget::{Space, column, container, row, rule, scrollable, stack, svg, 
 use iced::{Alignment, Background, Border, Element, Length, Padding};
 use kirie_annotate::{StyleId, Tool};
 use kirie_ui::icon::Icon;
-use kirie_ui::widget::{divider, floating, icon_button, primary_button, secondary_button};
+use kirie_ui::widget::{
+    divider, floating, icon_button, primary_button, secondary_button, small_icon_button,
+    small_pick_list,
+};
 use kirie_ui::{Palette, Scheme, space};
 
 use super::canvas::{Backdrop, Board};
+use super::viewport::Zoom;
 use super::{Editor, Message};
 use crate::controls;
 use crate::picker::{self, Picker};
@@ -366,12 +370,6 @@ impl Editor {
             if let Some((x, y)) = self.hover.map(super::pixel) {
                 bar = bar.push(muted(format!("{x}, {y} px")));
             }
-            let zoom = self.viewport.scale(self.content(), self.canvas) * 100.0;
-            let fitted = if self.viewport.is_fitted() {
-                " (fit)"
-            } else {
-                ""
-            };
             #[allow(clippy::cast_possible_truncation)]
             let saved = self.crop().map_or_else(
                 || {
@@ -389,15 +387,47 @@ impl Editor {
                     saved.0, saved.1, whole.0, whole.1
                 )
             };
-            bar = bar
-                .push(muted(format!("{zoom:.0}%{fitted}")))
-                .push(muted(size));
+            bar = bar.push(self.zoom_control()).push(muted(size));
         }
         container(bar)
             .padding([space::XS, space::L])
             .width(Length::Fill)
             .style(panel(palette))
             .into()
+    }
+
+    /// Zoom out, the zoom with a list of levels to pick, and zoom in.
+    fn zoom_control(&self) -> Element<'_, Message> {
+        let palette = self.palette;
+        let scale = self.viewport.scale(self.content(), self.canvas);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let percent = (scale * 100.0).round() as u32;
+        let shown = if self.viewport.is_fitted() {
+            ZoomChoice::Shown(format!("Fit {percent}%"), Zoom::Fit)
+        } else {
+            ZoomChoice::Shown(format!("{percent}%"), Zoom::Percent(percent))
+        };
+        let levels = Zoom::CHOICES.into_iter().map(ZoomChoice::Level).collect();
+        row![
+            small_icon_button(
+                Icon::ZoomOut,
+                "Zoom out (Ctrl+-)",
+                palette,
+                Some(Message::ZoomOut)
+            ),
+            small_pick_list(levels, shown, palette, |choice| Message::ZoomTo(
+                choice.zoom()
+            )),
+            small_icon_button(
+                Icon::ZoomIn,
+                "Zoom in (Ctrl++)",
+                palette,
+                Some(Message::ZoomIn)
+            ),
+        ]
+        .spacing(2)
+        .align_y(Alignment::Center)
+        .into()
     }
 
     /// The color, and the text look, the spotlight, or the weight, fill and shadow, of the
@@ -497,6 +527,30 @@ impl Editor {
             }))
             .push(section(palette, "Fill", fill.into()))
             .push(section(palette, "Shadow", shadow.into()))
+    }
+}
+
+/// A level in the zoom list, or the zoom now, which the list shows.
+#[derive(Debug, Clone, PartialEq)]
+enum ZoomChoice {
+    Level(Zoom),
+    Shown(String, Zoom),
+}
+
+impl ZoomChoice {
+    fn zoom(&self) -> Zoom {
+        match self {
+            ZoomChoice::Level(zoom) | ZoomChoice::Shown(_, zoom) => *zoom,
+        }
+    }
+}
+
+impl std::fmt::Display for ZoomChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ZoomChoice::Level(zoom) => zoom.fmt(f),
+            ZoomChoice::Shown(label, _) => f.write_str(label),
+        }
     }
 }
 

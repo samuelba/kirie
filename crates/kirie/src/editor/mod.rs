@@ -22,7 +22,7 @@ use kirie_annotate::{
 use kirie_ui::{Palette, Scheme};
 
 use self::closing::{Answer, Closing};
-use self::viewport::Viewport;
+use self::viewport::{Viewport, Zoom};
 use crate::controls;
 use crate::drawing::Drawing;
 use crate::picker::{self, Picker, Target};
@@ -114,6 +114,10 @@ pub enum Message {
     },
     ZoomFit,
     ZoomActual,
+    /// Zooms to the next level in, or out, around the middle of the canvas.
+    ZoomIn,
+    ZoomOut,
+    ZoomTo(Zoom),
     /// Starts cropping, or keeps the crop when already cropping.
     Crop,
     CropDone,
@@ -410,15 +414,12 @@ impl Editor {
         match message {
             Message::Pointer(pointer, scale) => return self.pointer(pointer, scale),
             Message::Pan(by) => self.viewport = self.viewport.panned(by),
-            Message::Zoom {
-                factor,
-                anchor,
-                canvas,
-            } => {
-                self.viewport = self.viewport.zoomed(factor, anchor, self.content(), canvas);
-            }
-            Message::ZoomFit => self.viewport = Viewport::fitted(),
-            Message::ZoomActual => self.viewport = Viewport::actual_size(),
+            Message::Zoom { .. }
+            | Message::ZoomFit
+            | Message::ZoomActual
+            | Message::ZoomIn
+            | Message::ZoomOut
+            | Message::ZoomTo(_) => self.zoom(&message),
             Message::Hover(at) => self.hover = at,
             Message::Canvas(size) => self.canvas = size,
             Message::Modifiers(modifiers) => self.modifiers = modifiers,
@@ -503,6 +504,31 @@ impl Editor {
             }
         }
         Task::none()
+    }
+
+    fn zoom(&mut self, message: &Message) {
+        let content = self.content();
+        let middle = Point::new(self.canvas.width / 2.0, self.canvas.height / 2.0);
+        let scale = self.viewport.scale(content, self.canvas);
+        self.viewport = match *message {
+            Message::Zoom {
+                factor,
+                anchor,
+                canvas,
+            } => self.viewport.zoomed(factor, anchor, content, canvas),
+            Message::ZoomFit | Message::ZoomTo(Zoom::Fit) => Viewport::fitted(),
+            Message::ZoomActual => Viewport::actual_size(),
+            Message::ZoomIn | Message::ZoomOut => {
+                let level = viewport::step(scale, matches!(message, Message::ZoomIn));
+                self.viewport.zoomed_to(level, middle, content, self.canvas)
+            }
+            #[allow(clippy::cast_precision_loss)]
+            Message::ZoomTo(Zoom::Percent(percent)) => {
+                self.viewport
+                    .zoomed_to(percent as f32 / 100.0, middle, content, self.canvas)
+            }
+            _ => self.viewport,
+        };
     }
 
     /// Taking a screenshot from the editor, and bringing its window to the front.
@@ -1181,6 +1207,8 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("s") if command => Some(Message::Save),
         keyboard::Key::Character("0") if command => Some(Message::ZoomFit),
         keyboard::Key::Character("1") if command => Some(Message::ZoomActual),
+        keyboard::Key::Character("=" | "+") if command => Some(Message::ZoomIn),
+        keyboard::Key::Character("-") if command => Some(Message::ZoomOut),
         keyboard::Key::Character("c") if !command => Some(Message::Crop),
         keyboard::Key::Character(c) if !command => c
             .chars()
