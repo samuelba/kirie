@@ -70,7 +70,7 @@ pub struct Painter<'a> {
 pub struct Marks<'a> {
     pub document: &'a Document,
     pub draft: Option<&'a Draft>,
-    /// A mark not in the document yet: the one being drawn, or text being typed.
+    /// A mark being drawn or typed: a new one, or one in place of the mark with its id.
     pub preview: Option<Shape>,
     pub picked: Option<ShapeId>,
     /// The image area a spotlight dims around.
@@ -155,10 +155,22 @@ impl Painter<'_> {
             _ => None,
         };
         let edited = marks.draft.and_then(Draft::edited);
+        let preview = marks.preview;
+        let replaces = preview
+            .as_ref()
+            .is_some_and(|preview| document.shape(preview.id).is_some());
+        let (in_place, added) = if replaces {
+            (preview, None)
+        } else {
+            (None, preview)
+        };
         let shapes: Vec<Shape> = document
             .shapes()
-            .cloned()
-            .chain(marks.preview)
+            .map(|shape| match &in_place {
+                Some(preview) if preview.id == shape.id => preview.clone(),
+                _ => shape.clone(),
+            })
+            .chain(added)
             .map(|shape| match (moving, edited) {
                 (Some((ids, by)), _) if ids.contains(&shape.id) => Shape {
                     kind: shape.kind.translated(by),

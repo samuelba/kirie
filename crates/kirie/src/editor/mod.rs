@@ -23,6 +23,7 @@ use self::viewport::Viewport;
 use crate::controls;
 use crate::picker::{self, Picker, Target};
 use crate::swatches::Swatches;
+use crate::typing::{self, Typing};
 
 /// How close to a mark a click picks it, in screen pixels.
 const MARK_REACH: f64 = 6.0;
@@ -107,7 +108,7 @@ pub enum Message {
     ToggleFill,
     Look(controls::TextEvent),
     ToggleScheme,
-    TextChanged(String),
+    TextEdit(iced::widget::text_editor::Action),
     TextDone,
     Undo,
     Redo,
@@ -127,12 +128,6 @@ pub enum Message {
     /// Hides the window and opens the overlay; the capture comes back over D-Bus.
     Capture,
     CaptureEnded(Result<(), String>),
-}
-
-#[derive(Debug, Clone)]
-struct Typing {
-    at: kurbo::Point,
-    text: String,
 }
 
 #[derive(Debug, Clone)]
@@ -157,6 +152,8 @@ pub struct Editor {
     /// A slider is being dragged; its moves undo as one step.
     sliding: bool,
     typing: Option<Typing>,
+    /// The last press, to tell a double click.
+    last_click: Option<iced::advanced::mouse::Click>,
     modifiers: keyboard::Modifiers,
     toast: Option<Toast>,
     toasts: u64,
@@ -195,6 +192,7 @@ impl Editor {
             picked: None,
             sliding: false,
             typing: None,
+            last_click: None,
             modifiers: keyboard::Modifiers::default(),
             toast: None,
             toasts: 0,
@@ -280,9 +278,9 @@ impl Editor {
             | Message::Look(_) => return self.restyle(message),
             Message::SystemScheme(scheme) => self.follow(Some(scheme)),
             Message::ToggleScheme => self.follow(None),
-            Message::TextChanged(text) => {
+            Message::TextEdit(action) => {
                 if let Some(typing) = &mut self.typing {
-                    typing.text = text;
+                    typing.content.perform(action);
                 }
             }
             Message::TextDone => self.commit_text(),
@@ -465,6 +463,19 @@ impl Editor {
             Pointer::Pressed(at) => {
                 self.commit_text();
                 let reach = MARK_REACH / f64::from(scale.max(0.01));
+                #[allow(clippy::cast_possible_truncation)]
+                let double = typing::double_click(
+                    &mut self.last_click,
+                    Point::new(at.x as f32, at.y as f32),
+                );
+                let words = match self.tool {
+                    Tool::Text => typing::text_at(self.document(), at, reach),
+                    Tool::Select if double => typing::text_at(self.document(), at, reach),
+                    _ => None,
+                };
+                if let Some(id) = words {
+                    return self.edit_text(id);
+                }
                 match kirie_annotate::tools::press(
                     self.tool,
                     at,
@@ -483,10 +494,7 @@ impl Editor {
                         self.history.apply(op);
                     }
                     Press::TypeAt(at) => {
-                        self.typing = Some(Typing {
-                            at,
-                            text: String::new(),
-                        });
+                        self.typing = Some(Typing::new(at));
                         return iced::widget::operation::focus(view::TEXT_INPUT);
                     }
                     Press::Nothing => self.picked = None,
@@ -509,19 +517,24 @@ impl Editor {
     }
 
     fn commit_text(&mut self) {
-        let Some(typing) = self.typing.take() else {
-            return;
-        };
-        if typing.text.trim().is_empty() {
-            return;
+        if let Some(op) = self
+            .typing
+            .take()
+            .and_then(|typing| typing.finish(self.paint))
+        {
+            self.history.apply(op);
         }
-        self.history.apply(Op::Add {
-            kind: Kind::Text {
-                at: typing.at,
-                text: typing.text,
-            },
-            paint: self.paint,
-        });
+    }
+
+    /// Opens the words of a placed text mark for typing.
+    fn edit_text(&mut self, id: ShapeId) -> Task<Message> {
+        let Some(typing) = self.document().shape(id).and_then(Typing::edit) else {
+            return Task::none();
+        };
+        self.typing = Some(typing);
+        self.picked = Some(id);
+        self.draft = None;
+        iced::widget::operation::focus(view::TEXT_INPUT)
     }
 
     fn export(&mut self, export: Export) -> Task<Message> {

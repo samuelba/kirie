@@ -4,7 +4,7 @@
 use iced::mouse::{self, Interaction, ScrollDelta};
 use iced::widget::canvas::{self, Action, Event, Frame, Geometry};
 use iced::{Color, Point, Rectangle, Renderer, Size, Theme, Vector};
-use kirie_annotate::{Draft, Kind, Shape, Tool};
+use kirie_annotate::{Draft, Shape, Tool};
 
 use super::{Editor, MARK_REACH, Message, Pointer};
 use crate::paint::{ImageSource, Marks, Painter, draw_grips};
@@ -190,22 +190,18 @@ impl Board<'_> {
             .draft
             .as_ref()
             .and_then(Draft::preview)
-            .or_else(|| {
-                editor.typing.as_ref().map(|typing| Kind::Text {
-                    at: typing.at,
-                    text: if typing.text.is_empty() {
-                        "|".to_owned()
-                    } else {
-                        typing.text.clone()
-                    },
-                })
-            })
             .map(|kind| Shape {
                 id: document.next_id(),
                 kind,
                 paint: editor.paint,
                 style: None,
                 rotation: 0.0,
+            })
+            .or_else(|| {
+                editor
+                    .typing
+                    .as_ref()
+                    .map(|typing| typing.preview(document, editor.paint))
             });
         painter.draw_marks(
             frame,

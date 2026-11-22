@@ -1,6 +1,6 @@
 //! The editor window: a header bar, the tool rail, the canvas and the inspector.
 
-use iced::widget::{Space, column, container, row, rule, stack, svg, text, text_input};
+use iced::widget::{Space, column, container, row, rule, stack, svg, text};
 use iced::{Alignment, Background, Border, Element, Length, Padding};
 use kirie_annotate::Tool;
 use kirie_ui::icon::Icon;
@@ -157,13 +157,19 @@ impl Editor {
             floating_bits = floating_bits.push(
                 container(
                     row![
-                        text_input("Type here", &typing.text)
-                            .id(TEXT_INPUT)
-                            .on_input(Message::TextChanged)
-                            .on_submit(Message::TextDone)
-                            .width(320)
-                            .padding([space::XS + 2.0, space::S]),
-                        text("Enter to place").size(12).color(palette.muted),
+                        crate::typing::text_box(
+                            typing,
+                            TEXT_INPUT,
+                            palette,
+                            Message::TextEdit,
+                            Message::TextDone,
+                        ),
+                        column![
+                            text("Enter to place").size(12).color(palette.muted),
+                            text("Shift+Enter for a new line")
+                                .size(12)
+                                .color(palette.muted),
+                        ],
                     ]
                     .spacing(space::M)
                     .align_y(Alignment::Center),

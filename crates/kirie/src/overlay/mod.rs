@@ -25,6 +25,7 @@ use kirie_ui::Palette;
 use self::selection::{Release, Selection};
 use crate::picker::{self, Picker, Target};
 use crate::swatches::Swatches;
+use crate::typing::{self, Typing};
 
 pub const NAMESPACE: &str = "kirie-overlay";
 /// How close to a handle a press grabs it, in logical pixels.
@@ -69,7 +70,7 @@ pub enum Message {
     PickWeight(Weight),
     ToggleFill,
     Look(crate::controls::TextEvent),
-    TextChanged(String),
+    TextEdit(iced::widget::text_editor::Action),
     TextDone,
     Undo,
     Redo,
@@ -121,13 +122,6 @@ pub enum Outcome {
     Failed(String),
 }
 
-/// Text being typed for a text mark.
-#[derive(Debug, Clone)]
-struct Typing {
-    at: kurbo::Point,
-    text: String,
-}
-
 pub struct Overlay {
     /// The windows on screen, topmost first, with their titles.
     windows: Vec<(Rectangle, String)>,
@@ -152,6 +146,8 @@ pub struct Overlay {
     /// A slider is being dragged; its moves undo as one step.
     sliding: bool,
     typing: Option<Typing>,
+    /// The last press, to tell a double click.
+    last_click: Option<iced::advanced::mouse::Click>,
     busy: bool,
     /// What Enter does.
     primary: Action,
@@ -283,6 +279,7 @@ impl Overlay {
             picked: None,
             sliding: false,
             typing: None,
+            last_click: None,
             busy: false,
             primary,
             typesetter: RefCell::new(Typesetter::new()),
@@ -385,9 +382,9 @@ impl Overlay {
                 self.restyle(message);
                 Task::none()
             }
-            Message::TextChanged(text) => {
+            Message::TextEdit(action) => {
                 if let Some(typing) = &mut self.typing {
-                    typing.text = text;
+                    typing.content.perform(action);
                 }
                 Task::none()
             }
@@ -629,6 +626,17 @@ impl Overlay {
         match pointer {
             Pointer::Pressed(at) => {
                 self.commit_text();
+                let double = typing::double_click(&mut self.last_click, at);
+                let words = match tool {
+                    Tool::Text => typing::text_at(self.document(), to_kurbo(at), MARK_REACH),
+                    Tool::Select if double => {
+                        typing::text_at(self.document(), to_kurbo(at), MARK_REACH)
+                    }
+                    _ => None,
+                };
+                if let Some(id) = words {
+                    return self.edit_text(id);
+                }
                 let press = kirie_annotate::tools::press(
                     tool,
                     to_kurbo(at),
@@ -648,10 +656,7 @@ impl Overlay {
                         self.history.apply(op);
                     }
                     Press::TypeAt(at) => {
-                        self.typing = Some(Typing {
-                            at,
-                            text: String::new(),
-                        });
+                        self.typing = Some(Typing::new(at));
                         return iced::widget::operation::focus(view::TEXT_INPUT);
                     }
                     Press::Nothing => self.picked = None,
@@ -675,19 +680,24 @@ impl Overlay {
     }
 
     fn commit_text(&mut self) {
-        let Some(typing) = self.typing.take() else {
-            return;
-        };
-        if typing.text.trim().is_empty() {
-            return;
+        if let Some(op) = self
+            .typing
+            .take()
+            .and_then(|typing| typing.finish(self.paint))
+        {
+            self.history.apply(op);
         }
-        self.history.apply(Op::Add {
-            kind: Kind::Text {
-                at: typing.at,
-                text: typing.text,
-            },
-            paint: self.paint,
-        });
+    }
+
+    /// Opens the words of a placed text mark for typing.
+    fn edit_text(&mut self, id: kirie_annotate::ShapeId) -> Task<Message> {
+        let Some(typing) = self.document().shape(id).and_then(Typing::edit) else {
+            return Task::none();
+        };
+        self.typing = Some(typing);
+        self.picked = Some(id);
+        self.draft = None;
+        iced::widget::operation::focus(view::TEXT_INPUT)
     }
 
     /// The selection's pixels at the highest scale of the screens it covers, and the marks

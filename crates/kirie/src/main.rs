@@ -13,6 +13,7 @@ mod picker;
 mod save;
 mod shortcuts;
 mod swatches;
+mod typing;
 mod update;
 
 use std::path::PathBuf;

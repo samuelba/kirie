@@ -176,6 +176,12 @@ impl Surface<'_> {
                 paint: overlay.paint,
                 style: None,
                 rotation: 0.0,
+            })
+            .or_else(|| {
+                overlay
+                    .typing
+                    .as_ref()
+                    .map(|typing| typing.preview(document, overlay.paint))
             });
         let picked = painter.draw_marks(
             frame,

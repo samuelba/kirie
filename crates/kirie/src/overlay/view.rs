@@ -1,12 +1,12 @@
 //! What each screen's surface shows: the frozen image, the marks, and the floating toolbar
 //! next to the selection.
 
-use iced::widget::{Space, column, container, image, pin, row, stack, text_input};
+use iced::widget::{Space, column, container, image, pin, row, stack};
 use iced::{Element, Length, Point, Rectangle, window};
 use kirie_annotate::Tool;
 use kirie_ui::icon::Icon;
+use kirie_ui::space;
 use kirie_ui::widget::{divider, floating, icon_button, primary_button};
-use kirie_ui::{radius, space};
 
 use super::{Action, Message, Overlay, canvas};
 use crate::controls;
@@ -44,11 +44,24 @@ impl Overlay {
             .height(Length::Fill),
         ];
         if let Some(typing) = &self.typing {
+            // Under the words, so the box never hides what is typed.
+            let words = self
+                .document()
+                .bounds(&typing.preview(self.document(), self.paint));
             #[allow(clippy::cast_possible_truncation)]
-            let desktop = Point::new(typing.at.x as f32, typing.at.y as f32);
+            let desktop = Point::new(typing.at.x as f32, (words.y1 + 8.0) as f32);
             if screen.area.contains(desktop) {
                 let at = Point::new(desktop.x - screen.area.x, desktop.y - screen.area.y);
-                layers = layers.push(pin(self.text_box()).position(at));
+                layers = layers.push(
+                    pin(crate::typing::text_box(
+                        typing,
+                        TEXT_INPUT,
+                        self.palette,
+                        Message::TextEdit,
+                        Message::TextDone,
+                    ))
+                    .position(at),
+                );
             }
         }
         if let Some(at) = self.toolbar_position(screen.area) {
@@ -216,33 +229,5 @@ impl Overlay {
                 ));
         }
         properties.into()
-    }
-
-    fn text_box(&self) -> Element<'_, Message> {
-        let palette = self.palette;
-        let value = self
-            .typing
-            .as_ref()
-            .map_or("", |typing| typing.text.as_str());
-        text_input("Type, then Enter", value)
-            .id(TEXT_INPUT)
-            .on_input(Message::TextChanged)
-            .on_submit(Message::TextDone)
-            .width(280)
-            .size(16)
-            .padding([space::XS + 2.0, space::S])
-            .style(move |_, _| text_input::Style {
-                background: iced::Background::Color(palette.surface[0].scale_alpha(0.92)),
-                border: iced::Border {
-                    color: palette.accent,
-                    width: 1.5,
-                    radius: radius::CONTROL.into(),
-                },
-                icon: palette.muted,
-                placeholder: palette.muted,
-                value: palette.text,
-                selection: palette.accent.scale_alpha(0.4),
-            })
-            .into()
     }
 }
