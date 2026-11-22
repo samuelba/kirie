@@ -197,6 +197,41 @@ impl Kind {
         }
     }
 
+    /// The same mark under a scale and translation, as when desktop coordinates become image
+    /// pixels.
+    #[must_use]
+    pub fn transformed(&self, transform: kurbo::Affine) -> Kind {
+        let point = |point: &Point| transform * *point;
+        let rect = |rect: &Rect| transform.transform_rect_bbox(rect.abs());
+        let points = |points: &[Point]| points.iter().map(point).collect();
+        match self {
+            Kind::Arrow { from, to } => Kind::Arrow {
+                from: point(from),
+                to: point(to),
+            },
+            Kind::Line { from, to } => Kind::Line {
+                from: point(from),
+                to: point(to),
+            },
+            Kind::Rectangle { rect: r } => Kind::Rectangle { rect: rect(r) },
+            Kind::Ellipse { rect: r } => Kind::Ellipse { rect: rect(r) },
+            Kind::Blur { rect: r } => Kind::Blur { rect: rect(r) },
+            Kind::Pixelate { rect: r } => Kind::Pixelate { rect: rect(r) },
+            Kind::Redact { rect: r } => Kind::Redact { rect: rect(r) },
+            Kind::Spotlight { rect: r } => Kind::Spotlight { rect: rect(r) },
+            Kind::Pen { points: p } => Kind::Pen { points: points(p) },
+            Kind::Highlighter { points: p } => Kind::Highlighter { points: points(p) },
+            Kind::Text { at, text } => Kind::Text {
+                at: point(at),
+                text: text.clone(),
+            },
+            Kind::Counter { at, number } => Kind::Counter {
+                at: point(at),
+                number: *number,
+            },
+        }
+    }
+
     /// Whether the mark works on the pixels under it rather than drawing on top.
     pub const fn is_effect(&self) -> bool {
         matches!(
@@ -340,6 +375,67 @@ mod tests {
             let moved = kind.translated(by);
             assert_eq!(moved.bounds().origin(), kind.bounds().origin() + by);
         }
+    }
+
+    #[test]
+    fn transforms_scale_and_move_every_kind() {
+        let transform = kurbo::Affine::scale(2.0).then_translate(Vec2::new(-10.0, 0.0));
+        let kinds = [
+            Kind::Arrow {
+                from: Point::new(5.0, 0.0),
+                to: Point::new(10.0, 5.0),
+            },
+            Kind::Line {
+                from: Point::new(5.0, 0.0),
+                to: Point::new(10.0, 5.0),
+            },
+            Kind::Rectangle {
+                rect: Rect::new(5.0, 0.0, 10.0, 5.0),
+            },
+            Kind::Ellipse {
+                rect: Rect::new(5.0, 0.0, 10.0, 5.0),
+            },
+            Kind::Pen {
+                points: vec![Point::new(5.0, 0.0), Point::new(10.0, 5.0)],
+            },
+            Kind::Highlighter {
+                points: vec![Point::new(5.0, 0.0), Point::new(10.0, 5.0)],
+            },
+            Kind::Blur {
+                rect: Rect::new(5.0, 0.0, 10.0, 5.0),
+            },
+            Kind::Pixelate {
+                rect: Rect::new(5.0, 0.0, 10.0, 5.0),
+            },
+            Kind::Redact {
+                rect: Rect::new(5.0, 0.0, 10.0, 5.0),
+            },
+            Kind::Spotlight {
+                rect: Rect::new(5.0, 0.0, 10.0, 5.0),
+            },
+        ];
+        for kind in kinds {
+            assert_eq!(
+                kind.transformed(transform).bounds(),
+                Rect::new(0.0, 0.0, 10.0, 10.0)
+            );
+        }
+        let Kind::Counter { at, number } = (Kind::Counter {
+            at: Point::new(5.0, 1.0),
+            number: 4,
+        })
+        .transformed(transform) else {
+            panic!()
+        };
+        assert_eq!((at, number), (Point::new(0.0, 2.0), 4));
+        let Kind::Text { at, .. } = (Kind::Text {
+            at: Point::new(5.0, 1.0),
+            text: "a".into(),
+        })
+        .transformed(transform) else {
+            panic!()
+        };
+        assert_eq!(at, Point::new(0.0, 2.0));
     }
 
     #[test]

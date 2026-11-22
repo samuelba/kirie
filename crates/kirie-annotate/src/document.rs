@@ -114,6 +114,32 @@ impl Document {
             .unwrap_or_else(|| Rect::new(0.0, 0.0, f64::from(self.width), f64::from(self.height)))
     }
 
+    /// This document's marks on another image: `transform` maps this document's coordinates
+    /// onto the new image of `width`×`height` and `unit`. The crop is dropped.
+    #[must_use]
+    pub fn transformed(
+        &self,
+        transform: kurbo::Affine,
+        width: u32,
+        height: u32,
+        unit: f64,
+    ) -> Document {
+        let mut next = Document::new(width, height, unit);
+        next.style = self.style;
+        next.next_id = self.next_id;
+        next.shapes = self
+            .shapes
+            .iter()
+            .map(|shape| {
+                Arc::new(Shape {
+                    kind: shape.kind.transformed(transform),
+                    ..Shape::clone(shape)
+                })
+            })
+            .collect();
+        next
+    }
+
     #[must_use]
     pub fn apply(&self, op: Op) -> Document {
         let mut next = self.clone();
@@ -363,6 +389,27 @@ mod tests {
         assert_eq!(cropped.apply(Op::Crop(None)).crop, None);
         let styled = doc.apply(Op::SetStyle(StyleId::Sketch));
         assert_eq!(styled.style, StyleId::Sketch);
+    }
+
+    #[test]
+    fn transformed_documents_keep_their_marks() {
+        let doc = Document::new(100, 100, 1.0)
+            .apply(Op::SetStyle(StyleId::Ink))
+            .apply(line(10.0));
+        let moved = doc.transformed(
+            kurbo::Affine::translate((-5.0, 0.0)).then_scale(2.0),
+            40,
+            40,
+            2.0,
+        );
+        assert_eq!((moved.width, moved.height), (40, 40));
+        assert!((moved.unit - 2.0).abs() < f64::EPSILON);
+        assert_eq!(moved.style, StyleId::Ink);
+        assert_eq!(moved.next_id(), doc.next_id());
+        assert_eq!(
+            moved.shape(ShapeId(1)).unwrap().kind.bounds(),
+            Rect::new(10.0, 0.0, 10.0, 20.0)
+        );
     }
 
     #[test]
