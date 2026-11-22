@@ -1,5 +1,7 @@
 mod clipboard;
+mod controls;
 mod overlay;
+mod paint;
 mod save;
 
 use std::path::PathBuf;

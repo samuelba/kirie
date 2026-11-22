@@ -1,5 +1,5 @@
 //! Draws annotation primitives on an iced canvas, matching what `kirie_annotate::render` saves:
-//! the same paths, the same glyph outlines, and effects computed from the frozen pixels.
+//! the same paths, the same glyph outlines, and effects computed from the pixels underneath.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -10,14 +10,62 @@ use iced::{Color, Point, Rectangle, Size};
 use kirie_annotate::effects::{self, Region};
 use kirie_annotate::{Effect, FillRule, Primitive, Rgba, Typesetter};
 use kirie_capture::{Frame as Capture, geometry};
-use kurbo::{BezPath, PathEl};
+use kurbo::{Affine, BezPath, PathEl};
 
-/// The frozen screens and the things worth keeping between redraws.
+/// Where effects get the pixels under a mark, in the marks' coordinates.
+pub trait PixelSource {
+    fn pixels(&self, rect: geometry::Rect) -> Option<::image::RgbaImage>;
+}
+
+/// Frozen screens, in desktop coordinates.
+#[derive(Debug)]
+pub struct Captures<'a>(pub &'a [Capture]);
+
+impl PixelSource for Captures<'_> {
+    fn pixels(&self, rect: geometry::Rect) -> Option<::image::RgbaImage> {
+        geometry::crop(self.0, rect)
+    }
+}
+
+/// A plain image whose pixels are the marks' coordinates.
+#[derive(Debug)]
+pub struct ImageSource<'a>(pub &'a ::image::RgbaImage);
+
+impl PixelSource for ImageSource<'_> {
+    #[allow(clippy::cast_sign_loss)]
+    fn pixels(&self, rect: geometry::Rect) -> Option<::image::RgbaImage> {
+        let image = geometry::Rect::new(
+            0,
+            0,
+            i32::try_from(self.0.width()).ok()?,
+            i32::try_from(self.0.height()).ok()?,
+        );
+        let part = image.intersection(&rect)?;
+        if part != rect {
+            return None;
+        }
+        Some(
+            ::image::imageops::crop_imm(
+                self.0,
+                part.x as u32,
+                part.y as u32,
+                part.width as u32,
+                part.height as u32,
+            )
+            .to_image(),
+        )
+    }
+}
+
+/// The pixels under the marks and the things worth keeping between redraws.
 pub struct Painter<'a> {
-    pub captures: &'a [Capture],
+    pub source: &'a dyn PixelSource,
     pub typesetter: &'a RefCell<Typesetter>,
     pub patches: &'a RefCell<HashMap<PatchKey, image::Handle>>,
 }
+
+/// Patches made for marks that are gone are dropped once there are this many.
+const PATCH_LIMIT: usize = 64;
 
 /// An effect over a desktop region, at whole logical pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -28,13 +76,13 @@ pub struct PatchKey {
 }
 
 impl Painter<'_> {
-    /// Draws `primitive`, given in desktop coordinates, onto a surface whose top left is
-    /// `origin` on the desktop.
-    pub fn draw(&self, frame: &mut Frame, primitive: &Primitive, origin: kurbo::Vec2) {
+    /// Draws `primitive`, mapped onto the canvas by `transform` (a scale and a translation).
+    pub fn draw(&self, frame: &mut Frame, primitive: &Primitive, transform: Affine) {
+        let scale = transform.as_coeffs()[0];
         match primitive {
             Primitive::Fill { path, color, rule } => {
                 frame.fill(
-                    &to_iced(path, origin),
+                    &to_iced(path, transform),
                     canvas::Fill {
                         style: canvas::Style::Solid(color_of(*color)),
                         rule: match rule {
@@ -45,7 +93,7 @@ impl Painter<'_> {
                 );
             }
             Primitive::Stroke { path, color, width } => {
-                frame.stroke(&to_iced(path, origin), stroke(*color, *width));
+                frame.stroke(&to_iced(path, transform), stroke(*color, *width * scale));
             }
             Primitive::Text {
                 at,
@@ -60,20 +108,20 @@ impl Painter<'_> {
                     .typesetter
                     .borrow_mut()
                     .outline(text, *font, *size, *at, *centered);
-                let path = to_iced(&outline, origin);
+                let path = to_iced(&outline, transform);
                 if let Some(halo) = halo {
-                    frame.stroke(&path, stroke(*halo, size * 0.16));
+                    frame.stroke(&path, stroke(*halo, size * 0.16 * scale));
                 }
                 frame.fill(&path, color_of(*color));
             }
             Primitive::Effect { rect, effect } => {
-                #[allow(clippy::cast_possible_truncation)]
                 if let Some((handle, bounds)) = self.patch(*rect, *effect) {
-                    let local = Rectangle {
-                        x: bounds.x - origin.x as f32,
-                        y: bounds.y - origin.y as f32,
-                        ..bounds
-                    };
+                    let mapped = transform.transform_rect_bbox(bounds);
+                    #[allow(clippy::cast_possible_truncation)]
+                    let local = Rectangle::new(
+                        Point::new(mapped.x0 as f32, mapped.y0 as f32),
+                        Size::new(mapped.width() as f32, mapped.height() as f32),
+                    );
                     frame.draw_image(local, &handle);
                 }
             }
@@ -82,7 +130,7 @@ impl Painter<'_> {
 
     /// The frozen pixels under `rect` with `effect` applied, and where they go.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    fn patch(&self, rect: kurbo::Rect, effect: Effect) -> Option<(image::Handle, Rectangle)> {
+    fn patch(&self, rect: kurbo::Rect, effect: Effect) -> Option<(image::Handle, kurbo::Rect)> {
         let rect = rect.abs();
         let whole = geometry::Rect::new(
             rect.x0.floor() as i32,
@@ -99,15 +147,16 @@ impl Painter<'_> {
             kind,
             strength,
         };
-        #[allow(clippy::cast_precision_loss)]
-        let bounds = Rectangle::new(
-            Point::new(whole.x as f32, whole.y as f32),
-            Size::new(whole.width as f32, whole.height as f32),
+        let bounds = kurbo::Rect::new(
+            f64::from(whole.x),
+            f64::from(whole.y),
+            f64::from(whole.right()),
+            f64::from(whole.bottom()),
         );
         if let Some(handle) = self.patches.borrow().get(&key) {
             return Some((handle.clone(), bounds));
         }
-        let mut pixels = geometry::crop(self.captures, whole)?;
+        let mut pixels = self.source.pixels(whole)?;
         let scale = f64::from(pixels.width()) / f64::from(whole.width.max(1));
         let region = Region::clamp(
             kurbo::Rect::new(
@@ -127,7 +176,11 @@ impl Painter<'_> {
             }
         }
         let handle = image::Handle::from_rgba(pixels.width(), pixels.height(), pixels.into_raw());
-        self.patches.borrow_mut().insert(key, handle.clone());
+        let mut patches = self.patches.borrow_mut();
+        if patches.len() >= PATCH_LIMIT {
+            patches.clear();
+        }
+        patches.insert(key, handle.clone());
         Some((handle, bounds))
     }
 }
@@ -146,8 +199,11 @@ pub fn color_of(color: Rgba) -> Color {
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn to_iced(path: &BezPath, origin: kurbo::Vec2) -> Path {
-    let at = |p: kurbo::Point| Point::new((p.x - origin.x) as f32, (p.y - origin.y) as f32);
+fn to_iced(path: &BezPath, transform: Affine) -> Path {
+    let at = |p: kurbo::Point| {
+        let p = transform * p;
+        Point::new(p.x as f32, p.y as f32)
+    };
     Path::new(|builder| {
         for element in path.elements() {
             match *element {
@@ -159,4 +215,30 @@ fn to_iced(path: &BezPath, origin: kurbo::Vec2) -> Path {
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_sources_give_whole_regions_only() {
+        let image = ::image::RgbaImage::new(10, 8);
+        let source = ImageSource(&image);
+        assert_eq!(
+            source
+                .pixels(geometry::Rect::new(2, 2, 4, 3))
+                .map(|p| p.dimensions()),
+            Some((4, 3))
+        );
+        assert!(source.pixels(geometry::Rect::new(8, 0, 4, 3)).is_none());
+        assert!(source.pixels(geometry::Rect::new(20, 20, 4, 3)).is_none());
+    }
+
+    #[test]
+    fn colours_keep_their_alpha() {
+        let color = color_of(Rgba::rgb(255, 0, 0).with_alpha(51));
+        assert!((color.a - 0.2).abs() < 1e-6);
+        assert!((color.r - 1.0).abs() < 1e-6);
+    }
 }

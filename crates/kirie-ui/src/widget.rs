@@ -86,9 +86,12 @@ pub fn primary_button<'a, Message: Clone + 'a>(
             color: Some(palette.on_accent),
         });
     button(
-        row![glyph, text(label).size(14)]
-            .spacing(space::S)
-            .align_y(iced::Alignment::Center),
+        container(
+            row![glyph, text(label).size(14)]
+                .spacing(space::S)
+                .align_y(iced::Alignment::Center),
+        )
+        .center_y(Length::Fill),
     )
     .height(CONTROL)
     .padding([0.0, space::M])

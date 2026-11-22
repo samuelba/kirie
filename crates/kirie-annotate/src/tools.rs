@@ -60,6 +60,25 @@ impl Tool {
         }
     }
 
+    /// The name with its key, for tooltips.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Tool::Select => "Select (V)",
+            Tool::Arrow => "Arrow (A)",
+            Tool::Line => "Line (L)",
+            Tool::Rectangle => "Rectangle (R)",
+            Tool::Ellipse => "Ellipse (E)",
+            Tool::Pen => "Pen (P)",
+            Tool::Highlighter => "Highlighter (H)",
+            Tool::Text => "Text (T)",
+            Tool::Counter => "Step number (N)",
+            Tool::Blur => "Blur (B)",
+            Tool::Pixelate => "Pixelate (X)",
+            Tool::Redact => "Redact (D)",
+            Tool::Spotlight => "Spotlight (S)",
+        }
+    }
+
     /// The key that picks the tool.
     pub const fn key(self) -> char {
         match self {
@@ -276,6 +295,9 @@ mod tests {
             assert_eq!(Tool::from_key(tool.key()), Some(tool));
             assert_eq!(Tool::from_key(tool.key().to_ascii_uppercase()), Some(tool));
             assert!(!tool.name().is_empty());
+            let key = tool.key().to_ascii_uppercase();
+            assert!(tool.label().starts_with(tool.name()));
+            assert!(tool.label().ends_with(&format!("({key})")));
         }
         assert_eq!(Tool::from_key('z'), None);
     }

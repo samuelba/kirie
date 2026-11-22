@@ -2,7 +2,6 @@
 //! region, marks it up, and copies or saves it.
 
 mod canvas;
-mod paint;
 mod selection;
 mod view;
 
@@ -118,7 +117,7 @@ pub struct Overlay {
     typing: Option<Typing>,
     busy: bool,
     typesetter: RefCell<Typesetter>,
-    patches: RefCell<HashMap<paint::PatchKey, image::Handle>>,
+    patches: RefCell<HashMap<crate::paint::PatchKey, image::Handle>>,
     outcome: Arc<Mutex<Outcome>>,
 }
 

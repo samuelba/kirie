@@ -8,9 +8,9 @@ use kirie_ui::{radius, space};
 
 use kirie_annotate::{Shape, Tool, style};
 
-use super::paint::Painter;
 use super::selection::{Handle, Hit};
 use super::{HANDLE_REACH, MARK_REACH, Message, Overlay, Pointer, to_kurbo};
+use crate::paint::{Captures, Painter};
 
 const HANDLE_RADIUS: f32 = 4.5;
 const LABEL_SIZE: f32 = 13.0;
@@ -160,12 +160,14 @@ impl Surface<'_> {
                 f64::from(rect.y + rect.height),
             )
         });
+        let source = Captures(&overlay.captures);
         let painter = Painter {
-            captures: &overlay.captures,
+            source: &source,
             typesetter: &overlay.typesetter,
             patches: &overlay.patches,
         };
-        let origin = kurbo::Vec2::new(f64::from(self.area.x), f64::from(self.area.y));
+        let transform =
+            kurbo::Affine::translate((-f64::from(self.area.x), -f64::from(self.area.y)));
         let moving = match &overlay.draft {
             Some(kirie_annotate::Draft::Moving { ids, by, .. }) => Some((ids.as_slice(), *by)),
             _ => None,
@@ -189,7 +191,7 @@ impl Surface<'_> {
                 _ => shape,
             };
             for primitive in style::primitives(&shape, document.style, document.unit, visible) {
-                painter.draw(frame, &primitive, origin);
+                painter.draw(frame, &primitive, transform);
             }
         }
     }

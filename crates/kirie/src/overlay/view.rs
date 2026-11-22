@@ -3,13 +3,13 @@
 
 use iced::widget::{Space, column, container, image, pin, row, stack, text_input};
 use iced::{Element, Length, Point, Rectangle, window};
-use kirie_annotate::{StyleId, Tool, Weight};
+use kirie_annotate::Tool;
 use kirie_ui::icon::Icon;
-use kirie_ui::widget::{divider, floating, icon_button, pill, primary_button, swatch};
+use kirie_ui::widget::{divider, floating, icon_button, primary_button};
 use kirie_ui::{radius, space};
 
-use super::paint::color_of;
 use super::{Action, Message, Overlay, canvas};
+use crate::controls;
 
 pub const TEXT_INPUT: &str = "kirie-text";
 /// Room the toolbar takes; used to keep it on screen.
@@ -87,8 +87,8 @@ impl Overlay {
         let tools = row(Tool::ALL.into_iter().map(|tool| {
             let active = self.tool == Some(tool);
             icon_button(
-                icon(tool),
-                tool.name(),
+                controls::tool_icon(tool),
+                tool.label(),
                 palette,
                 active,
                 Some(Message::PickTool((!active).then_some(tool))),
@@ -129,34 +129,9 @@ impl Overlay {
             .spacing(space::S)
             .align_y(iced::Alignment::Center);
 
-        let styles = row(StyleId::ALL
-            .into_iter()
-            .map(|id| pill(id.name(), id == style, palette, Message::PickStyle(id))))
-        .spacing(2);
-        let colors = row(style.palette().into_iter().map(|color| {
-            swatch(
-                color_of(color),
-                self.paint.color == color,
-                palette,
-                Message::PickColor(color),
-            )
-        }))
-        .spacing(2);
-        let weights = row([
-            ("S", Weight::Thin),
-            ("M", Weight::Medium),
-            ("L", Weight::Thick),
-        ]
-        .into_iter()
-        .map(|(label, weight)| {
-            pill(
-                label,
-                self.paint.weight == weight,
-                palette,
-                Message::PickWeight(weight),
-            )
-        }))
-        .spacing(2);
+        let styles = controls::styles(style, palette, Message::PickStyle);
+        let colors = controls::colors(style, self.paint, palette, Message::PickColor);
+        let weights = controls::weights(self.paint, palette, Message::PickWeight);
         let properties = row![
             styles,
             divider(palette),
@@ -207,23 +182,5 @@ impl Overlay {
                 selection: palette.accent.scale_alpha(0.4),
             })
             .into()
-    }
-}
-
-fn icon(tool: Tool) -> Icon {
-    match tool {
-        Tool::Select => Icon::Select,
-        Tool::Arrow => Icon::Arrow,
-        Tool::Line => Icon::Line,
-        Tool::Rectangle => Icon::Rectangle,
-        Tool::Ellipse => Icon::Ellipse,
-        Tool::Pen => Icon::Pen,
-        Tool::Highlighter => Icon::Highlighter,
-        Tool::Text => Icon::Text,
-        Tool::Counter => Icon::Counter,
-        Tool::Blur => Icon::Blur,
-        Tool::Pixelate => Icon::Pixelate,
-        Tool::Redact => Icon::Redact,
-        Tool::Spotlight => Icon::Spotlight,
     }
 }
