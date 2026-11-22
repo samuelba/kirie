@@ -981,7 +981,8 @@ fn window_settings() -> window::Settings {
     window::Settings {
         decorations: false,
         fullscreen: true,
-        resizable: false,
+        // A window of fixed size stays that size when GNOME 46 makes it fullscreen.
+        resizable: true,
         level: window::Level::AlwaysOnTop,
         exit_on_close_request: true,
         platform_specific: window::settings::PlatformSpecific {
