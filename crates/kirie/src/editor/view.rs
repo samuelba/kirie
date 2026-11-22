@@ -10,6 +10,7 @@ use kirie_ui::{Palette, Scheme, space};
 use super::canvas::{Backdrop, Board};
 use super::{Editor, Message};
 use crate::controls;
+use crate::picker::{self, Picker};
 
 pub const TEXT_INPUT: &str = "kirie-editor-text";
 const APP_ICON: &[u8] =
@@ -269,11 +270,23 @@ impl Editor {
         ]
         .spacing(space::XS)
         .align_y(Alignment::Center);
+        let mut colors = column![
+            controls::colors(
+                &self.swatches,
+                self.paint,
+                palette,
+                self.picker.as_ref().map(Picker::target),
+                Message::PickColor,
+                Message::EditColor,
+            )
+            .wrap()
+        ]
+        .spacing(space::M);
+        if let Some(open) = &self.picker {
+            colors = colors.push(picker::view(open, palette).map(Message::Picker));
+        }
         let mut content = column![
-            section(
-                "Colour",
-                controls::colors(self.paint, palette, Message::PickColor)
-            ),
+            column![text("Colour").size(12).color(palette.muted), colors].spacing(space::S),
             section(
                 "Weight",
                 controls::weights(self.paint, palette, Message::PickWeight)

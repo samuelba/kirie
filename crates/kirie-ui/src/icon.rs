@@ -53,6 +53,7 @@ icons! {
     Project => "file-archive",
     Delete => "trash",
     Image => "image",
+    Plus => "plus",
 }
 
 impl Icon {

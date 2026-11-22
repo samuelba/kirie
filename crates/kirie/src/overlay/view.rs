@@ -10,11 +10,16 @@ use kirie_ui::{radius, space};
 
 use super::{Action, Message, Overlay, canvas};
 use crate::controls;
+use crate::picker::{self, Picker};
 
 pub const TEXT_INPUT: &str = "kirie-text";
 /// Room the toolbar takes; used to keep it on screen.
 const TOOLBAR: iced::Size = iced::Size::new(800.0, 92.0);
 const GAP: f32 = 12.0;
+/// A swatch and the space after it.
+const SWATCH: f32 = 30.0;
+/// Custom swatches that fit in [`TOOLBAR`] before it grows.
+const ROOM_FOR_CUSTOM: usize = 4;
 
 impl Overlay {
     pub fn view(&self, id: window::Id) -> Element<'_, Message> {
@@ -57,8 +62,9 @@ impl Overlay {
         if self.selection.dragging() {
             return None;
         }
+        let toolbar = self.toolbar_size();
         let below = selection.y + selection.height + GAP;
-        let above = selection.y - GAP - TOOLBAR.height;
+        let above = selection.y - GAP - toolbar.height;
         let anchor = Point::new(selection.center_x(), selection.y + selection.height);
         let areas = || self.screens.iter().map(|screen| screen.area);
         let home = areas()
@@ -67,18 +73,29 @@ impl Overlay {
         if home != screen {
             return None;
         }
-        let y = if below + TOOLBAR.height <= home.y + home.height {
+        let y = if below + toolbar.height <= home.y + home.height {
             below
         } else if above >= home.y {
             above
         } else {
-            selection.y + selection.height - TOOLBAR.height - GAP
+            selection.y + selection.height - toolbar.height - GAP
         };
-        let x = (selection.center_x() - TOOLBAR.width / 2.0).clamp(
+        let x = (selection.center_x() - toolbar.width / 2.0).clamp(
             home.x + GAP,
-            (home.x + home.width - TOOLBAR.width - GAP).max(home.x + GAP),
+            (home.x + home.width - toolbar.width - GAP).max(home.x + GAP),
         );
         Some(Point::new(x - home.x, y.max(home.y) - home.y))
+    }
+
+    fn toolbar_size(&self) -> iced::Size {
+        #[allow(clippy::cast_precision_loss)]
+        let extra = self.swatches.custom().len().saturating_sub(ROOM_FOR_CUSTOM) as f32 * SWATCH;
+        let picker = if self.picker.is_some() {
+            picker::HEIGHT
+        } else {
+            0.0
+        };
+        iced::Size::new(TOOLBAR.width + extra, TOOLBAR.height + picker)
     }
 
     fn toolbar(&self) -> Element<'_, Message> {
@@ -137,7 +154,14 @@ impl Overlay {
             .align_y(iced::Alignment::Center);
 
         let styles = controls::styles(style, palette, Message::PickStyle);
-        let colors = controls::colors(self.paint, palette, Message::PickColor);
+        let colors = controls::colors(
+            &self.swatches,
+            self.paint,
+            palette,
+            self.picker.as_ref().map(Picker::target),
+            Message::PickColor,
+            Message::EditColor,
+        );
         let weights = controls::weights(self.paint, palette, Message::PickWeight);
         let properties = row![
             styles,
@@ -157,7 +181,14 @@ impl Overlay {
         .spacing(space::S)
         .align_y(iced::Alignment::Center);
 
-        container(column![properties, main].spacing(space::XS))
+        let mut panel = column![].spacing(space::XS);
+        if let Some(open) = &self.picker {
+            panel = panel.push(
+                container(picker::view(open, palette).map(Message::Picker))
+                    .padding([space::XS, 0.0]),
+            );
+        }
+        container(panel.push(properties).push(main))
             .padding(space::S)
             .style(floating(palette))
             .into()

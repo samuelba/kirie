@@ -9,8 +9,10 @@ mod ipc;
 mod notify;
 mod overlay;
 mod paint;
+mod picker;
 mod save;
 mod shortcuts;
+mod swatches;
 mod update;
 
 use std::path::PathBuf;

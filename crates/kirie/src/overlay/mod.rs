@@ -23,6 +23,8 @@ use kirie_capture::{Frame, geometry};
 use kirie_ui::Palette;
 
 use self::selection::{Release, Selection};
+use crate::picker::{self, Picker, Target};
+use crate::swatches::Swatches;
 
 pub const NAMESPACE: &str = "kirie-overlay";
 /// How close to a handle a press grabs it, in logical pixels.
@@ -61,6 +63,9 @@ pub enum Message {
     PickTool(Option<Tool>),
     PickStyle(StyleId),
     PickColor(kirie_annotate::Rgba),
+    /// Opens the colour picker on a swatch, or to add one.
+    EditColor(Target),
+    Picker(picker::Event),
     PickWeight(Weight),
     ToggleFill,
     TextChanged(String),
@@ -135,6 +140,8 @@ pub struct Overlay {
     palette: Palette,
     tool: Option<Tool>,
     paint: Paint,
+    swatches: Swatches,
+    picker: Option<Picker>,
     history: History,
     draft: Option<Draft>,
     /// The tool the current pointer gesture draws with, if it draws at all.
@@ -249,6 +256,7 @@ impl Overlay {
             .into_iter()
             .map(|window| (area(window.rect), window.title))
             .collect();
+        let swatches = Swatches::load();
         let overlay = Self {
             windows,
             captures: frames,
@@ -260,7 +268,12 @@ impl Overlay {
             modifiers: keyboard::Modifiers::default(),
             palette: Palette::DARK,
             tool: None,
-            paint: Paint::default(),
+            paint: Paint {
+                color: swatches.first(),
+                ..Paint::default()
+            },
+            swatches,
+            picker: None,
             history: History::new(document),
             draft: None,
             drawing: None,
@@ -354,7 +367,7 @@ impl Overlay {
                 }
                 self.tool = tool;
                 self.paint.color =
-                    crate::controls::tool_color(tool, self.paint.color, kirie_annotate::PALETTE[0]);
+                    crate::controls::tool_color(tool, self.paint.color, self.swatches.first());
                 self.draft = None;
                 Task::none()
             }
@@ -364,6 +377,23 @@ impl Overlay {
             }
             Message::PickColor(color) => {
                 self.paint.color = color;
+                Task::none()
+            }
+            Message::EditColor(target) => {
+                self.picker = Some(Picker::new(target, &self.swatches, self.paint.color));
+                Task::none()
+            }
+            Message::Picker(event) => {
+                if let picker::Outcome::Changed { pick } =
+                    picker::update(&mut self.picker, &mut self.swatches, event)
+                {
+                    if let Some(color) = pick {
+                        self.paint.color = color;
+                    }
+                    if let Err(error) = self.swatches.save() {
+                        tracing::warn!(%error, "colours not saved");
+                    }
+                }
                 Task::none()
             }
             Message::PickWeight(weight) => {
@@ -446,7 +476,8 @@ impl Overlay {
         if self.busy {
             return Task::none();
         }
-        if self.typing.take().is_some()
+        if self.picker.take().is_some()
+            || self.typing.take().is_some()
             || self.draft.take().is_some()
             || self.picked.take().is_some()
         {
@@ -655,7 +686,7 @@ impl Overlay {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let keys = if self.typing.is_some() {
+        let keys = if self.typing.is_some() || self.picker.is_some() {
             event::listen_with(typing_key)
         } else {
             event::listen_with(key)

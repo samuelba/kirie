@@ -160,6 +160,45 @@ pub fn swatch<'a, Message: Clone + 'a>(
         .into()
 }
 
+/// A round button the size of a swatch, with an icon.
+pub fn swatch_button<'a, Message: Clone + 'a>(
+    icon: Icon,
+    label: &'a str,
+    palette: Palette,
+    active: bool,
+    on_press: Message,
+) -> Element<'a, Message> {
+    let glyph = svg(icon.handle())
+        .width(14)
+        .height(14)
+        .style(move |_, _| svg::Style {
+            color: Some(palette.text),
+        });
+    let control = button(container(glyph).center(Length::Fill))
+        .width(28)
+        .height(28)
+        .padding(0)
+        .on_press(on_press)
+        .style(move |_, status| button::Style {
+            background: match (active, status) {
+                (true, _) | (false, button::Status::Pressed) => {
+                    Some(Background::Color(palette.surface[2]))
+                }
+                (false, button::Status::Hovered) => Some(Background::Color(palette.surface[1])),
+                _ => None,
+            },
+            text_color: palette.text,
+            border: Border {
+                color: palette.border,
+                width: 1.0,
+                radius: radius::PILL.into(),
+            },
+            shadow: Shadow::default(),
+            snap: true,
+        });
+    hint(control.into(), label, palette)
+}
+
 /// One option of a segmented control.
 pub fn pill<'a, Message: Clone + 'a>(
     label: &'a str,

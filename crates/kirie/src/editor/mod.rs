@@ -20,6 +20,8 @@ use kirie_annotate::{
 use kirie_ui::{Palette, Scheme};
 
 use self::viewport::Viewport;
+use crate::picker::{self, Picker, Target};
+use crate::swatches::Swatches;
 
 /// How close to a mark a click picks it, in screen pixels.
 const MARK_REACH: f64 = 6.0;
@@ -97,6 +99,9 @@ pub enum Message {
     PickTool(Tool),
     PickStyle(StyleId),
     PickColor(Rgba),
+    /// Opens the colour picker on a swatch, or to add one.
+    EditColor(Target),
+    Picker(picker::Event),
     PickWeight(Weight),
     ToggleFill,
     ToggleScheme,
@@ -143,6 +148,8 @@ pub struct Editor {
     viewport: Viewport,
     tool: Tool,
     paint: Paint,
+    swatches: Swatches,
+    picker: Option<Picker>,
     draft: Option<Draft>,
     picked: Option<ShapeId>,
     typing: Option<Typing>,
@@ -166,6 +173,7 @@ impl std::fmt::Debug for Editor {
 
 impl Editor {
     pub fn boot(loaded: Option<Loaded>) -> (Self, Task<Message>) {
+        let swatches = Swatches::load();
         let mut editor = Self {
             palette: Palette::DARK,
             image: None,
@@ -173,7 +181,12 @@ impl Editor {
             history: History::new(Document::new(1, 1, 1.0)),
             viewport: Viewport::fitted(),
             tool: Tool::Arrow,
-            paint: Paint::default(),
+            paint: Paint {
+                color: swatches.first(),
+                ..Paint::default()
+            },
+            swatches,
+            picker: None,
             draft: None,
             picked: None,
             typing: None,
@@ -249,7 +262,7 @@ impl Editor {
                 self.paint.color = crate::controls::tool_color(
                     Some(tool),
                     self.paint.color,
-                    kirie_annotate::PALETTE[0],
+                    self.swatches.first(),
                 );
                 self.draft = None;
                 if tool != Tool::Select {
@@ -260,6 +273,10 @@ impl Editor {
                 self.history.apply(Op::SetStyle(style));
             }
             Message::PickColor(color) => self.repaint(|paint| paint.color = color),
+            Message::EditColor(target) => {
+                self.picker = Some(Picker::new(target, &self.swatches, self.paint.color));
+            }
+            Message::Picker(event) => return self.edit_color(event),
             Message::PickWeight(weight) => self.repaint(|paint| paint.weight = weight),
             Message::ToggleFill => self.repaint(|paint| paint.filled = !paint.filled),
             Message::SystemScheme(scheme) => self.follow(Some(scheme)),
@@ -282,7 +299,10 @@ impl Editor {
                 }
             }
             Message::Escape => {
-                if self.typing.take().is_none() && self.draft.take().is_none() {
+                if self.picker.take().is_none()
+                    && self.typing.take().is_none()
+                    && self.draft.take().is_none()
+                {
                     self.picked = None;
                 }
             }
@@ -321,6 +341,21 @@ impl Editor {
             }
         }
         Task::none()
+    }
+
+    fn edit_color(&mut self, event: picker::Event) -> Task<Message> {
+        let picker::Outcome::Changed { pick } =
+            picker::update(&mut self.picker, &mut self.swatches, event)
+        else {
+            return Task::none();
+        };
+        if let Some(color) = pick {
+            self.repaint(|paint| paint.color = color);
+        }
+        match self.swatches.save() {
+            Ok(()) => Task::none(),
+            Err(error) => self.toast(Err(error)),
+        }
     }
 
     /// Copying, saving, opening and pasting.
@@ -483,7 +518,7 @@ impl Editor {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let keys = if self.typing.is_some() {
+        let keys = if self.typing.is_some() || self.picker.is_some() {
             event::listen_with(typing_key)
         } else {
             event::listen_with(key)

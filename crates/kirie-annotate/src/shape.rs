@@ -27,6 +27,9 @@ impl Rgba {
     /// `#rrggbb` or `#rrggbbaa`.
     pub fn from_hex(hex: &str) -> Option<Self> {
         let hex = hex.strip_prefix('#')?;
+        if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
         let byte = |at: usize| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok();
         match hex.len() {
             6 => Some(Self::rgb(byte(0)?, byte(2)?, byte(4)?)),
@@ -346,6 +349,7 @@ mod tests {
         assert_eq!(Rgba::from_hex("e4572e"), None);
         assert_eq!(Rgba::from_hex("#e457"), None);
         assert_eq!(Rgba::from_hex("#zz572e"), None);
+        assert_eq!(Rgba::from_hex("#+1+2+3"), None);
     }
 
     #[test]
