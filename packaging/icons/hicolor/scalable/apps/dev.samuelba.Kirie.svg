@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="frame" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f7f5f0"/>
+      <stop offset="1" stop-color="#dcd6ca"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2a2e37"/>
+      <stop offset="1" stop-color="#16181d"/>
+    </linearGradient>
+    <filter id="lift" x="-30%" y="-30%" width="160%" height="170%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="2.5"/>
+      <feOffset dx="3" dy="5"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.45"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <!-- shadow, frame and the screen -->
+  <rect x="14" y="20" width="100" height="96" rx="13" fill="#000" opacity="0.18"/>
+  <rect x="14" y="16" width="100" height="96" rx="13" fill="url(#frame)"/>
+  <rect x="22" y="24" width="84" height="80" rx="6" fill="url(#screen)"/>
+  <rect x="30" y="32" width="30" height="4" rx="2" fill="#3a3f4b"/>
+  <rect x="30" y="90" width="44" height="4" rx="2" fill="#3a3f4b"/>
+  <!-- the hole the piece was cut from -->
+  <g class="cut">
+    <rect x="46" y="48" width="50" height="36" rx="3" fill="#0e1014" stroke="#e4572e" stroke-width="3"
+      stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 4"/>
+  </g>
+  <!-- the cut piece, lifted, with a brush mark on it -->
+  <g class="piece" transform="rotate(-6 61 56)">
+    <rect x="36" y="38" width="50" height="36" rx="3" fill="#fdf3e4" filter="url(#lift)"/>
+    <path class="brush" d="M46 60 C47 47 76 45 77 56 C78 66 56 70 50 63" fill="none" stroke="#e4572e"
+      stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
