@@ -7,9 +7,10 @@
 #   --gnome-extension  also install the GNOME Shell extension when not on GNOME right now
 #   --force            reinstall even when this version is already installed
 #   --uninstall        remove Kirie; the configuration in ~/.config/kirie stays
-# Environment: KIRIE_VERSION pins a release (e.g. 0.2.0). KIRIE_GNOME_EXTENSION=1, KIRIE_FORCE=1
-# and KIRIE_UNINSTALL=1 do the same as the options. KIRIE_SHA256 is the tarball's checksum,
-# which Kirie's updater passes after checking the release's signature.
+#   --from DIR         install the unpacked bundle in DIR instead of downloading a release
+# Environment: KIRIE_VERSION pins a release (e.g. 0.2.0). KIRIE_GNOME_EXTENSION=1, KIRIE_FORCE=1,
+# KIRIE_UNINSTALL=1 and KIRIE_FROM=DIR do the same as the options. KIRIE_SHA256 is the tarball's
+# checksum, which Kirie's updater passes after checking the release's signature.
 #
 # When minisign or rsign is installed, the download is checked against the release's signed
 # SHA256SUMS. Without either, it is checked against the unsigned SHA256SUMS-<arch>.
@@ -34,21 +35,32 @@ icon_files="scalable/apps/$app_id.svg symbolic/apps/$app_id-symbolic.svg"
 gnome_extension="${KIRIE_GNOME_EXTENSION:-0}"
 force="${KIRIE_FORCE:-0}"
 uninstall="${KIRIE_UNINSTALL:-0}"
-for arg in "$@"; do
-    case "$arg" in
+from="${KIRIE_FROM:-}"
+while [ $# -gt 0 ]; do
+    case "$1" in
         --gnome-extension) gnome_extension=1 ;;
         --force) force=1 ;;
         --uninstall) uninstall=1 ;;
+        --from)
+            if [ $# -lt 2 ]; then
+                echo "kirie install: --from needs a folder" >&2
+                exit 2
+            fi
+            from="$2"
+            shift
+            ;;
+        --from=*) from="${1#--from=}" ;;
         -h | --help)
-            echo "Usage: install.sh [--gnome-extension] [--force] [--uninstall]"
+            echo "Usage: install.sh [--gnome-extension] [--force] [--uninstall] [--from DIR]"
             echo "Set KIRIE_VERSION to install a specific release."
             exit 0
             ;;
         *)
-            echo "kirie install: unknown option $arg" >&2
+            echo "kirie install: unknown option $1" >&2
             exit 2
             ;;
     esac
+    shift
 done
 
 say() { printf '%s\n' "$*"; }
@@ -206,7 +218,11 @@ case "$(uname -m)" in
     *) die "there is no Kirie build for $(uname -m), only for x86_64 and aarch64" ;;
 esac
 
-if [ -n "${KIRIE_VERSION:-}" ]; then
+if [ -n "$from" ]; then
+    [ -x "$from/kirie" ] || die "$from has no kirie binary. Nothing was installed."
+    version="$("$from/kirie" --version 2>/dev/null | awk '{ print $2 }')" || true
+    [ -n "$version" ] || die "$from/kirie does not run on this system. Nothing was installed."
+elif [ -n "${KIRIE_VERSION:-}" ]; then
     version="${KIRIE_VERSION#v}"
     case "$version" in
         *[!0-9A-Za-z.+-]*) die "KIRIE_VERSION must look like 0.2.0" ;;
@@ -231,21 +247,26 @@ if [ "$previous" = "$version" ] && [ "$force" != 1 ]; then
     exit 0
 fi
 
-tmp="$(mktemp -d)"
-trap 'rm -rf -- "$tmp"' EXIT
-trap 'exit 130' INT TERM
+if [ -n "$from" ]; then
+    src="$from"
+    say "Installing Kirie $version from $from"
+else
+    tmp="$(mktemp -d)"
+    trap 'rm -rf -- "$tmp"' EXIT
+    trap 'exit 130' INT TERM
 
-bundle="kirie-$version-$arch-linux"
-say "Downloading Kirie $version ($arch)"
-fetch "$repo/releases/download/v$version/$bundle.tar.gz" "$tmp/$bundle.tar.gz" ||
-    die "cannot download Kirie $version for $arch. Nothing was installed."
-expected="$(expected_sha256 "$tmp" "$bundle")"
-[ -n "$expected" ] || die "$bundle.tar.gz is missing from the checksums. Nothing was installed."
-[ "$(sha256 "$tmp/$bundle.tar.gz")" = "$expected" ] ||
-    die "the download does not match its checksum. Nothing was installed."
-tar -xzf "$tmp/$bundle.tar.gz" -C "$tmp"
-src="$tmp/$bundle"
-[ -x "$src/kirie" ] || die "the archive has no kirie binary. Nothing was installed."
+    bundle="kirie-$version-$arch-linux"
+    say "Downloading Kirie $version ($arch)"
+    fetch "$repo/releases/download/v$version/$bundle.tar.gz" "$tmp/$bundle.tar.gz" ||
+        die "cannot download Kirie $version for $arch. Nothing was installed."
+    expected="$(expected_sha256 "$tmp" "$bundle")"
+    [ -n "$expected" ] || die "$bundle.tar.gz is missing from the checksums. Nothing was installed."
+    [ "$(sha256 "$tmp/$bundle.tar.gz")" = "$expected" ] ||
+        die "the download does not match its checksum. Nothing was installed."
+    tar -xzf "$tmp/$bundle.tar.gz" -C "$tmp"
+    src="$tmp/$bundle"
+    [ -x "$src/kirie" ] || die "the archive has no kirie binary. Nothing was installed."
+fi
 
 # Written next to the old binary and renamed over it, so a running Kirie keeps working.
 mkdir -p "$bin_dir"
