@@ -128,6 +128,7 @@ pub enum Message {
     CloseRequested,
     Close(Answer),
     Opened(Result<Loaded, String>),
+    Dropped(crate::drops::Dropped),
     ToastExpired(u64),
     Ipc(crate::ipc::Request),
     /// The desktop switched between light and dark.
@@ -218,7 +219,7 @@ impl Editor {
         if let Some(loaded) = loaded {
             editor.open(loaded);
         }
-        (editor, Task::none())
+        (editor, take_drops())
     }
 
     fn open(&mut self, mut loaded: Loaded) {
@@ -328,7 +329,8 @@ impl Editor {
             | Message::Open
             | Message::Paste
             | Message::Save
-            | Message::SaveProject => return self.files(&message),
+            | Message::SaveProject
+            | Message::Dropped(_) => return self.files(message),
             Message::Done(Ok(text)) if text.is_empty() => {}
             Message::Done(_)
             | Message::Exported(..)
@@ -439,7 +441,7 @@ impl Editor {
     }
 
     /// Copying, saving, opening and pasting.
-    fn files(&mut self, message: &Message) -> Task<Message> {
+    fn files(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Copy => self.export(Export::Copy),
             Message::Open => Task::perform(crate::dialog::open_image(), |picked| match picked {
@@ -452,6 +454,17 @@ impl Editor {
             }),
             Message::Save => self.export(Export::Save),
             Message::SaveProject => self.export(Export::Project),
+            Message::Dropped(crate::drops::Dropped::Files(paths)) => {
+                paths.into_iter().next().map_or_else(Task::none, |path| {
+                    Task::perform(load_async(path), Message::Opened)
+                })
+            }
+            Message::Dropped(crate::drops::Dropped::Png(bytes)) => {
+                let decoded = ::image::load_from_memory(&bytes)
+                    .map(|image| Loaded::image(image.to_rgba8(), None))
+                    .map_err(|error| format!("cannot open the dropped image: {error}"));
+                self.update(Message::Opened(decoded))
+            }
             _ => Task::none(),
         }
     }
@@ -679,6 +692,17 @@ async fn load_async(path: PathBuf) -> Result<Loaded, String> {
     tokio::task::spawn_blocking(move || load(&path))
         .await
         .map_err(|error| error.to_string())?
+}
+
+/// Opens what is dropped on the editor's window, once it is open.
+fn take_drops() -> Task<Message> {
+    window::oldest()
+        .then(|id| id.map_or_else(Task::none, |id| window::run(id, crate::drops::display)))
+        .then(|display| {
+            display.map_or_else(Task::none, |display| {
+                Task::run(crate::drops::drops(display), Message::Dropped)
+            })
+        })
 }
 
 /// Raises and focuses the editor window.

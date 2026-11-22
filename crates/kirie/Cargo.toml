@@ -34,6 +34,9 @@ image.workspace = true
 iced.workspace = true
 iced_layershell = { version = "0.19.1", default-features = false }
 # iced_layershell 0.19 (through iced_exdevtools) breaks on winit-core 0.31.0-beta.3 and later.
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+rustix = { version = "1", features = ["pipe", "event"] }
 winit-core = "=0.31.0-beta.2"
 winit-common = "=0.31.0-beta.2"
 

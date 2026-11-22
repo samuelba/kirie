@@ -3,6 +3,7 @@ mod clipboard;
 mod controls;
 mod cursor;
 mod dialog;
+mod drops;
 mod editor;
 mod extension;
 mod ipc;
