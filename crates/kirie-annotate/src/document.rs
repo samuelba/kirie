@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use kurbo::{Rect, Vec2};
+use kurbo::{Point, Rect, Vec2};
 use serde::{Deserialize, Serialize};
 
 use crate::shape::{Kind, Paint, Rgba, Shape, ShapeId};
@@ -39,6 +39,10 @@ pub enum Op {
         kind: Kind,
         paint: Paint,
     },
+    /// Copies of marks, each with an id of its own, on top of the rest.
+    Insert {
+        shapes: Vec<Shape>,
+    },
     Replace {
         id: ShapeId,
         kind: Kind,
@@ -64,7 +68,18 @@ pub enum Op {
     Raise {
         ids: Vec<ShapeId>,
     },
+    /// Sends marks to the bottom, keeping their order among themselves.
+    Lower {
+        ids: Vec<ShapeId>,
+    },
+    /// Moves each mark one place up, or down, past the next mark that is not moved too.
+    Shift {
+        ids: Vec<ShapeId>,
+        up: bool,
+    },
     Clear,
+    /// Several edits as one step, applied in order.
+    Batch(Vec<Op>),
     /// Changes the style. Marks in the document's style painted the first color of a pair in
     /// `recolor` take the second: the old style's shade of a standard color becomes the new one's.
     SetStyle {
@@ -161,11 +176,23 @@ impl Document {
     }
 
     /// The topmost mark within `reach` of `point`.
-    pub fn hit(&self, point: kurbo::Point, reach: f64) -> Option<ShapeId> {
+    pub fn hit(&self, point: Point, reach: f64) -> Option<ShapeId> {
         self.shapes()
             .rev()
             .find(|shape| self.distance(shape, point) <= reach)
             .map(|shape| shape.id)
+    }
+
+    /// The marks lying wholly inside `rect`, as turned, bottom first.
+    pub fn within(&self, rect: Rect) -> Vec<ShapeId> {
+        let rect = rect.abs();
+        self.shapes()
+            .filter(|shape| {
+                let area = shape.turn().transform_rect_bbox(self.bounds(shape));
+                rect.x0 <= area.x0 && area.x1 <= rect.x1 && rect.y0 <= area.y0 && area.y1 <= rect.y1
+            })
+            .map(|shape| shape.id)
+            .collect()
     }
 
     /// The area `shape` covers here, before stroke width, with text measured in its face.
@@ -174,7 +201,7 @@ impl Document {
     }
 
     /// How far `point` is from `shape`, 0 when on or inside it.
-    pub fn distance(&self, shape: &Shape, point: kurbo::Point) -> f64 {
+    pub fn distance(&self, shape: &Shape, point: Point) -> f64 {
         match shape.kind {
             Kind::Text { .. } => {
                 let area = self.bounds(shape);
@@ -195,7 +222,7 @@ impl Document {
             })
             .max()
             .unwrap_or(0)
-            + 1
+            .saturating_add(1)
     }
 
     /// What the saved image covers, in whole pixels: the image area kept and, when the frame
@@ -297,6 +324,15 @@ impl Document {
                 }));
                 next.next_id += 1;
             }
+            Op::Insert { shapes } => {
+                for shape in shapes {
+                    next.shapes.push(Arc::new(Shape {
+                        id: ShapeId(next.next_id),
+                        ..shape
+                    }));
+                    next.next_id += 1;
+                }
+            }
             Op::Replace { id, kind } => next.map(&[id], |shape| Shape {
                 kind: kind.clone(),
                 ..shape.clone()
@@ -315,16 +351,13 @@ impl Document {
                 ..shape.clone()
             }),
             Op::Remove { ids } => next.shapes.retain(|shape| !ids.contains(&shape.id)),
-            Op::Raise { ids } => {
-                let (raised, kept): (Vec<_>, Vec<_>) = next
-                    .shapes
-                    .into_iter()
-                    .partition(|shape| ids.contains(&shape.id));
-                let mut raised = raised;
-                raised.sort_by_key(|shape| ids.iter().position(|id| *id == shape.id));
-                next.shapes = kept.into_iter().chain(raised).collect();
-            }
+            Op::Raise { .. } | Op::Lower { .. } | Op::Shift { .. } => next.restack(op),
             Op::Clear => next.shapes.clear(),
+            Op::Batch(ops) => {
+                for op in ops {
+                    next = next.apply(op);
+                }
+            }
             Op::SetStyle { style, recolor } => {
                 next.style = style;
                 let painted = |shape: &Shape| {
@@ -369,6 +402,45 @@ impl Document {
             }
         }
         next
+    }
+
+    /// Moves marks up or down among the others, for [`Op::Raise`], [`Op::Lower`] and
+    /// [`Op::Shift`].
+    fn restack(&mut self, op: Op) {
+        match op {
+            Op::Raise { ids } => {
+                let (raised, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.shapes)
+                    .into_iter()
+                    .partition(|shape| ids.contains(&shape.id));
+                let mut raised = raised;
+                raised.sort_by_key(|shape| ids.iter().position(|id| *id == shape.id));
+                self.shapes = kept.into_iter().chain(raised).collect();
+            }
+            Op::Lower { ids } => {
+                let (lowered, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.shapes)
+                    .into_iter()
+                    .partition(|shape| ids.contains(&shape.id));
+                self.shapes = lowered.into_iter().chain(kept).collect();
+            }
+            Op::Shift { ids, up } => {
+                let moved = |shape: &Arc<Shape>| ids.contains(&shape.id);
+                let count = self.shapes.len();
+                if up {
+                    for at in (0..count.saturating_sub(1)).rev() {
+                        if moved(&self.shapes[at]) && !moved(&self.shapes[at + 1]) {
+                            self.shapes.swap(at, at + 1);
+                        }
+                    }
+                } else {
+                    for at in 1..count {
+                        if moved(&self.shapes[at]) && !moved(&self.shapes[at - 1]) {
+                            self.shapes.swap(at, at - 1);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     fn map(&mut self, ids: &[ShapeId], change: impl Fn(&Shape) -> Shape) {
@@ -559,6 +631,92 @@ mod tests {
         });
         let order: Vec<_> = raised.shapes().map(|shape| shape.id.0).collect();
         assert_eq!(order, [3, 2, 1]);
+    }
+
+    #[test]
+    fn inserted_copies_get_new_ids_and_keep_the_rest() {
+        let doc = Document::new(100, 100, 1.0).apply(line(1.0));
+        let original = doc.shape(ShapeId(1)).unwrap().clone();
+        let turned = Shape {
+            rotation: 0.5,
+            style: Some(StyleId::Ink),
+            ..original.clone()
+        };
+        let copied = doc.apply(Op::Insert {
+            shapes: vec![turned.clone(), turned],
+        });
+        let ids: Vec<u64> = copied.shapes().map(|shape| shape.id.0).collect();
+        assert_eq!(ids, [1, 2, 3]);
+        let copy = copied.shape(ShapeId(3)).unwrap();
+        assert_eq!(copy.kind, original.kind);
+        assert!((copy.rotation - 0.5).abs() < f64::EPSILON);
+        assert_eq!(copy.style, Some(StyleId::Ink));
+        assert_eq!(copied.next_id(), ShapeId(4));
+    }
+
+    #[test]
+    fn a_batch_is_one_step() {
+        let mut history = History::new(Document::new(100, 100, 1.0).apply(line(1.0)));
+        history.apply(Op::Batch(vec![
+            line(2.0),
+            Op::Move {
+                ids: vec![ShapeId(1)],
+                by: Vec2::new(3.0, 0.0),
+            },
+        ]));
+        assert_eq!(history.current().shapes().len(), 2);
+        assert_eq!(
+            history
+                .current()
+                .shape(ShapeId(1))
+                .unwrap()
+                .kind
+                .bounds()
+                .x0,
+            4.0
+        );
+        history.undo();
+        assert_eq!(history.current().shapes().len(), 1);
+        assert!(!history.apply(Op::Batch(Vec::new())));
+    }
+
+    #[test]
+    fn within_finds_marks_wholly_inside() {
+        let doc = Document::new(100, 100, 1.0)
+            .apply(line(10.0))
+            .apply(line(50.0));
+        assert_eq!(doc.within(Rect::new(0.0, -1.0, 20.0, 20.0)), [ShapeId(1)]);
+        assert_eq!(
+            doc.within(Rect::new(60.0, 20.0, 0.0, -1.0)),
+            [ShapeId(1), ShapeId(2)]
+        );
+        assert!(
+            doc.within(Rect::new(0.0, 5.0, 60.0, 20.0)).is_empty(),
+            "lines cut in half"
+        );
+    }
+
+    #[test]
+    fn lowering_and_shifting_restack_marks() {
+        let doc = Document::new(10, 10, 1.0)
+            .apply(line(1.0))
+            .apply(line(2.0))
+            .apply(line(3.0))
+            .apply(line(4.0));
+        let order = |doc: &Document| doc.shapes().map(|shape| shape.id.0).collect::<Vec<_>>();
+        let lowered = doc.apply(Op::Lower {
+            ids: vec![ShapeId(4), ShapeId(2)],
+        });
+        assert_eq!(order(&lowered), [2, 4, 1, 3]);
+        let up = |ids: Vec<u64>, up| Op::Shift {
+            ids: ids.into_iter().map(ShapeId).collect(),
+            up,
+        };
+        assert_eq!(order(&doc.apply(up(vec![1, 2], true))), [3, 1, 2, 4]);
+        assert_eq!(order(&doc.apply(up(vec![4], true))), [1, 2, 3, 4]);
+        assert_eq!(order(&doc.apply(up(vec![3, 4], false))), [1, 3, 4, 2]);
+        assert_eq!(order(&doc.apply(up(vec![1], false))), [1, 2, 3, 4]);
+        assert_eq!(order(&doc.apply(up(vec![1, 3], true))), [2, 1, 4, 3]);
     }
 
     #[test]

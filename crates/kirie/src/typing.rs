@@ -103,13 +103,15 @@ pub fn double_click(last: &mut Option<mouse::Click>, at: iced::Point) -> bool {
     click.kind() == mouse::click::Kind::Double
 }
 
-/// The box the words are typed in.
+/// The box the words are typed in. Pasting sends `on_paste` when given, for a caller that reads
+/// the clipboard itself.
 pub fn text_box<'a, Message: Clone + 'a>(
     typing: &'a Typing,
     id: &'static str,
     palette: Palette,
     on_action: impl Fn(text_editor::Action) -> Message + 'a,
     on_done: Message,
+    on_paste: Option<Message>,
 ) -> Element<'a, Message> {
     iced::widget::text_editor(&typing.content)
         .id(id)
@@ -119,7 +121,10 @@ pub fn text_box<'a, Message: Clone + 'a>(
             if press.key == Key::Named(Named::Enter) && !press.modifiers.shift() {
                 return Some(Binding::Custom(on_done.clone()));
             }
-            Binding::from_key_press(press)
+            match (Binding::from_key_press(press), &on_paste) {
+                (Some(Binding::Paste), Some(on_paste)) => Some(Binding::Custom(on_paste.clone())),
+                (binding, _) => binding,
+            }
         })
         .width(300)
         .max_height(240)

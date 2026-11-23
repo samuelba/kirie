@@ -64,6 +64,10 @@ pub struct Painter<'a> {
     pub source: &'a dyn PixelSource,
     pub typesetter: &'a RefCell<Typesetter>,
     pub patches: &'a RefCell<HashMap<PatchKey, image::Handle>>,
+    /// Image marks' pixels as the renderer holds them, by [`Pixels::id`].
+    ///
+    /// [`Pixels::id`]: kirie_annotate::Pixels::id
+    pub pictures: &'a RefCell<HashMap<u64, image::Handle>>,
 }
 
 /// The marks to draw: the document's, changed by the draft in progress, and a new one.
@@ -72,9 +76,42 @@ pub struct Marks<'a> {
     pub draft: Option<&'a Draft>,
     /// A mark being drawn or typed: a new one, or one in place of the mark with its id.
     pub preview: Option<Shape>,
-    pub picked: Option<ShapeId>,
+    pub picked: &'a [ShapeId],
     /// The image area a spotlight dims around.
     pub visible: kurbo::Rect,
+    /// Only the marks of this layer, see [`layers`]; all of them if `None`.
+    pub layer: Option<usize>,
+}
+
+/// What one of the canvases stacked over a picture does. The input stays the lowest, so it
+/// keeps its state as layers come and go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Part {
+    /// Takes the pointer, and draws nothing.
+    Input,
+    /// Draws the marks of one layer, see [`layers`].
+    Marks(usize),
+    /// Draws what goes over every mark: outlines of the picked marks, a marquee, and the like.
+    Chrome,
+}
+
+impl Part {
+    /// The input, then each layer of `document`'s marks, then the chrome.
+    pub fn all(document: &Document) -> impl Iterator<Item = Part> {
+        std::iter::once(Part::Input)
+            .chain((0..layers(document)).map(Part::Marks))
+            .chain(std::iter::once(Part::Chrome))
+    }
+}
+
+/// How many canvases, one above the other, the marks of `document` take: a screen draws the
+/// pixels of a canvas over its paths, so each image or effect ends a layer, and the marks above
+/// it go on the next.
+pub fn layers(document: &Document) -> usize {
+    1 + document
+        .shapes()
+        .filter(|shape| shape.kind.is_raster())
+        .count()
 }
 
 /// Patches made for marks that are gone are dropped once there are this many.
@@ -131,6 +168,23 @@ impl Painter<'_> {
                 }
                 frame.fill(&path, color_of(*color));
             }
+            Primitive::Image { rect, pixels } => {
+                let handle = self.picture(pixels);
+                let mapped = transform.transform_rect_bbox(rect.abs());
+                #[allow(clippy::cast_possible_truncation)]
+                let local = Rectangle::new(
+                    Point::new(mapped.x0 as f32, mapped.y0 as f32),
+                    Size::new(mapped.width() as f32, mapped.height() as f32),
+                );
+                frame.draw_image(
+                    local,
+                    canvas::Image::new(handle).filter_method(if scale >= 2.0 {
+                        image::FilterMethod::Nearest
+                    } else {
+                        image::FilterMethod::Linear
+                    }),
+                );
+            }
             Primitive::Effect { rect, effect } => {
                 if let Some((handle, bounds)) = self.patch(*rect, *effect) {
                     let mapped = transform.transform_rect_bbox(bounds);
@@ -145,13 +199,8 @@ impl Painter<'_> {
         }
     }
 
-    /// Draws every mark; returns the picked one as it is shown, for its grips.
-    pub fn draw_marks(
-        &self,
-        frame: &mut Frame,
-        marks: Marks<'_>,
-        transform: Affine,
-    ) -> Option<Shape> {
+    /// Draws every mark; returns the picked ones as they are shown, for their outlines.
+    pub fn draw_marks(&self, frame: &mut Frame, marks: Marks<'_>, transform: Affine) -> Vec<Shape> {
         let document = marks.document;
         let moving = match marks.draft {
             Some(Draft::Moving { ids, by, .. }) => Some((ids.as_slice(), *by)),
@@ -183,9 +232,21 @@ impl Painter<'_> {
                 _ => shape,
             })
             .collect();
+        self.forget_pictures(&shapes);
         let stage = style::Stage::new(document, marks.visible, &shapes);
-        let mut picked = None;
+        let mut picked = Vec::new();
+        let mut layer = 0;
         for shape in shapes {
+            let shown = marks.layer.is_none_or(|only| only == layer);
+            if shape.kind.is_raster() {
+                layer += 1;
+            }
+            if marks.picked.contains(&shape.id) {
+                picked.push(shape.clone());
+            }
+            if !shown {
+                continue;
+            }
             let draft = shape.id == document.next_id();
             for primitive in style::primitives(&shape, document.style, document.unit, &stage) {
                 if draft {
@@ -193,9 +254,6 @@ impl Painter<'_> {
                 } else {
                     self.draw(frame, &primitive, transform);
                 }
-            }
-            if marks.picked == Some(shape.id) {
-                picked = Some(shape);
             }
         }
         picked
@@ -221,6 +279,36 @@ impl Painter<'_> {
                 .with_color(Color::WHITE.scale_alpha(0.8))
                 .with_width(1.0),
         );
+    }
+
+    /// Drops the handles on pictures none of `shapes` shows any more.
+    fn forget_pictures(&self, shapes: &[Shape]) {
+        let shown: std::collections::HashSet<u64> = shapes
+            .iter()
+            .filter_map(|shape| match &shape.kind {
+                kirie_annotate::Kind::Image { pixels, .. } => Some(pixels.id()),
+                _ => None,
+            })
+            .collect();
+        let mut pictures = self.pictures.borrow_mut();
+        if pictures.len() > shown.len() {
+            pictures.retain(|id, _| shown.contains(id));
+        }
+    }
+
+    /// The renderer's handle on `pixels`, made once.
+    fn picture(&self, pixels: &kirie_annotate::Pixels) -> image::Handle {
+        let mut pictures = self.pictures.borrow_mut();
+        if let Some(handle) = pictures.get(&pixels.id()) {
+            return handle.clone();
+        }
+        let handle = image::Handle::from_rgba(
+            pixels.width(),
+            pixels.height(),
+            pixels.image().as_raw().clone(),
+        );
+        pictures.insert(pixels.id(), handle.clone());
+        handle
     }
 
     /// The frozen pixels under `rect` with `effect` applied, and where they go.
@@ -280,21 +368,62 @@ impl Painter<'_> {
     }
 }
 
-/// The outline and grips of a picked mark that covers `bounds`; `pixel` is one screen pixel in
-/// mark coordinates.
-pub fn draw_grips(
+/// Outlines the picked marks, `shown` as they are drawn and measured in `document`; a lone pick
+/// shows its grips too. `pixel` is one screen pixel in mark coordinates.
+pub fn draw_picked(
     frame: &mut Frame,
-    shape: &Shape,
-    bounds: kurbo::Rect,
+    shown: &[Shape],
+    picked: &[ShapeId],
+    document: &Document,
     transform: Affine,
     pixel: f64,
     accent: Color,
 ) {
+    if let ([shape], [_]) = (shown, picked) {
+        draw_grips(
+            frame,
+            shape,
+            document.bounds(shape),
+            transform,
+            pixel,
+            accent,
+        );
+        return;
+    }
+    for shape in shown {
+        draw_outline(frame, shape, document.bounds(shape), transform, accent);
+    }
+}
+
+/// The box being dragged to pick the marks inside it.
+pub fn draw_marquee(frame: &mut Frame, rect: kurbo::Rect, transform: Affine, accent: Color) {
+    let rect = transform.transform_rect_bbox(rect);
     #[allow(clippy::cast_possible_truncation)]
-    let at = |point: kurbo::Point| {
+    let area = Path::rectangle(
+        Point::new(rect.x0 as f32, rect.y0 as f32),
+        Size::new(rect.width() as f32, rect.height() as f32),
+    );
+    frame.fill(&area, accent.scale_alpha(0.12));
+    frame.stroke(&area, Stroke::default().with_color(accent).with_width(1.0));
+}
+
+fn screen_point(transform: Affine) -> impl Fn(kurbo::Point) -> Point {
+    #[allow(clippy::cast_possible_truncation)]
+    move |point: kurbo::Point| {
         let point = transform * point;
         Point::new(point.x as f32, point.y as f32)
-    };
+    }
+}
+
+/// A dashed line around a picked mark that covers `bounds`, turned with it.
+fn draw_outline(
+    frame: &mut Frame,
+    shape: &Shape,
+    bounds: kurbo::Rect,
+    transform: Affine,
+    accent: Color,
+) {
+    let at = screen_point(transform);
     let turn = shape.turn();
     let corners = [
         kurbo::Point::new(bounds.x0, bounds.y0),
@@ -319,6 +448,21 @@ pub fn draw_grips(
             ..Stroke::default().with_color(accent).with_width(1.0)
         },
     );
+}
+
+/// The outline and grips of a picked mark that covers `bounds`; `pixel` is one screen pixel in
+/// mark coordinates.
+pub fn draw_grips(
+    frame: &mut Frame,
+    shape: &Shape,
+    bounds: kurbo::Rect,
+    transform: Affine,
+    pixel: f64,
+    accent: Color,
+) {
+    let at = screen_point(transform);
+    let turn = shape.turn();
+    draw_outline(frame, shape, bounds, transform, accent);
     for (grip, point) in edit::grips(shape, pixel) {
         let center = at(point);
         if grip == edit::Grip::Rotate {

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-kirie">
+    <comment>Kirie project</comment>
+    <sub-class-of type="application/zip"/>
+    <generic-icon name="image-x-generic"/>
+    <icon name="dev.samuelba.Kirie"/>
+    <glob pattern="*.kirie"/>
+    <!-- A zip whose first entry is manifest.ron, as Kirie writes it. -->
+    <magic priority="60">
+      <match type="string" value="PK\003\004" offset="0">
+        <match type="string" value="manifest.ron" offset="30"/>
+      </match>
+    </magic>
+  </mime-type>
+</mime-info>

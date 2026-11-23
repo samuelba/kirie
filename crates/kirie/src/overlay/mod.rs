@@ -32,6 +32,10 @@ pub const NAMESPACE: &str = "kirie-overlay";
 const HANDLE_REACH: f32 = 8.0;
 /// How close to a mark the select tool picks it, in logical pixels.
 const MARK_REACH: f64 = 6.0;
+/// How long the flash that tells the screen was taken takes to fade.
+const FLASH: std::time::Duration = std::time::Duration::from_millis(300);
+/// How bright the flash starts, as the opacity of white over the screens.
+const FLASH_START: f32 = 0.8;
 
 /// One frozen screen.
 #[derive(Debug)]
@@ -53,6 +57,8 @@ pub enum Pointer {
 pub enum Action {
     Copy,
     Save,
+    /// Closes the overlay and asks where to save, and as what.
+    SaveAs,
     /// Hands the selection and its marks to the editor.
     Edit,
 }
@@ -78,6 +84,10 @@ pub enum Message {
     Undo,
     Redo,
     Delete,
+    /// Copies the picked marks a step aside.
+    Duplicate,
+    /// Moves the picked marks up or down among the others.
+    Restack(crate::marks::Restack),
     Escape,
     Finish(Action),
     /// Enter: the action the overlay was opened for.
@@ -97,6 +107,36 @@ pub enum Message {
     ToolbarMoved(window::Id, Point),
     ToolbarDropped,
     Layer(LayerShellCustomActionWithId),
+    /// Time passes while the flash fades.
+    Flash(std::time::Instant),
+}
+
+/// The flash over the screens as the overlay opens, like a camera's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Flash {
+    /// When it started fading: at the first tick after the surfaces showed.
+    since: Option<std::time::Instant>,
+    /// The opacity of the white over the screens.
+    level: f32,
+}
+
+impl Flash {
+    fn new() -> Self {
+        Self {
+            since: None,
+            level: FLASH_START,
+        }
+    }
+
+    /// The flash at `now`, or `None` once it has faded.
+    fn at(self, now: std::time::Instant) -> Option<Self> {
+        let since = self.since.unwrap_or(now);
+        let done = now.saturating_duration_since(since).as_secs_f32() / FLASH.as_secs_f32();
+        (done < 1.0).then(|| Self {
+            since: Some(since),
+            level: FLASH_START * (1.0 - done).powi(2),
+        })
+    }
 }
 
 /// How the overlay's surfaces are made.
@@ -128,7 +168,13 @@ impl TryInto<LayerShellCustomActionWithId> for Message {
 pub enum Outcome {
     #[default]
     Canceled,
-    Saved(PathBuf),
+    /// The picture was saved here, and put on the clipboard too if `copied`.
+    Saved {
+        path: PathBuf,
+        copied: bool,
+    },
+    /// The picture and its marks, to save where the user picks once the overlay is gone.
+    SaveAs(Box<kirie_annotate::project::Project>),
     Copied,
     /// A project for the editor to open.
     Edit(PathBuf),
@@ -156,8 +202,8 @@ pub struct Overlay {
     draft: Option<Draft>,
     /// The tool the current pointer gesture draws with, if it draws at all.
     drawing: Option<Tool>,
-    /// The mark the select tool picked, whose grips are showing.
-    picked: Option<kirie_annotate::ShapeId>,
+    /// The marks the select tool picked; a lone one shows its grips.
+    picked: Vec<kirie_annotate::ShapeId>,
     /// A slider is being dragged; its moves undo as one step.
     sliding: bool,
     typing: Option<Typing>,
@@ -173,8 +219,11 @@ pub struct Overlay {
     /// What Enter does.
     primary: Action,
     host: Host,
+    /// The flash as the overlay opens, while it fades.
+    flash: Option<Flash>,
     typesetter: RefCell<Typesetter>,
     patches: RefCell<HashMap<crate::paint::PatchKey, image::Handle>>,
+    pictures: RefCell<HashMap<u64, image::Handle>>,
     outcome: Arc<Mutex<Outcome>>,
 }
 
@@ -206,6 +255,22 @@ fn whole(area: Rectangle) -> geometry::Rect {
     )
 }
 
+/// The frozen screens, ready to show.
+fn screens(frames: &[Frame]) -> Vec<Screen> {
+    frames
+        .iter()
+        .map(|frame| Screen {
+            handle: image::Handle::from_rgba(
+                frame.image.width(),
+                frame.image.height(),
+                frame.image.as_raw().clone(),
+            ),
+            area: area(frame.output.logical),
+            scale: frame.scale(),
+        })
+        .collect()
+}
+
 fn to_kurbo(point: Point) -> kurbo::Point {
     kurbo::Point::new(f64::from(point.x), f64::from(point.y))
 }
@@ -218,18 +283,7 @@ impl Overlay {
         host: Host,
         outcome: Arc<Mutex<Outcome>>,
     ) -> (Self, Task<Message>) {
-        let screens: Vec<Screen> = frames
-            .iter()
-            .map(|frame| Screen {
-                handle: image::Handle::from_rgba(
-                    frame.image.width(),
-                    frame.image.height(),
-                    frame.image.as_raw().clone(),
-                ),
-                area: area(frame.output.logical),
-                scale: frame.scale(),
-            })
-            .collect();
+        let screens = screens(&frames);
         let desktop = screens
             .iter()
             .map(|screen| screen.area)
@@ -299,7 +353,7 @@ impl Overlay {
             history: History::new(document),
             draft: None,
             drawing: None,
-            picked: None,
+            picked: Vec::new(),
             sliding: false,
             typing: None,
             toolbar_at: None,
@@ -309,8 +363,10 @@ impl Overlay {
             busy: false,
             primary,
             host,
+            flash: Some(Flash::new()),
             typesetter: RefCell::new(Typesetter::new()),
             patches: RefCell::new(HashMap::new()),
+            pictures: RefCell::new(HashMap::new()),
             outcome,
         };
         let overlay = if std::env::var_os("KIRIE_OVERLAY_DEMO").is_some() {
@@ -321,8 +377,16 @@ impl Overlay {
         (overlay, Task::batch(open))
     }
 
+    /// Whether the overlay is one window on one of several screens: without layer-shell a
+    /// window cannot pick its screen, so the others cannot be shown.
+    fn covers_one_of_many(&self) -> bool {
+        self.host == Host::Window && self.screens.len() > 1
+    }
+
     /// A selection with a few marks, for screenshots of the overlay and the smoke test.
     fn with_demo(mut self) -> Self {
+        // A screenshot of the overlay shows it as it stays, not as it opens.
+        self.flash = None;
         let Some(screen) = self.screens.first() else {
             return self;
         };
@@ -369,7 +433,7 @@ impl Overlay {
                 kind: first.kind,
                 rotation: -0.12,
             });
-            self.picked = Some(first.id);
+            self.picked = vec![first.id];
         }
         self
     }
@@ -405,7 +469,7 @@ impl Overlay {
             Message::PickTool(tool) => {
                 self.commit_text();
                 if tool != Some(Tool::Select) {
-                    self.picked = None;
+                    self.picked.clear();
                 }
                 self.tool = tool;
                 self.paint.color = crate::controls::tool_color(
@@ -447,10 +511,8 @@ impl Overlay {
                 self.travel(false);
                 Task::none()
             }
-            Message::Delete => {
-                if let Some(id) = self.picked.take() {
-                    self.history.apply(Op::Remove { ids: vec![id] });
-                }
+            Message::Delete | Message::Duplicate | Message::Restack(_) => {
+                self.edit_marks(&message);
                 Task::none()
             }
             Message::Escape => self.escape(),
@@ -477,6 +539,32 @@ impl Overlay {
                 Task::none()
             }
             Message::Layer(_) => Task::none(),
+            Message::Flash(now) => {
+                self.flash = self.flash.and_then(|flash| flash.at(now));
+                Task::none()
+            }
+        }
+    }
+
+    /// Deleting, duplicating and restacking the picked marks.
+    fn edit_marks(&mut self, message: &Message) {
+        match message {
+            Message::Delete if !self.picked.is_empty() => {
+                let ids = std::mem::take(&mut self.picked);
+                self.history.apply(Op::Remove { ids });
+            }
+            Message::Duplicate => {
+                if let Some((op, ids)) = crate::marks::duplicate(self.document(), &self.picked) {
+                    self.history.apply(op);
+                    self.picked = ids;
+                }
+            }
+            Message::Restack(to) => {
+                if let Some(op) = crate::marks::restack(self.document(), &self.picked, *to) {
+                    self.history.apply(op);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -619,6 +707,7 @@ impl Overlay {
         } else {
             self.history.redo();
         }
+        crate::marks::prune(self.history.current(), &mut self.picked);
         self.follow_style(before);
     }
 
@@ -640,14 +729,8 @@ impl Overlay {
     /// Like [`Self::repaint`]; a `gradual` change joins the step the slider drag began.
     fn repaint_gradually(&mut self, change: impl Fn(&mut Paint), gradual: bool) {
         change(&mut self.paint);
-        let Some(shape) = self.picked.and_then(|id| self.document().shape(id)) else {
+        let Some(op) = crate::marks::repaint(self.document(), &self.picked, change) else {
             return;
-        };
-        let mut paint = shape.paint;
-        change(&mut paint);
-        let op = Op::Repaint {
-            ids: vec![shape.id],
-            paint,
         };
         if gradual {
             self.history.apply_gradually(op, self.sliding);
@@ -657,30 +740,31 @@ impl Overlay {
         self.sliding = gradual;
     }
 
-    /// The paint the controls show: the picked mark's, else the one new marks get.
+    /// The paint the controls show: the first picked mark's, else the one new marks get.
     fn shown_paint(&self) -> Paint {
-        self.picked
-            .and_then(|id| self.document().shape(id))
-            .map_or(self.paint, |shape| shape.paint)
+        crate::marks::shown_paint(self.document(), &self.picked, self.paint)
     }
 
-    /// Whether the text controls apply: to text being typed, a picked text mark, or the next.
+    /// Whether the text controls apply: to text being typed, picked text marks, or the next.
     fn texting(&self) -> bool {
         self.tool == Some(Tool::Text)
             || self.typing.is_some()
-            || self
-                .picked
-                .and_then(|id| self.document().shape(id))
-                .is_some_and(|shape| matches!(shape.kind, Kind::Text { .. }))
+            || crate::marks::all(self.document(), &self.picked, |kind| {
+                matches!(kind, Kind::Text { .. })
+            })
     }
 
-    /// Whether the spotlight controls apply: to the spotlight tool or a picked spotlight.
+    /// Whether the spotlight controls apply: to the spotlight tool or picked spotlights.
     fn spotlighting(&self) -> bool {
         self.tool == Some(Tool::Spotlight)
-            || self
-                .picked
-                .and_then(|id| self.document().shape(id))
-                .is_some_and(|shape| matches!(shape.kind, Kind::Spotlight { .. }))
+            || crate::marks::all(self.document(), &self.picked, |kind| {
+                matches!(kind, Kind::Spotlight { .. })
+            })
+    }
+
+    /// Whether a press adds to the picked marks instead of picking anew.
+    fn extending(&self) -> bool {
+        self.modifiers.shift() || self.modifiers.command()
     }
 
     /// Shows the screen a fullscreen window landed on: the one with the window's size.
@@ -717,10 +801,14 @@ impl Overlay {
         if self.busy {
             return Task::none();
         }
+        if self.sampling() {
+            self.change_style(Message::Picker(picker::Event::Eyedropper));
+            return Task::none();
+        }
         if self.picker.take().is_some()
             || self.typing.take().is_some()
             || self.draft.take().is_some()
-            || self.picked.take().is_some()
+            || !std::mem::take(&mut self.picked).is_empty()
         {
             return Task::none();
         }
@@ -735,6 +823,12 @@ impl Overlay {
             Pointer::Pressed(at) | Pointer::Moved(at) | Pointer::Released(at) => at,
         };
         self.pointer = Some(at);
+        if self.sampling() {
+            if let Pointer::Pressed(at) = pointer {
+                self.sample(at);
+            }
+            return Task::none();
+        }
         // A gesture stays with what its press started, whatever happens on the way.
         if let Pointer::Pressed(at) = pointer {
             let inside = self.selection.hit(at, HANDLE_REACH) == Some(selection::Hit::Inside)
@@ -756,6 +850,35 @@ impl Overlay {
         task
     }
 
+    /// Whether the eyedropper waits for a click on the screens.
+    fn sampling(&self) -> bool {
+        self.picker.as_ref().is_some_and(Picker::sampling)
+    }
+
+    /// Hands the picker the frozen screens' color at `at`.
+    fn sample(&mut self, at: Point) {
+        let Some(capture) = self
+            .captures
+            .iter()
+            .find(|capture| area(capture.output.logical).contains(at))
+        else {
+            return;
+        };
+        let logical = capture.output.logical;
+        let scale = capture.scale();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let pixel = |at: f32, from: i32| ((f64::from(at) - f64::from(from)) * scale).floor() as u32;
+        let Some(&::image::Rgba([r, g, b, _])) = capture
+            .image
+            .get_pixel_checked(pixel(at.x, logical.x), pixel(at.y, logical.y))
+        else {
+            return;
+        };
+        self.change_style(Message::Picker(picker::Event::Sampled(
+            kirie_annotate::Rgba::rgb(r, g, b),
+        )));
+    }
+
     /// The topmost window under `at`.
     fn window_at(&self, at: Point) -> Option<Rectangle> {
         self.windows
@@ -764,15 +887,15 @@ impl Overlay {
             .map(|(area, _)| *area)
     }
 
-    /// Whether `at` is on a grip of the picked mark.
+    /// Whether `at` is on a grip of the lone picked mark.
     fn on_grip(&self, at: kurbo::Point) -> bool {
+        let [id] = self.picked[..] else {
+            return false;
+        };
         self.tool == Some(Tool::Select)
-            && self
-                .picked
-                .and_then(|id| self.document().shape(id))
-                .is_some_and(|shape| {
-                    kirie_annotate::edit::grip_at(shape, at, MARK_REACH, 1.0).is_some()
-                })
+            && self.document().shape(id).is_some_and(|shape| {
+                kirie_annotate::edit::grip_at(shape, at, MARK_REACH, 1.0).is_some()
+            })
     }
 
     fn select(&mut self, pointer: Pointer) {
@@ -816,19 +939,19 @@ impl Overlay {
                 if let Some(id) = words {
                     return self.edit_text(id);
                 }
+                let extend = self.extending();
                 let press = kirie_annotate::tools::press(
                     tool,
                     to_kurbo(at),
                     self.document(),
                     self.paint,
                     MARK_REACH,
-                    self.picked,
+                    &self.picked,
+                    extend,
                 );
                 match press {
                     Press::Draft(draft) => {
-                        if let Draft::Moving { ids, .. } = &draft {
-                            self.picked = ids.first().copied();
-                        }
+                        crate::marks::pressed(&draft, &mut self.picked);
                         self.draft = Some(draft);
                     }
                     Press::Done(op) => {
@@ -838,7 +961,8 @@ impl Overlay {
                         self.typing = Some(Typing::new(at));
                         return iced::widget::operation::focus(view::TEXT_INPUT);
                     }
-                    Press::Nothing => self.picked = None,
+                    Press::Toggle(id) => crate::marks::toggle(&mut self.picked, id),
+                    Press::Nothing => self.picked.clear(),
                 }
             }
             Pointer::Moved(at) => {
@@ -849,7 +973,10 @@ impl Overlay {
             Pointer::Released(at) => {
                 if let Some(draft) = self.draft.take() {
                     let draft = draft.drag(to_kurbo(at), self.modifiers.shift());
-                    if let Some(op) = draft.finish(self.paint) {
+                    let document = self.history.current();
+                    if let Some(op) =
+                        crate::marks::release(draft, document, &mut self.picked, self.paint)
+                    {
                         self.history.apply(op);
                     }
                 }
@@ -874,7 +1001,7 @@ impl Overlay {
             return Task::none();
         };
         self.typing = Some(typing);
-        self.picked = Some(id);
+        self.picked = vec![id];
         self.draft = None;
         iced::widget::operation::focus(view::TEXT_INPUT)
     }
@@ -920,18 +1047,25 @@ impl Overlay {
                 Err(error) => self.close(Outcome::Failed(error)),
             };
         }
+        // The file dialog would open under the overlay, so it waits for the overlay to close.
+        if action == Action::SaveAs {
+            return match self.project() {
+                Ok(project) => self.close(Outcome::SaveAs(Box::new(project))),
+                Err(error) => self.close(Outcome::Failed(error)),
+            };
+        }
         let picture = match self.picture() {
             Ok(picture) => picture,
             Err(error) => return self.close(Outcome::Failed(error)),
         };
         match action {
-            Action::Save => Task::perform(crate::save::save(picture), |saved| {
-                Message::Finished(saved.map(Outcome::Saved))
+            Action::Save => Task::perform(crate::save::save_and_copy(picture), |saved| {
+                Message::Finished(saved.map(|(path, copied)| Outcome::Saved { path, copied }))
             }),
             Action::Copy => Task::perform(crate::clipboard::copy(picture), |copied| {
                 Message::Finished(copied.map(|()| Outcome::Copied))
             }),
-            Action::Edit => Task::none(),
+            Action::Edit | Action::SaveAs => Task::none(),
         }
     }
 
@@ -960,9 +1094,15 @@ impl Overlay {
         } else {
             Subscription::none()
         };
+        let flash = if self.flash.is_some() {
+            iced::time::every(std::time::Duration::from_millis(16)).map(Message::Flash)
+        } else {
+            Subscription::none()
+        };
         Subscription::batch([
             keys,
             toolbar,
+            flash,
             window::resize_events().map(|(id, size)| Message::Resized(id, size)),
         ])
     }
@@ -1068,8 +1208,17 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
     }
     let step = if modifiers.shift() { 10.0 } else { 1.0 };
     let command = modifiers.command();
+    if command
+        && let keyboard::Key::Character(written) = key.as_ref()
+        && let Some(to) = crate::marks::restack_key(written)
+    {
+        return Some(Message::Restack(to));
+    }
     match key.as_ref() {
         keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
+        keyboard::Key::Named(Named::Enter) if modifiers.shift() || command => {
+            Some(Message::Finish(Action::Save))
+        }
         keyboard::Key::Named(Named::Enter) => Some(Message::Accept),
         keyboard::Key::Named(Named::Delete | Named::Backspace) => Some(Message::Delete),
         keyboard::Key::Named(Named::ArrowLeft) => Some(Message::Nudge(Vector::new(-step, 0.0))),
@@ -1080,9 +1229,13 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("z") if command => Some(Message::Undo),
         keyboard::Key::Character("y") if command => Some(Message::Redo),
         keyboard::Key::Character("a") if command => Some(Message::SelectAll),
+        keyboard::Key::Character("s") if command && modifiers.shift() => {
+            Some(Message::Finish(Action::SaveAs))
+        }
         keyboard::Key::Character("s") if command => Some(Message::Finish(Action::Save)),
         keyboard::Key::Character("c") if command => Some(Message::Finish(Action::Copy)),
         keyboard::Key::Character("e") if command => Some(Message::Finish(Action::Edit)),
+        keyboard::Key::Character("d") if command => Some(Message::Duplicate),
         keyboard::Key::Character(c) if !command => c
             .chars()
             .next()
@@ -1147,4 +1300,22 @@ pub fn run(
         .lock()
         .map(|outcome| outcome.clone())
         .unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_flash_fades_from_its_first_tick() {
+        let start = std::time::Instant::now();
+        let first = Flash::new().at(start + FLASH * 5).unwrap();
+        assert!(
+            (first.level - FLASH_START).abs() < 1e-6,
+            "a late first tick starts the fade"
+        );
+        let half = first.at(start + FLASH * 5 + FLASH / 2).unwrap();
+        assert!(half.level < first.level && half.level > 0.0);
+        assert!(first.at(start + FLASH * 6).is_none());
+    }
 }

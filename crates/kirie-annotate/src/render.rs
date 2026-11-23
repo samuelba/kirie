@@ -138,6 +138,10 @@ fn shifted(primitive: Primitive, by: Vec2) -> Primitive {
             rect: rect + by,
             effect,
         },
+        Primitive::Image { rect, pixels } => Primitive::Image {
+            rect: rect + by,
+            pixels,
+        },
     }
 }
 
@@ -216,7 +220,36 @@ pub fn draw(pixmap: &mut Pixmap, primitive: &Primitive, typesetter: &mut Typeset
                 }
             }
         }
+        Primitive::Image { rect, pixels } => picture(pixmap, *rect, pixels),
     }
+}
+
+/// Draws `pixels` stretched over `rect`.
+fn picture(pixmap: &mut Pixmap, rect: kurbo::Rect, pixels: &crate::pixels::Pixels) {
+    let Some(source) = to_pixmap(pixels.image()) else {
+        return;
+    };
+    let rect = rect.abs();
+    #[allow(clippy::cast_possible_truncation)]
+    let transform = Transform::from_row(
+        (rect.width() / f64::from(pixels.width())) as f32,
+        0.0,
+        0.0,
+        (rect.height() / f64::from(pixels.height())) as f32,
+        rect.x0 as f32,
+        rect.y0 as f32,
+    );
+    pixmap.draw_pixmap(
+        0,
+        0,
+        source.as_ref(),
+        &tiny_skia::PixmapPaint {
+            quality: tiny_skia::FilterQuality::Bilinear,
+            ..tiny_skia::PixmapPaint::default()
+        },
+        transform,
+        None,
+    );
 }
 
 fn paint(color: Rgba) -> Paint<'static> {
@@ -347,6 +380,25 @@ mod tests {
             kind,
             paint: MarkPaint::default(),
         })
+    }
+
+    #[test]
+    fn image_marks_are_drawn_stretched_over_their_box() {
+        let red = Pixel([255, 0, 0, 255]);
+        let pixels = crate::pixels::Pixels::new(RgbaImage::from_pixel(2, 2, red));
+        let document = Document::new(20, 10, 1.0).apply(Op::Add {
+            kind: crate::shape::Kind::Image {
+                rect: Rect::new(4.0, 2.0, 12.0, 8.0),
+                pixels,
+            },
+            paint: crate::shape::Paint::default(),
+        });
+        let base = RgbaImage::from_pixel(20, 10, Pixel([0, 0, 0, 255]));
+        let out = render(&document, &base, &mut Typesetter::new()).unwrap();
+        assert_eq!(*out.get_pixel(8, 5), red);
+        assert_eq!(*out.get_pixel(5, 3), red);
+        assert_eq!(*out.get_pixel(2, 5), Pixel([0, 0, 0, 255]));
+        assert_eq!(*out.get_pixel(14, 5), Pixel([0, 0, 0, 255]));
     }
 
     #[test]

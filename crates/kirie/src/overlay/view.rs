@@ -10,6 +10,7 @@ use kirie_ui::widget::{divider, floating, icon_button, primary_button, secondary
 
 use super::{Action, Message, Overlay, canvas};
 use crate::controls;
+use crate::paint::Part;
 use crate::picker::{self, Picker};
 
 pub const TEXT_INPUT: &str = "kirie-text";
@@ -31,20 +32,25 @@ impl Overlay {
             return Space::new().into();
         };
         let screen = &self.screens[index];
-        let mut layers = stack![
+        let picture = stack![
             image(screen.handle.clone())
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .content_fit(iced::ContentFit::Fill)
-                .filter_method(image::FilterMethod::Linear),
-            iced::widget::canvas(canvas::Surface {
-                overlay: self,
-                area: screen.area,
-                scale: screen.scale,
-            })
-            .width(Length::Fill)
-            .height(Length::Fill),
+                .filter_method(image::FilterMethod::Linear)
         ];
+        let mut layers = Part::all(self.document()).fold(picture, |layers, part| {
+            layers.push(
+                iced::widget::canvas(canvas::Surface {
+                    overlay: self,
+                    area: screen.area,
+                    scale: screen.scale,
+                    part,
+                })
+                .width(Length::Fill)
+                .height(Length::Fill),
+            )
+        });
         if let Some(typing) = &self.typing {
             // Under the words, so the box never hides what is typed.
             let words = self
@@ -61,6 +67,7 @@ impl Overlay {
                         self.palette,
                         Message::TextEdit,
                         Message::TextDone,
+                        None,
                     ))
                     .position(at),
                 );
@@ -71,6 +78,18 @@ impl Overlay {
         }
         if let Some(at) = self.toolbar_position(screen.area) {
             layers = layers.push(pin(self.toolbar()).position(at));
+        }
+        if let Some(flash) = self.flash {
+            let white = iced::Color::WHITE.scale_alpha(flash.level);
+            layers = layers.push(
+                container(Space::new())
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(move |_| container::Style {
+                        background: Some(iced::Background::Color(white)),
+                        ..container::Style::default()
+                    }),
+            );
         }
         layers.into()
     }
@@ -93,8 +112,20 @@ impl Overlay {
                 Message::SelectScreen(screen),
             ));
         }
+        let mut card = column![content].spacing(space::XS);
+        if self.covers_one_of_many() {
+            card = card.push(
+                text(
+                    "Only this screen shows here; Ctrl+A then Enter still takes every screen. \
+                     To pick on any screen, install Kirie's GNOME extension: \
+                     kirie gnome-extension install",
+                )
+                .size(12)
+                .color(self.palette.muted),
+            );
+        }
         container(
-            container(content)
+            container(card)
                 .padding([space::S, space::M])
                 .style(floating(self.palette)),
         )
@@ -232,13 +263,23 @@ impl Overlay {
     /// Edit, save, copy and cancel; the action Enter takes is the primary button.
     fn actions(&self) -> Element<'_, Message> {
         let palette = self.palette;
-        let save = icon_button(
-            Icon::Save,
-            "Save to Pictures (Ctrl+S)",
-            palette,
-            false,
-            Some(Message::Finish(Action::Save)),
-        );
+        let save = row![
+            icon_button(
+                Icon::SaveAs,
+                "Save as… (Ctrl+Shift+S)",
+                palette,
+                false,
+                Some(Message::Finish(Action::SaveAs)),
+            ),
+            icon_button(
+                Icon::Save,
+                "Save to Pictures and copy (Ctrl+S or Shift+Enter)",
+                palette,
+                false,
+                Some(Message::Finish(Action::Save)),
+            ),
+        ]
+        .spacing(space::XS);
         let edit = Message::Finish(Action::Edit);
         let copy = Message::Finish(Action::Copy);
         let actions = match self.primary {
@@ -247,7 +288,7 @@ impl Overlay {
                 icon_button(Icon::Copy, "Copy (Ctrl+C)", palette, false, Some(copy)),
                 primary_button(Icon::Edit, "Back to the editor", palette, edit),
             ],
-            Action::Copy | Action::Save => row![
+            Action::Copy | Action::Save | Action::SaveAs => row![
                 icon_button(
                     Icon::Edit,
                     "Open in the editor (Ctrl+E)",

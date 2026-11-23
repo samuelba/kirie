@@ -41,6 +41,22 @@ function spawnClient(launcher, argv) {
     return {client, subprocess: client.spawnv(global.display, argv)};
 }
 
+/** At most this many strips per monitor; more stop paying off. */
+const MAX_STRIPS = 8;
+/** Strip heights are multiples of this many logical pixels. */
+const STRIP_STEP = 8;
+
+/** Writes a PNG of `[x, y, width, height]` of the stage to `path`, readable only by this user. */
+async function shoot([x, y, width, height], path) {
+    const stream = Gio.File.new_for_path(path).replace(
+        null, false, Gio.FileCreateFlags.PRIVATE, null);
+    try {
+        await new Shell.Screenshot().screenshot_area(x, y, width, height, stream);
+    } finally {
+        stream.close(null);
+    }
+}
+
 /** The process id behind a D-Bus caller. */
 function callerPid(sender) {
     const reply = Gio.DBus.session.call_sync(
@@ -196,24 +212,42 @@ export default class KirieExtension extends Extension {
         });
     }
 
-    /** One PNG per monitor in the user's runtime folder, with where the monitor sits. */
+    /**
+     * PNGs of every monitor in the user's runtime folder, each with the area it shows. A monitor
+     * comes in horizontal strips, `shell-<monitor>-<strip>.png` from top to bottom: GNOME Shell
+     * encodes each picture on a worker thread, and compressing a busy screen as one PNG takes
+     * over a second where the strips take a fraction of it side by side. Every strip is started
+     * in the same turn, so all of them show the same frame.
+     */
     async _capture() {
         const dir = GLib.build_filenamev([GLib.get_user_runtime_dir(), 'kirie']);
         GLib.mkdir_with_parents(dir, 0o700);
         GLib.chmod(dir, 0o700);
-        const screens = [];
-        for (const monitor of Main.layoutManager.monitors) {
-            const path = GLib.build_filenamev([dir, `shell-${monitor.index}.png`]);
-            const file = Gio.File.new_for_path(path);
-            const stream = file.replace(null, false, Gio.FileCreateFlags.PRIVATE, null);
-            const shooter = new Shell.Screenshot();
-            await shooter.screenshot_area(
-                monitor.x, monitor.y, monitor.width, monitor.height, stream);
-            stream.close(null);
-            screens.push([monitor.index, monitor.x, monitor.y, monitor.width, monitor.height,
-                path]);
+        const monitors = Main.layoutManager.monitors;
+        const strips = Math.min(MAX_STRIPS,
+            Math.max(1, Math.ceil(GLib.get_num_processors() / monitors.length)));
+        const shots = [];
+        for (const monitor of monitors) {
+            // Strip edges on whole multiples of 8 logical pixels fall on whole device pixels
+            // under GNOME's fractional scales.
+            const height = Math.max(STRIP_STEP,
+                Math.ceil(monitor.height / strips / STRIP_STEP) * STRIP_STEP);
+            for (let strip = 0, top = 0; top < monitor.height; strip++, top += height) {
+                const area = [monitor.x, monitor.y + top, monitor.width,
+                    Math.min(height, monitor.height - top)];
+                const path = GLib.build_filenamev([dir, `shell-${monitor.index}-${strip}.png`]);
+                shots.push(shoot(area, path).then(() => [monitor.index, ...area, path]));
+            }
         }
-        return screens;
+        const results = await Promise.allSettled(shots);
+        const failed = results.find(result => result.status === 'rejected');
+        if (!failed)
+            return results.map(result => result.value);
+        for (const result of results) {
+            if (result.status === 'fulfilled')
+                GLib.unlink(result.value[5]);
+        }
+        throw failed.reason;
     }
 
     /** Puts an overlay window of a Kirie this extension started on its monitor, above all. */

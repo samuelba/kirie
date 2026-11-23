@@ -39,6 +39,7 @@ icons! {
     Redo => "redo-2",
     Copy => "copy",
     Save => "download",
+    SaveAs => "save",
     Edit => "square-pen",
     Close => "x",
     Done => "check",
@@ -63,6 +64,10 @@ icons! {
     Crop => "crop",
     Expand => "expand",
     Pin => "pin",
+    Pipette => "pipette",
+    BringToFront => "bring-to-front",
+    SendToBack => "send-to-back",
+    Settings => "settings",
 }
 
 impl Icon {

@@ -15,8 +15,8 @@
 # When minisign or rsign is installed, the download is checked against the release's signed
 # SHA256SUMS. Without either, it is checked against the unsigned SHA256SUMS-<arch>.
 #
-# Files: ~/.local/bin/kirie, the desktop entry, icons and metainfo under ~/.local/share, and the
-# GNOME Shell extension under ~/.local/share/gnome-shell/extensions.
+# Files: ~/.local/bin/kirie, the desktop entry, icons, metainfo and the .kirie file type under
+# ~/.local/share, and the GNOME Shell extension under ~/.local/share/gnome-shell/extensions.
 set -eu
 
 repo="https://github.com/samuelba/kirie"
@@ -182,6 +182,16 @@ refresh_icon_cache() {
     rm -f -- "$icon_dir/icon-theme.cache"
 }
 
+# Tells the desktop about the .kirie file type and which app opens it.
+refresh_file_types() {
+    if has update-mime-database && [ -d "$data_dir/mime/packages" ]; then
+        update-mime-database "$data_dir/mime" 2>/dev/null || true
+    fi
+    if has update-desktop-database; then
+        update-desktop-database -q "$data_dir/applications" 2>/dev/null || true
+    fi
+}
+
 do_uninstall() {
     [ -e "$binary" ] || [ -e "$marker" ] || die "Kirie is not installed in $bin_dir"
     if [ -d "$extension_dir" ]; then
@@ -192,11 +202,13 @@ do_uninstall() {
     fi
     rm -f -- "$binary" "$marker" \
         "$data_dir/applications/$app_id.desktop" \
-        "$data_dir/metainfo/$app_id.metainfo.xml"
+        "$data_dir/metainfo/$app_id.metainfo.xml" \
+        "$data_dir/mime/packages/$app_id.xml"
     for icon in $icon_files; do
         rm -f -- "$data_dir/icons/hicolor/$icon"
     done
     refresh_icon_cache
+    refresh_file_types
     rmdir -- "$data_dir/kirie" 2>/dev/null || true
     say "Removed Kirie. Your configuration in $config_dir/kirie stays."
 }
@@ -285,6 +297,16 @@ for icon in $icon_files; do
     cp "$src/packaging/icons/hicolor/$icon" "$data_dir/icons/hicolor/$icon"
 done
 refresh_icon_cache
+# Bundles from before the .kirie file type have no mime file.
+if [ -f "$src/packaging/$app_id.mime.xml" ]; then
+    mkdir -p "$data_dir/mime/packages"
+    cp "$src/packaging/$app_id.mime.xml" "$data_dir/mime/packages/$app_id.xml"
+fi
+refresh_file_types
+# Kirie opens its projects, unless the user picked another app for them.
+if has xdg-mime && [ -z "$(xdg-mime query default application/x-kirie 2>/dev/null)" ]; then
+    xdg-mime default "$app_id.desktop" application/x-kirie 2>/dev/null || true
+fi
 
 if [ "$want_extension" = 1 ]; then
     "$binary" gnome-extension install

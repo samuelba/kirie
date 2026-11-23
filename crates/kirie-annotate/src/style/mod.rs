@@ -176,7 +176,7 @@ pub fn reach(primitive: &Primitive) -> Option<Rect> {
             let halo = if halo.is_some() { size * 0.08 } else { 0.0 };
             Some(Rect::from_origin_size(origin, measured).inflate(halo, halo))
         }
-        Primitive::Effect { rect, .. } => Some(rect.abs()),
+        Primitive::Effect { rect, .. } | Primitive::Image { rect, .. } => Some(rect.abs()),
     }
 }
 
@@ -236,6 +236,10 @@ fn unturned(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Vec<Prim
             )]
         }
         Kind::Spotlight { .. } => Vec::new(),
+        Kind::Image { rect, pixels } => vec![Primitive::Image {
+            rect: rect.abs(),
+            pixels: pixels.clone(),
+        }],
         Kind::Text { at, text } => {
             let font = text_font(shape, style);
             vec![text_mark(
@@ -301,7 +305,7 @@ impl Context {
     }
 
     fn tint(&self) -> Rgba {
-        self.paint.color.with_alpha(0x40)
+        self.paint.color.faded(0x40)
     }
 
     fn counter_radius(&self) -> f64 {
@@ -338,7 +342,7 @@ fn marker(points: &[Point], context: &Context) -> Primitive {
                 end: 0.0,
             },
         ),
-        color: context.color().with_alpha(0x70),
+        color: context.color().faded(0x70),
         rule: FillRule::NonZero,
     }
 }
@@ -366,11 +370,12 @@ fn chaikin(points: &[Point], rounds: usize) -> Vec<Point> {
 fn halo_for(color: Rgba) -> Rgba {
     let luminance =
         0.2126 * f64::from(color.r) + 0.7152 * f64::from(color.g) + 0.0722 * f64::from(color.b);
-    if luminance > 150.0 {
-        Rgba::rgb(0x16, 0x18, 0x1d).with_alpha(0xd0)
+    let (shade, alpha) = if luminance > 150.0 {
+        (Rgba::rgb(0x16, 0x18, 0x1d), 0xd0)
     } else {
-        Rgba::rgb(0xff, 0xff, 0xff).with_alpha(0xe6)
-    }
+        (Rgba::rgb(0xff, 0xff, 0xff), 0xe6)
+    };
+    shade.with_alpha(color.faded(alpha).a)
 }
 
 /// Text that reads on `fill`.

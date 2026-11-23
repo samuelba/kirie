@@ -1,14 +1,20 @@
-//! Images dropped on the editor's window.
+//! Images dropped on the editor's window, and what is on the clipboard.
 //!
 //! winit, under iced, takes no drops on Wayland, so Kirie takes them itself: it joins the
 //! window's own Wayland connection with an event queue and a data device of its own, as
 //! smithay-clipboard does for the clipboard, and reads what is dropped as a list of files, or as
 //! PNG bytes when a source offers only those.
+//!
+//! GNOME sends drops, and the clipboard, to only the data device a client made last, and the
+//! clipboard iced keeps makes one too. So the editor [renews](Device::renew) its device each
+//! time its window loses the keyboard, before anything can be dragged onto it, and reads the
+//! clipboard through that device as well ([`Device::read`]).
 
 use std::collections::HashMap;
 use std::io::Read as _;
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use iced::futures::Stream;
 use iced::futures::channel::mpsc;
@@ -21,7 +27,14 @@ use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum, event_created_child};
 
 const URI_LIST: &str = "text/uri-list";
-const PNG: &str = "image/png";
+pub const PNG: &str = "image/png";
+/// Text types, best first.
+pub const TEXT: [&str; 4] = [
+    "text/plain;charset=utf-8",
+    "UTF8_STRING",
+    "text/plain",
+    "STRING",
+];
 /// Drops larger than this are not read.
 const MAX_BYTES: u64 = 512 * 1024 * 1024;
 /// A source quiet for this long has stopped sending.
@@ -29,8 +42,121 @@ const STALL_SECONDS: i64 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dropped {
+    /// The data device is ready; it is handed over once, before any drop.
+    Ready(Device),
     Files(Vec<PathBuf>),
     Png(Vec<u8>),
+}
+
+/// The editor's data device, shared with the thread that listens to it.
+#[derive(Clone)]
+pub struct Device {
+    shared: Arc<Mutex<Shared>>,
+}
+
+impl std::fmt::Debug for Device {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Device").finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for Device {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.shared, &other.shared)
+    }
+}
+
+impl Eq for Device {}
+
+struct Shared {
+    connection: Connection,
+    handle: QueueHandle<State>,
+    manager: Option<WlDataDeviceManager>,
+    seats: Vec<(WlSeat, Option<WlDataDevice>)>,
+    /// What is on the clipboard, with the types it is offered as.
+    selection: Option<(WlDataOffer, Vec<String>)>,
+}
+
+impl Shared {
+    /// Gives every seat a data device once there is a manager to make them.
+    fn attach(&mut self) {
+        let Some(manager) = &self.manager else {
+            return;
+        };
+        for (seat, device) in &mut self.seats {
+            if device.is_none() {
+                *device = Some(manager.get_data_device(seat, &self.handle, ()));
+            }
+        }
+    }
+
+    fn forget_selection(&mut self) {
+        if let Some((offer, _)) = self.selection.take() {
+            offer.destroy();
+        }
+    }
+}
+
+impl Device {
+    fn lock(&self) -> MutexGuard<'_, Shared> {
+        self.shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Makes the data devices anew, so that they are the client's newest: GNOME sends drops and
+    /// the clipboard to that one alone.
+    ///
+    /// The old devices are kept, not released: GNOME may already have sent one an offer, and
+    /// libwayland drops an event for a released object without the offer it makes, after which
+    /// the next object the compositor makes breaks the connection. Each stays as quiet as GNOME
+    /// leaves it, and handled as any other.
+    pub fn renew(&self) {
+        let mut shared = self.lock();
+        shared.forget_selection();
+        for (_, device) in &mut shared.seats {
+            *device = None;
+        }
+        shared.attach();
+        if let Err(error) = shared.connection.flush() {
+            tracing::debug!(%error, "cannot renew the data device");
+        }
+    }
+
+    /// The clipboard's content as the first of `kinds` it is offered as, with that kind; `None`
+    /// when this device does not see the clipboard or it holds none of them. Blocks until the
+    /// source has sent it all.
+    pub fn read(&self, kinds: &[&str]) -> Option<std::io::Result<(String, Vec<u8>)>> {
+        let (connection, offer, kind) = {
+            let shared = self.lock();
+            let (offer, types) = shared.selection.as_ref()?;
+            let kind = kinds
+                .iter()
+                .find(|kind| types.iter().any(|offered| offered == *kind))?;
+            (shared.connection.clone(), offer.clone(), (*kind).to_owned())
+        };
+        Some(receive(&connection, &offer, &kind).map(|bytes| (kind, bytes)))
+    }
+}
+
+/// What is on the clipboard as the first of `kinds` it is offered as, read through `device`;
+/// `None` when the device does not see the clipboard or it holds none of them.
+pub async fn clipboard(device: Option<Device>, kinds: &'static [&'static str]) -> Option<Vec<u8>> {
+    clipboard_kind(device, kinds).await.map(|(_, bytes)| bytes)
+}
+
+/// Like [`clipboard`], with the kind it was read as.
+pub async fn clipboard_kind(
+    device: Option<Device>,
+    kinds: &'static [&'static str],
+) -> Option<(String, Vec<u8>)> {
+    let device = device?;
+    let read = tokio::task::spawn_blocking(move || device.read(kinds))
+        .await
+        .ok()??;
+    read.inspect_err(|error| tracing::debug!(%error, "cannot read the clipboard"))
+        .ok()
+        .filter(|(_, bytes)| !bytes.is_empty())
 }
 
 /// The Wayland display of `window`, as an address so it can cross to another thread.
@@ -42,7 +168,8 @@ pub fn display(window: &dyn iced::window::Window) -> Option<usize> {
     }
 }
 
-/// What is dropped on the windows of `display`, for as long as the stream is kept.
+/// What is dropped on the windows of `display`, for as long as the stream is kept, after the
+/// [`Device`] that takes it.
 pub fn drops(display: usize) -> impl Stream<Item = Dropped> {
     let (sender, receiver) = mpsc::unbounded();
     let spawned = std::thread::Builder::new()
@@ -74,20 +201,29 @@ fn listen(display: usize, sender: mpsc::UnboundedSender<Dropped>) -> Result<(), 
     let mut queue = connection.new_event_queue();
     let handle = queue.handle();
     connection.display().get_registry(&handle, ());
+    let device = Device {
+        shared: Arc::new(Mutex::new(Shared {
+            connection: connection.clone(),
+            handle,
+            manager: None,
+            seats: Vec::new(),
+            selection: None,
+        })),
+    };
     let mut state = State {
-        connection: connection.clone(),
+        connection,
         sender,
-        manager: None,
-        seats: Vec::new(),
+        device: device.clone(),
         offers: HashMap::new(),
         dragged: None,
     };
     queue
         .roundtrip(&mut state)
         .map_err(|error| error.to_string())?;
-    if state.manager.is_none() {
+    if device.lock().manager.is_none() {
         return Err("the compositor has no drag and drop".to_owned());
     }
+    let _ = state.sender.unbounded_send(Dropped::Ready(device));
     while !state.sender.is_closed() {
         queue
             .blocking_dispatch(&mut state)
@@ -99,8 +235,7 @@ fn listen(display: usize, sender: mpsc::UnboundedSender<Dropped>) -> Result<(), 
 struct State {
     connection: Connection,
     sender: mpsc::UnboundedSender<Dropped>,
-    manager: Option<WlDataDeviceManager>,
-    seats: Vec<(WlSeat, Option<WlDataDevice>)>,
+    device: Device,
     offers: HashMap<ObjectId, Offer>,
     /// The offer of the drag over the window.
     dragged: Option<WlDataOffer>,
@@ -114,18 +249,6 @@ struct Offer {
 }
 
 impl State {
-    /// Gives every seat a data device once there is a manager to make them.
-    fn attach(&mut self, handle: &QueueHandle<Self>) {
-        let Some(manager) = &self.manager else {
-            return;
-        };
-        for (seat, device) in &mut self.seats {
-            if device.is_none() {
-                *device = Some(manager.get_data_device(seat, handle, ()));
-            }
-        }
-    }
-
     fn forget(&mut self, offer: &WlDataOffer) {
         self.offers.remove(&offer.id());
         offer.destroy();
@@ -250,14 +373,17 @@ impl Dispatch<WlRegistry, ()> for State {
         else {
             return;
         };
+        let mut shared = state.device.lock();
         match interface.as_str() {
             "wl_data_device_manager" => {
-                state.manager = Some(registry.bind(name, version.min(3), handle, ()));
+                shared.manager = Some(registry.bind(name, version.min(3), handle, ()));
             }
-            "wl_seat" => state.seats.push((registry.bind(name, 1, handle, ()), None)),
+            "wl_seat" => shared
+                .seats
+                .push((registry.bind(name, 1, handle, ()), None)),
             _ => return,
         }
-        state.attach(handle);
+        shared.attach();
     }
 }
 
@@ -323,7 +449,16 @@ impl Dispatch<WlDataDevice, ()> for State {
                     state.take(&offer);
                 }
             }
-            wl_data_device::Event::Selection { id: Some(offer) } => state.forget(&offer),
+            wl_data_device::Event::Selection { id } => {
+                let types = id
+                    .as_ref()
+                    .and_then(|offer| state.offers.remove(&offer.id()))
+                    .unwrap_or_default()
+                    .types;
+                let mut shared = state.device.lock();
+                shared.forget_selection();
+                shared.selection = id.map(|offer| (offer, types));
+            }
             _ => {}
         }
     }

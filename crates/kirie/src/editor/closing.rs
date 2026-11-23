@@ -18,6 +18,18 @@ pub enum Answer {
     Cancel,
 }
 
+/// What comes once the question about unsaved changes is answered, or the changes are saved.
+#[derive(Debug, Clone, Default)]
+pub enum Then {
+    /// Close the editor.
+    #[default]
+    Exit,
+    /// Open this image in place of the one in the editor.
+    Open(Box<Loaded>),
+    /// Put the image away and show the empty editor.
+    Clear,
+}
+
 /// Where closing the editor stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Closing {
@@ -40,13 +52,45 @@ impl Editor {
         if self.closing == Closing::Saving {
             return Task::none();
         }
-        self.then_open = None;
+        self.then = Then::Exit;
         self.commit_text();
         if self.unsaved() {
             self.closing = Closing::Asking;
             Task::none()
         } else {
             iced::exit()
+        }
+    }
+
+    /// Puts the image away, asking first about unsaved changes.
+    pub(super) fn discard(&mut self) -> Task<Message> {
+        self.commit_text();
+        if self.closing != Closing::No || self.image.is_none() {
+            return Task::none();
+        }
+        if self.unsaved() {
+            self.then = Then::Clear;
+            self.closing = Closing::Asking;
+            Task::none()
+        } else {
+            self.clear();
+            Task::none()
+        }
+    }
+
+    /// Goes on with what was put off for the question about unsaved changes.
+    pub(super) fn carry_on(&mut self) -> Task<Message> {
+        self.closing = Closing::No;
+        match std::mem::take(&mut self.then) {
+            Then::Exit => iced::exit(),
+            Then::Open(next) => {
+                self.open(*next);
+                Task::none()
+            }
+            Then::Clear => {
+                self.clear();
+                Task::none()
+            }
         }
     }
 
@@ -57,7 +101,7 @@ impl Editor {
             return Task::none();
         }
         if self.unsaved() {
-            self.then_open = Some(Box::new(loaded));
+            self.then = Then::Open(Box::new(loaded));
             self.closing = Closing::Asking;
         } else {
             self.open(loaded);
@@ -69,16 +113,10 @@ impl Editor {
         match answer {
             Answer::Cancel => {
                 self.closing = Closing::No;
-                self.then_open = None;
+                self.then = Then::Exit;
                 Task::none()
             }
-            Answer::Discard => match self.then_open.take() {
-                Some(next) => {
-                    self.open(*next);
-                    Task::none()
-                }
-                None => iced::exit(),
-            },
+            Answer::Discard => self.carry_on(),
             Answer::SaveImage | Answer::SaveProject => {
                 self.closing = Closing::Saving;
                 self.export(if answer == Answer::SaveImage {
@@ -114,10 +152,10 @@ impl Editor {
         };
         let card = container(
             column![
-                text(if self.then_open.is_some() {
-                    "Save your changes before opening the other image?"
-                } else {
-                    "Save your changes?"
+                text(match self.then {
+                    Then::Open(_) => "Save your changes before opening the other image?",
+                    Then::Clear => "Save your changes before discarding the image?",
+                    Then::Exit => "Save your changes?",
                 })
                 .size(18),
                 text(
@@ -181,6 +219,7 @@ mod tests {
         assert!(editor.unsaved());
         let _ = editor.update(Message::Exported(
             "Saved".into(),
+            None,
             Box::new(editor.document().clone()),
         ));
         assert!(!editor.unsaved());
@@ -240,6 +279,47 @@ mod tests {
             None,
         ))));
         assert_eq!(editor.document().width, 5, "no changes, no question");
+    }
+
+    #[test]
+    fn discarding_an_untouched_image_empties_the_editor_at_once() {
+        let mut editor = editor();
+        let _ = editor.update(Message::Discard);
+        assert!(editor.image.is_none());
+        assert_eq!(editor.closing, Closing::No);
+        assert!(!editor.unsaved());
+    }
+
+    #[test]
+    fn discarding_changes_asks_first() {
+        let runtime = runtime();
+        let _inside = runtime.enter();
+        let mut editor = editor();
+        mark(&mut editor);
+        let _ = editor.update(Message::Discard);
+        assert_eq!(editor.closing, Closing::Asking);
+        assert!(editor.image.is_some(), "nothing discarded yet");
+        let _ = editor.update(Message::Close(Answer::Cancel));
+        assert!(editor.image.is_some());
+        let _ = editor.update(Message::Discard);
+        let _ = editor.update(Message::Close(Answer::Discard));
+        assert!(editor.image.is_none());
+        assert_eq!(editor.closing, Closing::No);
+        assert_eq!(editor.document().shapes().len(), 0);
+    }
+
+    #[test]
+    fn discarding_after_saving_empties_the_editor() {
+        let runtime = runtime();
+        let _inside = runtime.enter();
+        let mut editor = editor();
+        mark(&mut editor);
+        let _ = editor.update(Message::Discard);
+        editor.closing = Closing::Saving;
+        let saved = Box::new(editor.document().clone());
+        let _ = editor.update(Message::Exported("Saved".into(), None, saved));
+        assert!(editor.image.is_none());
+        assert_eq!(editor.closing, Closing::No);
     }
 
     #[test]

@@ -324,10 +324,12 @@ pub fn value_slider<'a, Message: Clone + 'a>(
         .into()
 }
 
-/// A small drop-down list of `options`, showing `selected`, for a status bar.
+/// A small drop-down list of `options`, showing `selected`, for a status bar. It is as wide as
+/// its widest option or `room_for`, the widest label `selected` may show that is not an option.
 pub fn small_pick_list<'a, T, Message>(
     options: Vec<T>,
     selected: T,
+    room_for: &'a str,
     palette: Palette,
     on_select: impl Fn(T) -> Message + 'a,
 ) -> Element<'a, Message>
@@ -335,7 +337,9 @@ where
     T: ToString + PartialEq + Clone + 'a,
     Message: Clone + 'a,
 {
+    // The list makes room for its placeholder, which never shows while something is selected.
     pick_list(options, Some(selected), on_select)
+        .placeholder(room_for)
         .text_size(12)
         .padding([2.0, space::S])
         .style(move |_, status| pick_list::Style {
@@ -379,7 +383,8 @@ pub fn divider<'a, Message: 'a>(palette: Palette) -> Element<'a, Message> {
         .into()
 }
 
-fn hint<'a, Message: 'a>(
+/// Shows `label` above `content` while the pointer rests on it.
+pub fn hint<'a, Message: 'a>(
     content: Element<'a, Message>,
     label: &'a str,
     palette: Palette,

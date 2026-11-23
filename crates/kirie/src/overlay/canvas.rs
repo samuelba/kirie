@@ -9,7 +9,8 @@ use kirie_ui::{radius, space};
 use kirie_annotate::{Shape, Tool};
 
 use super::{HANDLE_REACH, MARK_REACH, Message, Overlay, Pointer, to_kurbo};
-use crate::paint::{Captures, Marks, Painter, draw_grips};
+use crate::loupe::{self, Lens};
+use crate::paint::{Captures, Marks, Painter, Part, draw_marquee, draw_picked};
 use crate::selection::Handle;
 
 const HANDLE_RADIUS: f32 = 4.5;
@@ -21,6 +22,7 @@ pub(super) struct Surface<'a> {
     pub area: Rectangle,
     /// Physical pixels per logical pixel on this screen.
     pub scale: f64,
+    pub part: Part,
 }
 
 impl Surface<'_> {
@@ -47,6 +49,9 @@ impl canvas::Program<Message> for Surface<'_> {
         _bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<Action<Message>> {
+        if self.part != Part::Input {
+            return None;
+        }
         // While a button is held the compositor keeps sending the pointer here, even beyond the
         // screen's edge, so a drag can cross onto the next screen.
         let at = self.to_desktop(cursor.position()?);
@@ -71,7 +76,14 @@ impl canvas::Program<Message> for Surface<'_> {
     ) -> Vec<Geometry> {
         let palette = self.overlay.palette;
         let mut frame = Frame::new(renderer, bounds.size());
-        self.draw_marks(&mut frame);
+        match self.part {
+            Part::Input => return vec![frame.into_geometry()],
+            Part::Marks(layer) => {
+                self.draw_marks(&mut frame, Some(layer));
+                return vec![frame.into_geometry()];
+            }
+            Part::Chrome => self.draw_marks(&mut frame, None),
+        }
         let selection = self
             .overlay
             .selection
@@ -98,6 +110,11 @@ impl canvas::Program<Message> for Surface<'_> {
             draw_crosshair(&mut frame, at, bounds.size());
             self.draw_window_under(&mut frame, self.to_desktop(at));
         }
+        if let Some(at) = cursor.position_in(bounds)
+            && self.magnifying()
+        {
+            self.draw_loupe(&mut frame, at, bounds.size());
+        }
         vec![frame.into_geometry()]
     }
 
@@ -107,17 +124,20 @@ impl canvas::Program<Message> for Surface<'_> {
         _bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Interaction {
+        if self.part != Part::Input {
+            return Interaction::default();
+        }
         let Some(at) = cursor.position().map(|at| self.to_desktop(at)) else {
             return Interaction::default();
         };
-        if self.overlay.selection.dragging() {
+        if self.overlay.selection.dragging() || self.overlay.sampling() {
             return Interaction::Crosshair;
         }
         match self.overlay.tool {
             Some(Tool::Select) => {
                 return crate::cursor::select(
                     self.overlay.document(),
-                    self.overlay.picked,
+                    &self.overlay.picked,
                     self.overlay.draft.as_ref(),
                     to_kurbo(at),
                     MARK_REACH,
@@ -132,8 +152,9 @@ impl canvas::Program<Message> for Surface<'_> {
 }
 
 impl Surface<'_> {
-    /// The marks, and the one being drawn, under the scrim so it dims those outside.
-    fn draw_marks(&self, frame: &mut Frame) {
+    /// The marks of `layer`, and the one being drawn, under the scrim so it dims those
+    /// outside; with no layer, the picked marks' outlines and a marquee instead.
+    fn draw_marks(&self, frame: &mut Frame, layer: Option<usize>) {
         let overlay = self.overlay;
         let document = overlay.document();
         let visible = overlay.selection.rect().map_or(kurbo::Rect::ZERO, |rect| {
@@ -149,6 +170,7 @@ impl Surface<'_> {
             source: &source,
             typesetter: &overlay.typesetter,
             patches: &overlay.patches,
+            pictures: &overlay.pictures,
         };
         let transform =
             kurbo::Affine::translate((-f64::from(self.area.x), -f64::from(self.area.y)));
@@ -175,22 +197,70 @@ impl Surface<'_> {
                 document,
                 draft: overlay.draft.as_ref(),
                 preview,
-                picked: overlay.picked,
+                picked: &overlay.picked,
                 visible,
+                layer: Some(layer.unwrap_or(usize::MAX)),
             },
             transform,
         );
-        if let Some(picked) = picked {
-            let bounds = document.bounds(&picked);
-            draw_grips(
-                frame,
-                &picked,
-                bounds,
-                transform,
-                1.0,
-                overlay.palette.accent,
-            );
+        if layer.is_some() {
+            return;
         }
+        let accent = overlay.palette.accent;
+        draw_picked(
+            frame,
+            &picked,
+            &overlay.picked,
+            document,
+            transform,
+            1.0,
+            accent,
+        );
+        if let Some(rect) = overlay
+            .draft
+            .as_ref()
+            .and_then(kirie_annotate::Draft::marquee)
+        {
+            draw_marquee(frame, rect, transform, accent);
+        }
+    }
+
+    /// Whether the loupe shows: while a region is picked, not while marks are drawn, and while
+    /// the eyedropper waits for a click.
+    fn magnifying(&self) -> bool {
+        let overlay = self.overlay;
+        overlay.sampling()
+            || overlay.tool.is_none()
+                && overlay.toolbar_drag.is_none()
+                && (overlay.selection.rect().is_none() || overlay.selection.dragging())
+    }
+
+    /// The frozen pixels around the pointer at `at`, magnified, with its place and color.
+    fn draw_loupe(&self, frame: &mut Frame, at: Point, size: Size) {
+        let desktop = self.to_desktop(at);
+        let Some(capture) = self
+            .overlay
+            .captures
+            .iter()
+            .find(|capture| super::area(capture.output.logical).contains(desktop))
+        else {
+            return;
+        };
+        let logical = capture.output.logical;
+        let scale = capture.scale();
+        #[allow(clippy::cast_possible_truncation)]
+        let pixel = |at: f32, from: i32| ((f64::from(at) - f64::from(from)) * scale).floor() as i64;
+        let lens = Lens::sample(
+            &capture.image,
+            pixel(desktop.x, logical.x),
+            pixel(desktop.y, logical.y),
+        );
+        #[allow(clippy::cast_possible_truncation)]
+        let mut label = format!("{}, {}", desktop.x.floor() as i64, desktop.y.floor() as i64);
+        if let Some(color) = lens.center() {
+            label = format!("{label}   {}", loupe::hex(color));
+        }
+        loupe::draw(frame, &lens, &label, at, size, self.overlay.palette);
     }
 
     fn draw_selection(&self, frame: &mut Frame, rect: Rectangle) {

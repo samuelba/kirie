@@ -10,11 +10,16 @@ use zbus::{connection, fdo, interface, proxy};
 pub const BUS_NAME: &str = "dev.samuelba.Kirie";
 pub const OBJECT_PATH: &str = "/dev/samuelba/Kirie";
 
-/// What another Kirie asks the running editor to do.
+/// What another Kirie asks the running editor to do. The token, from whatever the user clicked,
+/// lets the editor's window come to the front.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
-    Open(PathBuf),
-    Present,
+    Open(PathBuf, Option<String>),
+    Present(Option<String>),
+    /// Brings the editor window to the front with the about card open.
+    About(Option<String>),
+    /// Brings the editor window to the front with the settings open.
+    Settings(Option<String>),
     /// A capture the editor hid for has ended without handing it anything.
     Resume,
 }
@@ -34,18 +39,29 @@ impl Service {
 
 #[interface(name = "dev.samuelba.Kirie")]
 impl Service {
-    /// Opens an image or a `.kirie` project; the path must be absolute.
-    fn open(&self, path: &str) -> fdo::Result<()> {
+    /// Opens an image or a `.kirie` project; the path must be absolute. `token` is an XDG
+    /// activation token, or empty.
+    fn open(&self, path: &str, token: &str) -> fdo::Result<()> {
         let path = PathBuf::from(path);
         if !path.is_absolute() {
             return Err(fdo::Error::InvalidArgs("the path must be absolute".into()));
         }
-        self.send(Request::Open(path))
+        self.send(Request::Open(path, token_of(token)))
     }
 
     /// Brings the editor window to the front.
-    fn present(&self) -> fdo::Result<()> {
-        self.send(Request::Present)
+    fn present(&self, token: &str) -> fdo::Result<()> {
+        self.send(Request::Present(token_of(token)))
+    }
+
+    /// Brings the editor window to the front with the about card open.
+    fn about(&self, token: &str) -> fdo::Result<()> {
+        self.send(Request::About(token_of(token)))
+    }
+
+    /// Brings the editor window to the front with the settings open.
+    fn settings(&self, token: &str) -> fdo::Result<()> {
+        self.send(Request::Settings(token_of(token)))
     }
 
     /// Shows the editor window again if it hid for a capture.
@@ -60,14 +76,21 @@ impl Service {
     default_path = "/dev/samuelba/Kirie"
 )]
 trait Kirie {
-    fn open(&self, path: &str) -> zbus::Result<()>;
-    fn present(&self) -> zbus::Result<()>;
+    fn open(&self, path: &str, token: &str) -> zbus::Result<()>;
+    fn present(&self, token: &str) -> zbus::Result<()>;
+    fn about(&self, token: &str) -> zbus::Result<()>;
+    fn settings(&self, token: &str) -> zbus::Result<()>;
     fn resume(&self) -> zbus::Result<()>;
 }
 
-/// Hands `path` (or nothing, to just raise the window) to a running editor. True when one took
-/// it.
-pub async fn hand_over(path: Option<&Path>) -> bool {
+fn token_of(token: &str) -> Option<String> {
+    (!token.is_empty()).then(|| token.to_owned())
+}
+
+/// Hands `path` (or nothing, to just raise the window) to a running editor, with the activation
+/// `token` this Kirie was started with. True when one took it.
+pub async fn hand_over(path: Option<&Path>, token: Option<&str>) -> bool {
+    let token = token.unwrap_or_default();
     let attempt = async {
         let connection = zbus::Connection::session().await?;
         let dbus = fdo::DBusProxy::new(&connection).await?;
@@ -76,14 +99,37 @@ pub async fn hand_over(path: Option<&Path>) -> bool {
         }
         let editor = KirieProxy::new(&connection).await?;
         match path {
-            Some(path) => editor.open(&path.to_string_lossy()).await?,
-            None => editor.present().await?,
+            Some(path) => editor.open(&path.to_string_lossy(), token).await?,
+            None => editor.present(token).await?,
         }
         Ok(true)
     };
     attempt
         .await
         .inspect_err(|error| tracing::debug!(%error, "no editor to hand over to"))
+        .unwrap_or(false)
+}
+
+/// Opens `card` in a running editor, with the activation `token` this Kirie was started with.
+/// True when one did.
+pub async fn show(card: crate::editor::Card, token: Option<&str>) -> bool {
+    let token = token.unwrap_or_default();
+    let attempt = async {
+        let connection = zbus::Connection::session().await?;
+        let dbus = fdo::DBusProxy::new(&connection).await?;
+        if !dbus.name_has_owner(BUS_NAME.try_into()?).await? {
+            return Ok::<_, zbus::Error>(false);
+        }
+        let editor = KirieProxy::new(&connection).await?;
+        match card {
+            crate::editor::Card::About => editor.about(token).await?,
+            crate::editor::Card::Settings => editor.settings(token).await?,
+        }
+        Ok(true)
+    };
+    attempt
+        .await
+        .inspect_err(|error| tracing::debug!(%error, "no editor to show the card"))
         .unwrap_or(false)
 }
 
@@ -132,15 +178,22 @@ mod tests {
     fn relative_paths_are_refused() {
         let (sender, mut receiver) = unbounded();
         let service = Service { requests: sender };
-        assert!(service.open("relative.png").is_err());
-        assert!(service.open("/abs/shot.png").is_ok());
-        assert!(service.present().is_ok());
+        assert!(service.open("relative.png", "").is_err());
+        assert!(service.open("/abs/shot.png", "").is_ok());
+        assert!(service.present("token").is_ok());
+        assert!(service.about("").is_ok());
+        assert!(service.settings("").is_ok());
         assert!(service.resume().is_ok());
         assert_eq!(
             receiver.try_recv().ok(),
-            Some(Request::Open(PathBuf::from("/abs/shot.png")))
+            Some(Request::Open(PathBuf::from("/abs/shot.png"), None))
         );
-        assert_eq!(receiver.try_recv().ok(), Some(Request::Present));
+        assert_eq!(
+            receiver.try_recv().ok(),
+            Some(Request::Present(Some("token".to_owned())))
+        );
+        assert_eq!(receiver.try_recv().ok(), Some(Request::About(None)));
+        assert_eq!(receiver.try_recv().ok(), Some(Request::Settings(None)));
         assert_eq!(receiver.try_recv().ok(), Some(Request::Resume));
     }
 }

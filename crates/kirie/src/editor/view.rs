@@ -1,11 +1,11 @@
 //! The editor window: a header bar, the tool rail, the canvas and the inspector.
 
-use iced::widget::{Space, column, container, row, rule, scrollable, stack, svg, text};
+use iced::widget::{Space, button, column, container, row, rule, scrollable, stack, svg, text};
 use iced::{Alignment, Background, Border, Element, Length, Padding};
 use kirie_annotate::{StyleId, Tool};
 use kirie_ui::icon::Icon;
 use kirie_ui::widget::{
-    divider, floating, icon_button, primary_button, secondary_button, small_icon_button,
+    divider, floating, hint, icon_button, primary_button, secondary_button, small_icon_button,
     small_pick_list,
 };
 use kirie_ui::{Palette, Scheme, space};
@@ -14,10 +14,12 @@ use super::canvas::{Backdrop, Board};
 use super::viewport::Zoom;
 use super::{Editor, Message};
 use crate::controls;
+use crate::marks::Restack;
+use crate::paint::Part;
 use crate::picker::{self, Picker};
 
 pub const TEXT_INPUT: &str = "kirie-editor-text";
-const APP_ICON: &[u8] =
+pub const APP_ICON: &[u8] =
     include_bytes!("../../../../packaging/icons/hicolor/scalable/apps/dev.samuelba.Kirie.svg");
 const INSPECTOR: f32 = 248.0;
 
@@ -37,7 +39,11 @@ impl Editor {
             text_color: Some(palette.text),
             ..container::Style::default()
         });
-        match self.closing_dialog() {
+        let dialog = self
+            .closing_dialog()
+            .or_else(|| self.about_dialog())
+            .or_else(|| self.settings_dialog());
+        match dialog {
             Some(dialog) => stack![window, dialog].into(),
             None => window.into(),
         }
@@ -46,12 +52,7 @@ impl Editor {
     fn header(&self) -> Element<'_, Message> {
         let palette = self.palette;
         let has_image = self.image.is_some();
-        let brand = row![
-            svg(svg::Handle::from_memory(APP_ICON)).width(26).height(26),
-            text("Kirie").size(16),
-        ]
-        .spacing(space::S)
-        .align_y(Alignment::Center);
+        let brand = self.brand();
         let history = row![
             icon_button(
                 Icon::Undo,
@@ -97,25 +98,16 @@ impl Editor {
             .spacing(space::S)
             .align_y(Alignment::Center);
         if has_image {
-            actions = actions
-                .push(divider(palette))
-                .push(icon_button(
-                    Icon::Project,
-                    "Save editable project, with the original under the marks (Ctrl+Shift+S)",
-                    palette,
-                    false,
-                    Some(Message::SaveProject),
-                ))
-                .push(icon_button(
-                    Icon::Save,
-                    "Save to Pictures (Ctrl+S)",
-                    palette,
-                    false,
-                    Some(Message::Save),
-                ))
-                .push(primary_button(Icon::Copy, "Copy", palette, Message::Copy));
+            actions = actions.push(divider(palette)).push(self.image_actions());
         }
-        actions = actions.push(divider(palette)).push(theme);
+        let settings = icon_button(
+            Icon::Settings,
+            "Settings (Ctrl+,)",
+            palette,
+            false,
+            Some(Message::Settings(super::settings::Event::Open)),
+        );
+        actions = actions.push(divider(palette)).push(settings).push(theme);
         let document = self.document();
         let styles = controls::styles(document.style, palette, Message::PickStyle);
         container(
@@ -131,6 +123,74 @@ impl Editor {
         .padding([space::S, space::L])
         .style(panel(palette))
         .into()
+    }
+
+    /// Discarding, saving and copying the image.
+    fn image_actions(&self) -> Element<'_, Message> {
+        let palette = self.palette;
+        row![]
+            .push(icon_button(
+                Icon::Delete,
+                "Discard the image (Ctrl+W)",
+                palette,
+                false,
+                Some(Message::Discard),
+            ))
+            .push(icon_button(
+                Icon::Project,
+                "Save editable project to Pictures, with the original under the marks \
+                     (Ctrl+Alt+S)",
+                palette,
+                false,
+                Some(Message::SaveProject),
+            ))
+            .push(icon_button(
+                Icon::SaveAs,
+                "Save as… (Ctrl+Shift+S)",
+                palette,
+                false,
+                Some(Message::SaveAs),
+            ))
+            .push(icon_button(
+                Icon::Save,
+                "Save to Pictures and copy (Ctrl+S or Shift+Enter)",
+                palette,
+                false,
+                Some(Message::Save),
+            ))
+            .push(primary_button(Icon::Copy, "Copy", palette, Message::Copy))
+            .spacing(space::S)
+            .align_y(Alignment::Center)
+            .into()
+    }
+
+    /// Kirie's icon and name, which open the about card.
+    fn brand(&self) -> Element<'_, Message> {
+        let palette = self.palette;
+        let brand = button(
+            row![
+                svg(svg::Handle::from_memory(APP_ICON)).width(26).height(26),
+                text("Kirie").size(16),
+            ]
+            .spacing(space::S)
+            .align_y(Alignment::Center),
+        )
+        .padding([space::XS, space::S])
+        .on_press(Message::About(true))
+        .style(move |_, status| button::Style {
+            background: match status {
+                button::Status::Hovered => Some(Background::Color(palette.surface[1])),
+                button::Status::Pressed => Some(Background::Color(palette.surface[2])),
+                _ => None,
+            },
+            text_color: palette.text,
+            border: Border {
+                radius: kirie_ui::radius::CONTROL.into(),
+                ..Border::default()
+            },
+            ..button::Style::default()
+        });
+        hint(brand.into(), "About Kirie", palette)
     }
 
     fn rail(&self) -> Element<'_, Message> {
@@ -166,14 +226,19 @@ impl Editor {
     fn center(&self) -> Element<'_, Message> {
         let palette = self.palette;
         let mut layers = if self.image.is_some() {
-            stack![
-                iced::widget::canvas(Backdrop { editor: self })
+            let board = |part| {
+                iced::widget::canvas(Board { editor: self, part })
                     .width(Length::Fill)
-                    .height(Length::Fill),
-                iced::widget::canvas(Board { editor: self })
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            ]
+                    .height(Length::Fill)
+            };
+            Part::all(self.document()).fold(
+                stack![
+                    iced::widget::canvas(Backdrop { editor: self })
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                ],
+                |layers, part| layers.push(board(part)),
+            )
         } else {
             stack![self.empty()]
         };
@@ -191,6 +256,7 @@ impl Editor {
                             palette,
                             Message::TextEdit,
                             Message::TextDone,
+                            Some(Message::PasteText),
                         ),
                         column![
                             text("Enter to place").size(12).color(palette.muted),
@@ -212,11 +278,20 @@ impl Editor {
             } else {
                 palette.text
             };
-            floating_bits = floating_bits.push(
-                container(text(toast.text.clone()).size(13).color(color))
-                    .padding([space::S, space::L])
-                    .style(floating(palette)),
-            );
+            let mut content = row![text(toast.text.clone()).size(13).color(color)]
+                .spacing(space::M)
+                .align_y(Alignment::Center);
+            let mut padding = Padding::from([space::S, space::L]);
+            if let Some(file) = &toast.file {
+                content = content.push(secondary_button(
+                    "Show in Files",
+                    palette,
+                    Message::ShowInFiles(file.clone()),
+                ));
+                padding = Padding::from(space::S).left(space::L);
+            }
+            floating_bits =
+                floating_bits.push(container(content).padding(padding).style(floating(palette)));
         }
         layers = layers.push(
             container(floating_bits)
@@ -319,14 +394,8 @@ impl Editor {
                 super::frame::view(document.frame, document.unit, palette, Message::Frame),
             ));
         }
-        if self.picked.is_some() {
-            content = content.push(icon_button(
-                Icon::Delete,
-                "Delete mark (Del)",
-                palette,
-                false,
-                Some(Message::Delete),
-            ));
+        if !self.picked.is_empty() {
+            content = content.push(self.mark_actions());
         }
         container(scrollable(
             container(content).padding(Padding::new(space::L)),
@@ -334,6 +403,36 @@ impl Editor {
         .width(INSPECTOR)
         .height(Length::Fill)
         .style(panel(palette))
+        .into()
+    }
+
+    /// What the picked marks can do: come to the front, go to the back, go away.
+    fn mark_actions(&self) -> Element<'_, Message> {
+        let palette = self.palette;
+        let several = self.picked.len() > 1;
+        let action = |icon, tip, message| icon_button(icon, tip, palette, false, Some(message));
+        row![
+            action(
+                Icon::BringToFront,
+                "Bring to front (Ctrl+Shift+]; one step: Ctrl+])",
+                Message::Restack(Restack::Front),
+            ),
+            action(
+                Icon::SendToBack,
+                "Send to back (Ctrl+Shift+[; one step: Ctrl+[)",
+                Message::Restack(Restack::Back),
+            ),
+            action(
+                Icon::Delete,
+                if several {
+                    "Delete marks (Del)"
+                } else {
+                    "Delete mark (Del)"
+                },
+                Message::Delete,
+            ),
+        ]
+        .spacing(space::XS)
         .into()
     }
 
@@ -415,9 +514,10 @@ impl Editor {
                 palette,
                 Some(Message::ZoomOut)
             ),
-            small_pick_list(levels, shown, palette, |choice| Message::ZoomTo(
-                choice.zoom()
-            )),
+            // A fitted image is never enlarged, so "Fit 100%" is the longest label it shows.
+            small_pick_list(levels, shown, "Fit 100%", palette, |choice| {
+                Message::ZoomTo(choice.zoom())
+            }),
             small_icon_button(
                 Icon::ZoomIn,
                 "Zoom in (Ctrl++)",

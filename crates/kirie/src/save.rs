@@ -3,9 +3,83 @@
 use std::path::{Path, PathBuf};
 
 use image::RgbaImage;
+use kirie_annotate::project::Project;
+
+/// What a file chosen in the save dialog is written as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    Png,
+    Jpeg,
+    Webp,
+    /// A `.kirie` project, whose marks stay editable.
+    Project,
+}
+
+impl Format {
+    pub const ALL: [Format; 4] = [Format::Png, Format::Jpeg, Format::Webp, Format::Project];
+
+    /// The name of the save dialog's filter for this format.
+    pub fn label(self) -> &'static str {
+        match self {
+            Format::Png => "PNG image",
+            Format::Jpeg => "JPEG image",
+            Format::Webp => "WebP image",
+            Format::Project => "Kirie project",
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Format::Png => "png",
+            Format::Jpeg => "jpg",
+            Format::Webp => "webp",
+            Format::Project => kirie_annotate::project::EXTENSION,
+        }
+    }
+
+    /// The file name patterns of the save dialog's filter.
+    pub fn globs(self) -> &'static [&'static str] {
+        match self {
+            Format::Png => &["*.png"],
+            Format::Jpeg => &["*.jpg", "*.jpeg"],
+            Format::Webp => &["*.webp"],
+            Format::Project => &["*.kirie"],
+        }
+    }
+
+    /// The format a file of this name is written in: its extension's, else the one picked in
+    /// the dialog, whose extension the name then gets.
+    pub fn of(path: &Path, picked: Option<Format>) -> (PathBuf, Format) {
+        let extension = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase);
+        let known = Format::ALL.into_iter().find(|format| {
+            extension.as_deref().is_some_and(|extension| {
+                format
+                    .globs()
+                    .iter()
+                    .any(|glob| glob.strip_prefix("*.") == Some(extension))
+            })
+        });
+        if let Some(format) = known {
+            return (path.to_path_buf(), format);
+        }
+        let format = picked.unwrap_or(Format::Png);
+        let mut name = path.as_os_str().to_owned();
+        name.push(".");
+        name.push(format.extension());
+        (PathBuf::from(name), format)
+    }
+}
+
+/// The folder screenshots are saved to, as set in the settings.
+pub fn screenshots_dir() -> PathBuf {
+    crate::settings::Settings::load().folder()
+}
 
 /// `~/Pictures/Screenshots`, or the home folder's `Screenshots` without a pictures folder.
-pub fn screenshots_dir() -> PathBuf {
+pub fn default_dir() -> PathBuf {
     let dirs = directories::UserDirs::new();
     let pictures = dirs
         .as_ref()
@@ -16,13 +90,24 @@ pub fn screenshots_dir() -> PathBuf {
     pictures.join("Screenshots")
 }
 
-/// `Kirie_2026-11-22_10-30-15.png`, with a counter when that name is taken.
+/// `Kirie_2026-11-22_10-30-15.png`, or as the settings name it, with a counter when that name
+/// is taken.
 pub fn file_name(dir: &Path, now: &jiff::Zoned, taken: impl Fn(&Path) -> bool) -> PathBuf {
-    named(dir, now, "png", taken)
+    named(dir, &stem(now), "png", taken)
 }
 
-fn named(dir: &Path, now: &jiff::Zoned, extension: &str, taken: impl Fn(&Path) -> bool) -> PathBuf {
-    let stem = format!("Kirie_{}", now.strftime("%Y-%m-%d_%H-%M-%S"));
+/// The name of a screenshot taken `now`, without extension, as the settings name it.
+pub fn stem(now: &jiff::Zoned) -> String {
+    crate::settings::Settings::load().stem(now)
+}
+
+/// `Kirie_2026-11-22_10-30-15`: the name a capture handed to the editor gets, whatever the
+/// settings say, so that only such files are ever deleted.
+fn handoff_stem(now: &jiff::Zoned) -> String {
+    format!("Kirie_{}", now.strftime("%Y-%m-%d_%H-%M-%S"))
+}
+
+fn named(dir: &Path, stem: &str, extension: &str, taken: impl Fn(&Path) -> bool) -> PathBuf {
     let first = dir.join(format!("{stem}.{extension}"));
     if !taken(&first) {
         return first;
@@ -88,7 +173,7 @@ pub fn save_handoff(project: &kirie_annotate::project::Project) -> Result<PathBu
         .map_err(|error| format!("cannot protect {}: {error}", dir.display()))?;
     let path = named(
         &dir,
-        &jiff::Zoned::now(),
+        &handoff_stem(&jiff::Zoned::now()),
         kirie_annotate::project::EXTENSION,
         Path::exists,
     );
@@ -111,7 +196,7 @@ pub async fn save_project(project: kirie_annotate::project::Project) -> Result<P
             .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
         let path = named(
             &dir,
-            &jiff::Zoned::now(),
+            &stem(&jiff::Zoned::now()),
             kirie_annotate::project::EXTENSION,
             Path::exists,
         );
@@ -135,6 +220,54 @@ pub async fn save(image: RgbaImage) -> Result<PathBuf, String> {
         image
             .save(&path)
             .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+        Ok(path)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Writes `image` into the screenshots folder and puts it on the clipboard too: the file, and
+/// whether the copy worked. Only the save must work.
+pub async fn save_and_copy(image: RgbaImage) -> Result<(PathBuf, bool), String> {
+    let path = save(image.clone()).await?;
+    if !crate::settings::Settings::load().copy_on_save {
+        return Ok((path, false));
+    }
+    let copied = crate::clipboard::copy(image)
+        .await
+        .inspect_err(|error| tracing::warn!(%error, "saved, but not copied"))
+        .is_ok();
+    Ok((path, copied))
+}
+
+/// Writes `project` to `path`, a file the user chose, as `format`: the finished picture, or the
+/// project itself.
+pub async fn save_as(project: Project, path: PathBuf, format: Format) -> Result<PathBuf, String> {
+    tokio::task::spawn_blocking(move || {
+        let failed =
+            |error: &dyn std::fmt::Display| format!("cannot write {}: {error}", path.display());
+        if format == Format::Project {
+            let file = std::fs::File::create(&path).map_err(|error| failed(&error))?;
+            kirie_annotate::project::save(&project, std::io::BufWriter::new(file))
+                .map_err(|error| failed(&error))?;
+            return Ok(path);
+        }
+        let picture = kirie_annotate::render::render(
+            &project.document,
+            &project.image,
+            &mut kirie_annotate::Typesetter::new(),
+        )
+        .map_err(|error| error.to_string())?;
+        let written = match format {
+            Format::Jpeg => image::DynamicImage::ImageRgba8(picture)
+                .to_rgb8()
+                .save_with_format(&path, image::ImageFormat::Jpeg),
+            Format::Webp => picture.save_with_format(&path, image::ImageFormat::WebP),
+            Format::Png | Format::Project => {
+                picture.save_with_format(&path, image::ImageFormat::Png)
+            }
+        };
+        written.map_err(|error| failed(&error))?;
         Ok(path)
     })
     .await
@@ -198,7 +331,65 @@ mod tests {
     }
 
     #[test]
+    fn chosen_names_keep_a_known_extension_or_get_the_picked_one() {
+        let of = |name: &str, picked| Format::of(Path::new(name), picked);
+        assert_eq!(
+            of("/a/shot.PNG", None),
+            (PathBuf::from("/a/shot.PNG"), Format::Png)
+        );
+        assert_eq!(of("/a/shot.jpeg", Some(Format::Project)).1, Format::Jpeg);
+        assert_eq!(of("/a/shot.kirie", None).1, Format::Project);
+        assert_eq!(
+            of("/a/shot", Some(Format::Project)),
+            (PathBuf::from("/a/shot.kirie"), Format::Project)
+        );
+        assert_eq!(
+            of("/a/v1.2", None),
+            (PathBuf::from("/a/v1.2.png"), Format::Png),
+            "an unknown extension is part of the name"
+        );
+    }
+
+    #[test]
+    fn saving_as_writes_the_chosen_format() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!("kirie-save-as-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let project = Project {
+            image: RgbaImage::from_pixel(4, 3, image::Rgba([200, 10, 10, 255])),
+            document: kirie_annotate::Document::new(4, 3, 1.0),
+        };
+        for format in Format::ALL {
+            let path = dir.join(format!("shot.{}", format.extension()));
+            let saved = runtime
+                .block_on(save_as(project.clone(), path.clone(), format))
+                .unwrap();
+            assert_eq!(saved, path);
+            if format == Format::Project {
+                let file = std::fs::File::open(&path).unwrap();
+                let loaded = kirie_annotate::project::load(std::io::BufReader::new(file)).unwrap();
+                assert_eq!(loaded.image, project.image);
+            } else {
+                assert_eq!(image::open(&path).unwrap().width(), 4);
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn the_folder_is_called_screenshots() {
         assert!(screenshots_dir().ends_with("Screenshots"));
+        assert_eq!(
+            screenshots_dir(),
+            default_dir(),
+            "unless the settings say otherwise"
+        );
+    }
+
+    #[test]
+    fn handoffs_keep_kiries_own_names() {
+        assert_eq!(handoff_stem(&noon()), "Kirie_2026-11-22_12-00-05");
     }
 }
