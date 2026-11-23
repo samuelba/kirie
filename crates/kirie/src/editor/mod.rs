@@ -264,6 +264,8 @@ pub struct Editor {
     patches: RefCell<HashMap<crate::paint::PatchKey, image::Handle>>,
     /// The window's data device, for drops and the clipboard, once it is ready.
     device: Option<crate::drops::Device>,
+    /// The window the data device was last made anew for.
+    renewed_for: Option<window::Id>,
 }
 
 impl std::fmt::Debug for Editor {
@@ -319,6 +321,7 @@ impl Editor {
             typesetter: RefCell::new(Typesetter::new()),
             patches: RefCell::new(HashMap::new()),
             device: None,
+            renewed_for: None,
         };
         if let Some(loaded) = loaded {
             editor.open(loaded);
@@ -757,11 +760,16 @@ impl Editor {
     fn files(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Copy => self.export(Export::Copy),
-            Message::Open => Task::perform(crate::dialog::open_image(), |picked| match picked {
-                Ok(Some(path)) => Message::Ipc(crate::ipc::Request::Open(path, None)),
-                Ok(None) => Message::Done(Ok(String::new())),
-                Err(error) => Message::Done(Err(error)),
-            }),
+            // The window is in front already, so the image opens in it as it is.
+            Message::Open => {
+                Task::perform(crate::dialog::open_image(), |picked| picked).then(|picked| {
+                    match picked {
+                        Ok(Some(path)) => Task::perform(load_async(path), Message::Opened),
+                        Ok(None) => Task::none(),
+                        Err(error) => Task::done(Message::Done(Err(error))),
+                    }
+                })
+            }
             Message::Paste => Task::perform(paste(self.device.clone()), |pasted| {
                 Message::Opened(pasted.map(|image| Loaded::image(image, None)))
             }),
@@ -784,9 +792,13 @@ impl Editor {
             }
             Message::SaveTo(path, format) => self.export(Export::To(path, format)),
             // Made anew before anything can be dragged from another window onto this one.
+            // Once per window: iced's clipboard makes a device of its own when a window opens.
             Message::Unfocused => {
-                if let Some(device) = &self.device {
+                if self.renewed_for != self.window
+                    && let Some(device) = &self.device
+                {
                     device.renew();
+                    self.renewed_for = self.window;
                 }
                 Task::none()
             }

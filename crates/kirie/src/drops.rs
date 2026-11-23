@@ -106,15 +106,16 @@ impl Device {
 
     /// Makes the data devices anew, so that they are the client's newest: GNOME sends drops and
     /// the clipboard to that one alone.
+    ///
+    /// The old devices are kept, not released: GNOME may already have sent one an offer, and
+    /// libwayland drops an event for a released object without the offer it makes, after which
+    /// the next object the compositor makes breaks the connection. Each stays as quiet as GNOME
+    /// leaves it, and handled as any other.
     pub fn renew(&self) {
         let mut shared = self.lock();
         shared.forget_selection();
         for (_, device) in &mut shared.seats {
-            if let Some(device) = device.take()
-                && device.version() >= 2
-            {
-                device.release();
-            }
+            *device = None;
         }
         shared.attach();
         if let Err(error) = shared.connection.flush() {
