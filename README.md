@@ -46,7 +46,7 @@ This binds **Shift+Print** to `kirie capture`, so your desktop's own screenshot 
 
 | Desktop | How Kirie captures and shows the overlay |
 |---|---|
-| **GNOME** | Install the companion extension with `kirie gnome-extension install` and log out once. It brings the shortcut, takes screenshots without a permission dialog, and keeps the overlay above every window. Without it, Kirie uses the screenshot portal (GNOME asks for permission once) and a fullscreen window. |
+| **GNOME** | Install the companion extension with `kirie gnome-extension install` and log out once. It brings the shortcut, takes screenshots without a permission dialog, and keeps the overlay above every window. Without it, Kirie uses the screenshot portal (GNOME asks for permission once) and a fullscreen window, which shows one screen only: GNOME does not let an app pick the screen for a window. Ctrl+A still takes every screen. |
 | **COSMIC** | `ext-image-copy-capture` and a layer-shell overlay on every screen. `kirie shortcuts install` adds the shortcut to COSMIC's keyboard settings. |
 | **KDE Plasma** | The screenshot portal and a layer-shell overlay. Add the shortcut in System Settings; `kirie shortcuts install` tells you how. |
 | **sway, Hyprland, niri, Wayfire** | `wlr-screencopy` or `ext-image-copy-capture` and a layer-shell overlay. Bind `kirie capture` in your compositor's config; `kirie shortcuts install` prints an example. |

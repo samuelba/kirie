@@ -362,6 +362,12 @@ impl Overlay {
         (overlay, Task::batch(open))
     }
 
+    /// Whether the overlay is one window on one of several screens: without layer-shell a
+    /// window cannot pick its screen, so the others cannot be shown.
+    fn covers_one_of_many(&self) -> bool {
+        self.host == Host::Window && self.screens.len() > 1
+    }
+
     /// A selection with a few marks, for screenshots of the overlay and the smoke test.
     fn with_demo(mut self) -> Self {
         // A screenshot of the overlay shows it as it stays, not as it opens.

@@ -106,8 +106,20 @@ impl Overlay {
                 Message::SelectScreen(screen),
             ));
         }
+        let mut card = column![content].spacing(space::XS);
+        if self.covers_one_of_many() {
+            card = card.push(
+                text(
+                    "Only this screen shows here; Ctrl+A then Enter still takes every screen. \
+                     To pick on any screen, install Kirie's GNOME extension: \
+                     kirie gnome-extension install",
+                )
+                .size(12)
+                .color(self.palette.muted),
+            );
+        }
         container(
-            container(content)
+            container(card)
                 .padding([space::S, space::M])
                 .style(floating(self.palette)),
         )
