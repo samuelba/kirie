@@ -73,6 +73,18 @@ impl Overlay {
         if let Some(at) = self.toolbar_position(screen.area) {
             layers = layers.push(pin(self.toolbar()).position(at));
         }
+        if let Some(flash) = self.flash {
+            let white = iced::Color::WHITE.scale_alpha(flash.level);
+            layers = layers.push(
+                container(Space::new())
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(move |_| container::Style {
+                        background: Some(iced::Background::Color(white)),
+                        ..container::Style::default()
+                    }),
+            );
+        }
         layers.into()
     }
 

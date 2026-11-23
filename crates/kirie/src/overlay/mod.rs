@@ -32,6 +32,10 @@ pub const NAMESPACE: &str = "kirie-overlay";
 const HANDLE_REACH: f32 = 8.0;
 /// How close to a mark the select tool picks it, in logical pixels.
 const MARK_REACH: f64 = 6.0;
+/// How long the flash that tells the screen was taken takes to fade.
+const FLASH: std::time::Duration = std::time::Duration::from_millis(300);
+/// How bright the flash starts, as the opacity of white over the screens.
+const FLASH_START: f32 = 0.8;
 
 /// One frozen screen.
 #[derive(Debug)]
@@ -99,6 +103,36 @@ pub enum Message {
     ToolbarMoved(window::Id, Point),
     ToolbarDropped,
     Layer(LayerShellCustomActionWithId),
+    /// Time passes while the flash fades.
+    Flash(std::time::Instant),
+}
+
+/// The flash over the screens as the overlay opens, like a camera's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Flash {
+    /// When it started fading: at the first tick after the surfaces showed.
+    since: Option<std::time::Instant>,
+    /// The opacity of the white over the screens.
+    level: f32,
+}
+
+impl Flash {
+    fn new() -> Self {
+        Self {
+            since: None,
+            level: FLASH_START,
+        }
+    }
+
+    /// The flash at `now`, or `None` once it has faded.
+    fn at(self, now: std::time::Instant) -> Option<Self> {
+        let since = self.since.unwrap_or(now);
+        let done = now.saturating_duration_since(since).as_secs_f32() / FLASH.as_secs_f32();
+        (done < 1.0).then(|| Self {
+            since: Some(since),
+            level: FLASH_START * (1.0 - done).powi(2),
+        })
+    }
 }
 
 /// How the overlay's surfaces are made.
@@ -177,6 +211,8 @@ pub struct Overlay {
     /// What Enter does.
     primary: Action,
     host: Host,
+    /// The flash as the overlay opens, while it fades.
+    flash: Option<Flash>,
     typesetter: RefCell<Typesetter>,
     patches: RefCell<HashMap<crate::paint::PatchKey, image::Handle>>,
     outcome: Arc<Mutex<Outcome>>,
@@ -313,6 +349,7 @@ impl Overlay {
             busy: false,
             primary,
             host,
+            flash: Some(Flash::new()),
             typesetter: RefCell::new(Typesetter::new()),
             patches: RefCell::new(HashMap::new()),
             outcome,
@@ -327,6 +364,8 @@ impl Overlay {
 
     /// A selection with a few marks, for screenshots of the overlay and the smoke test.
     fn with_demo(mut self) -> Self {
+        // A screenshot of the overlay shows it as it stays, not as it opens.
+        self.flash = None;
         let Some(screen) = self.screens.first() else {
             return self;
         };
@@ -481,6 +520,10 @@ impl Overlay {
                 Task::none()
             }
             Message::Layer(_) => Task::none(),
+            Message::Flash(now) => {
+                self.flash = self.flash.and_then(|flash| flash.at(now));
+                Task::none()
+            }
         }
     }
 
@@ -971,9 +1014,15 @@ impl Overlay {
         } else {
             Subscription::none()
         };
+        let flash = if self.flash.is_some() {
+            iced::time::every(std::time::Duration::from_millis(16)).map(Message::Flash)
+        } else {
+            Subscription::none()
+        };
         Subscription::batch([
             keys,
             toolbar,
+            flash,
             window::resize_events().map(|(id, size)| Message::Resized(id, size)),
         ])
     }
@@ -1161,4 +1210,22 @@ pub fn run(
         .lock()
         .map(|outcome| outcome.clone())
         .unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_flash_fades_from_its_first_tick() {
+        let start = std::time::Instant::now();
+        let first = Flash::new().at(start + FLASH * 5).unwrap();
+        assert!(
+            (first.level - FLASH_START).abs() < 1e-6,
+            "a late first tick starts the fade"
+        );
+        let half = first.at(start + FLASH * 5 + FLASH / 2).unwrap();
+        assert!(half.level < first.level && half.level > 0.0);
+        assert!(first.at(start + FLASH * 6).is_none());
+    }
 }
