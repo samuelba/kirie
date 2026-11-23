@@ -1,7 +1,7 @@
 //! Sketch: every line drawn twice by an unsteady hand, closed shapes hatched like a marker
 //! sketch, text in handwriting.
 
-use kurbo::{BezPath, Point, Rect, Vec2};
+use kurbo::{BezPath, PathEl, Point, Rect, Vec2};
 
 use super::{Context, Rng, arrow_wings, ellipse_points, smooth};
 use crate::primitive::{Align, FillRule, Font, Primitive};
@@ -105,6 +105,7 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
             }]
         }
         Kind::Text { .. }
+        | Kind::Bubble { .. }
         | Kind::Blur { .. }
         | Kind::Pixelate { .. }
         | Kind::Spotlight { .. }
@@ -225,6 +226,29 @@ fn hachure_segments(polygon: &[Point], gap: f64) -> Vec<(Point, Point)> {
         y += gap;
     }
     segments
+}
+
+/// A speech bubble with every point of its outline nudged, as if cut out by hand.
+pub(super) fn bubble(outline: &BezPath, context: &Context) -> Vec<Primitive> {
+    let mut rng = Rng::new(context.seed);
+    let amount = 1.5 * context.unit;
+    let mut nudge = |point: Point| point + jitter(&mut rng, amount);
+    let path: BezPath = outline
+        .elements()
+        .iter()
+        .map(|element| match *element {
+            PathEl::MoveTo(p) => PathEl::MoveTo(nudge(p)),
+            PathEl::LineTo(p) => PathEl::LineTo(nudge(p)),
+            PathEl::QuadTo(a, p) => PathEl::QuadTo(nudge(a), nudge(p)),
+            PathEl::CurveTo(a, b, p) => PathEl::CurveTo(nudge(a), nudge(b), nudge(p)),
+            PathEl::ClosePath => PathEl::ClosePath,
+        })
+        .collect();
+    vec![Primitive::Fill {
+        path,
+        color: context.color(),
+        rule: FillRule::NonZero,
+    }]
 }
 
 #[cfg(test)]

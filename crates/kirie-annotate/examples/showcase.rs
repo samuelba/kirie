@@ -126,6 +126,25 @@ fn marks(x: f64) -> Vec<(Kind, Paint)> {
             },
             plain,
         ),
+        (
+            Kind::Bubble {
+                center: p(110.0, 590.0),
+                tail: p(200.0, 545.0),
+                text: "Look here".into(),
+            },
+            plain,
+        ),
+        (
+            Kind::Bubble {
+                center: p(300.0, 585.0),
+                tail: p(380.0, 630.0),
+                text: "Two\nlines".into(),
+            },
+            Paint {
+                color: kirie_annotate::Rgba::rgb(0x3b, 0x82, 0xf6),
+                ..plain
+            },
+        ),
     ]
 }
 
@@ -133,7 +152,7 @@ fn main() {
     let out = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "showcase.png".into());
-    let (width, height) = ((COLUMN * 3.0) as u32, 540);
+    let (width, height) = ((COLUMN * 3.0) as u32, 650);
     let mut image = backdrop(width, height);
     let mut typesetter = Typesetter::new();
     for (column, style) in StyleId::ALL.into_iter().enumerate() {

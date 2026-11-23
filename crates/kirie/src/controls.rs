@@ -24,6 +24,7 @@ pub fn tool_icon(tool: Tool) -> Icon {
         Tool::Pen => Icon::Pen,
         Tool::Highlighter => Icon::Highlighter,
         Tool::Text => Icon::Text,
+        Tool::Bubble => Icon::Bubble,
         Tool::Counter => Icon::Counter,
         Tool::Blur => Icon::Blur,
         Tool::Pixelate => Icon::Pixelate,

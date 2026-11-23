@@ -81,7 +81,7 @@ the selection.
 | Arrow keys | Move the selection (with Shift: by 10) |
 | Ctrl+Z, Ctrl+Shift+Z | Undo, redo |
 | Esc | Put the tool down, then cancel |
-| V A L R E P H T N B X D S | Select, Arrow, Line, Rectangle, Ellipse, Pen, Highlighter, Text, Step number, Blur, Pixelate, Redact, Spotlight |
+| V A L R E P H T C N B X D S | Select, Arrow, Line, Rectangle, Ellipse, Pen, Highlighter, Text, Speech bubble, Step number, Blur, Pixelate, Redact, Spotlight |
 
 Hold **Shift** while drawing to snap lines to 45° and boxes to squares.
 

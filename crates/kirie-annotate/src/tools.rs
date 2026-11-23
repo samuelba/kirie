@@ -18,6 +18,8 @@ pub enum Tool {
     Pen,
     Highlighter,
     Text,
+    /// Words in a speech bubble pointing at something.
+    Bubble,
     Counter,
     Blur,
     Pixelate,
@@ -26,7 +28,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 13] = [
+    pub const ALL: [Tool; 14] = [
         Tool::Select,
         Tool::Arrow,
         Tool::Line,
@@ -35,6 +37,7 @@ impl Tool {
         Tool::Pen,
         Tool::Highlighter,
         Tool::Text,
+        Tool::Bubble,
         Tool::Counter,
         Tool::Blur,
         Tool::Pixelate,
@@ -52,6 +55,7 @@ impl Tool {
             Tool::Pen => "Pen",
             Tool::Highlighter => "Highlighter",
             Tool::Text => "Text",
+            Tool::Bubble => "Speech bubble",
             Tool::Counter => "Step number",
             Tool::Blur => "Blur",
             Tool::Pixelate => "Pixelate",
@@ -71,6 +75,7 @@ impl Tool {
             Tool::Pen => "Pen (P)",
             Tool::Highlighter => "Highlighter (H)",
             Tool::Text => "Text (T)",
+            Tool::Bubble => "Speech bubble (C)",
             Tool::Counter => "Step number (N)",
             Tool::Blur => "Blur (B)",
             Tool::Pixelate => "Pixelate (X)",
@@ -90,6 +95,7 @@ impl Tool {
             Tool::Pen => 'p',
             Tool::Highlighter => 'h',
             Tool::Text => 't',
+            Tool::Bubble => 'c',
             Tool::Counter => 'n',
             Tool::Blur => 'b',
             Tool::Pixelate => 'x',
@@ -151,6 +157,9 @@ pub enum Press {
     Toggle(ShapeId),
     Nothing,
 }
+
+/// Where a clicked speech bubble's words go from the tip of its tail.
+const BUBBLE_OFFSET: Vec2 = Vec2::new(48.0, -56.0);
 
 /// Drags shorter than this make no mark.
 const MIN_DRAG: f64 = 3.0;
@@ -309,7 +318,10 @@ impl Draft {
     pub fn finish(self, paint: Paint) -> Option<Op> {
         match self {
             Draft::Span { start, end, .. } if start.distance(end) < MIN_DRAG => None,
-            Draft::Marquee { .. } => None,
+            Draft::Marquee { .. }
+            | Draft::Span {
+                tool: Tool::Bubble, ..
+            } => None,
             Draft::Moving { by, .. } if by.hypot() < f64::EPSILON => None,
             Draft::Moving { ids, by, .. } => Some(Op::Move { ids, by }),
             Draft::Editing {
@@ -321,6 +333,25 @@ impl Draft {
                 rotation: current.rotation,
             }),
             draft => draft.preview().map(|kind| Op::Add { kind, paint }),
+        }
+    }
+
+    /// Where the words of a speech bubble drawn by this draft go, and the tip of its tail: the
+    /// press is the tip and the release the middle of the words. A click without a drag puts
+    /// the words up and to the right of the tip.
+    pub fn bubble(&self) -> Option<(Point, Point)> {
+        match *self {
+            Draft::Span {
+                tool: Tool::Bubble,
+                start,
+                end,
+            } if start.distance(end) < MIN_DRAG => Some((start + BUBBLE_OFFSET, start)),
+            Draft::Span {
+                tool: Tool::Bubble,
+                start,
+                end,
+            } => Some((end, start)),
+            _ => None,
         }
     }
 }
@@ -342,6 +373,11 @@ fn span_kind(tool: Tool, start: Point, end: Point) -> Option<Kind> {
         Tool::Pixelate => Kind::Pixelate { rect },
         Tool::Redact => Kind::Redact { rect },
         Tool::Spotlight => Kind::Spotlight { rect },
+        Tool::Bubble => Kind::Bubble {
+            center: end,
+            tail: start,
+            text: "|".into(),
+        },
         Tool::Select | Tool::Pen | Tool::Highlighter | Tool::Text | Tool::Counter => {
             return None;
         }
@@ -694,6 +730,26 @@ mod tests {
         assert_eq!(draft.marquee(), Some(Rect::new(10.0, 40.0, 40.0, 70.0)));
         assert_eq!(draft.preview(), None);
         assert_eq!(draft.finish(Paint::default()), None);
+    }
+
+    #[test]
+    fn bubbles_point_from_the_press_and_wait_for_words() {
+        let tip = Point::new(20.0, 80.0);
+        let Press::Draft(draft) =
+            press(Tool::Bubble, tip, &doc(), Paint::default(), 4.0, &[], false)
+        else {
+            panic!("a bubble starts a draft");
+        };
+        assert_eq!(draft.bubble(), Some((tip + BUBBLE_OFFSET, tip)));
+        let dragged = draft.drag(Point::new(120.0, 30.0), false);
+        assert_eq!(dragged.bubble(), Some((Point::new(120.0, 30.0), tip)));
+        assert!(matches!(
+            dragged.preview(),
+            Some(Kind::Bubble { center, tail, .. }) if center == Point::new(120.0, 30.0) && tail == tip
+        ));
+        assert_eq!(dragged.finish(Paint::default()), None);
+        let other = press(Tool::Arrow, tip, &doc(), Paint::default(), 4.0, &[], false);
+        assert!(matches!(other, Press::Draft(draft) if draft.bubble().is_none()));
     }
 
     #[test]

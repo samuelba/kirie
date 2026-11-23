@@ -1130,12 +1130,13 @@ impl Editor {
         crate::marks::shown_paint(self.document(), &self.picked, self.paint)
     }
 
-    /// Whether the text controls apply: to text being typed, picked text marks, or the next.
+    /// Whether the text controls apply: to words being typed, picked text marks and bubbles, or
+    /// the next.
     fn texting(&self) -> bool {
-        self.tool == Tool::Text
+        matches!(self.tool, Tool::Text | Tool::Bubble)
             || self.typing.is_some()
             || crate::marks::all(self.document(), &self.picked, |kind| {
-                matches!(kind, Kind::Text { .. })
+                matches!(kind, Kind::Text { .. } | Kind::Bubble { .. })
             })
     }
 
@@ -1179,8 +1180,8 @@ impl Editor {
                     Point::new(at.x as f32, at.y as f32),
                 );
                 let words = match self.tool {
-                    Tool::Text => typing::text_at(self.document(), at, reach),
-                    Tool::Select if double => typing::text_at(self.document(), at, reach),
+                    Tool::Text | Tool::Bubble => typing::words_at(self.document(), at, reach),
+                    Tool::Select if double => typing::words_at(self.document(), at, reach),
                     _ => None,
                 };
                 if let Some(id) = words {
@@ -1219,6 +1220,10 @@ impl Editor {
             Pointer::Released(at) => {
                 if let Some(draft) = self.draft.take() {
                     let draft = draft.drag(at, self.modifiers.shift());
+                    if let Some((center, tail)) = draft.bubble() {
+                        self.typing = Some(Typing::bubble(center, tail));
+                        return iced::widget::operation::focus(view::TEXT_INPUT);
+                    }
                     let document = self.history.current();
                     if let Some(op) =
                         crate::marks::release(draft, document, &mut self.picked, self.paint)

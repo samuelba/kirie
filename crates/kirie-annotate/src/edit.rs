@@ -58,6 +58,7 @@ pub fn grips(shape: &Shape, pixel: f64) -> Vec<(Grip, Point)> {
             .enumerate()
             .map(|(index, point)| (Grip::Corner(index_u8(index)), point))
             .collect(),
+        Kind::Bubble { center, tail, .. } => vec![(Grip::Start, *center), (Grip::End, *tail)],
         Kind::Text { .. } | Kind::Counter { .. } => Vec::new(),
     }
 }
@@ -138,6 +139,21 @@ pub fn drag(origin: &Shape, grip: Grip, to: Point, constrain: bool) -> Shape {
             };
             Shape {
                 kind,
+                ..origin.clone()
+            }
+        }
+        (Kind::Bubble { center, tail, text }, Grip::Start | Grip::End) => {
+            let (center, tail) = if grip == Grip::Start {
+                (to, *tail)
+            } else {
+                (*center, to)
+            };
+            Shape {
+                kind: Kind::Bubble {
+                    center,
+                    tail,
+                    text: text.clone(),
+                },
                 ..origin.clone()
             }
         }
@@ -324,6 +340,36 @@ mod tests {
             text: "a".into(),
         });
         assert!(super::grips(&text, 1.0).is_empty());
+    }
+
+    #[test]
+    fn bubbles_move_their_box_and_tail_apart() {
+        let (center, tip) = (Point::new(50.0, 20.0), Point::new(10.0, 80.0));
+        let bubble = shape(Kind::Bubble {
+            center,
+            tail: tip,
+            text: "a".into(),
+        });
+        assert_eq!(
+            grips(&bubble, 1.0),
+            vec![(Grip::Start, center), (Grip::End, tip)]
+        );
+        let aimed = drag(&bubble, Grip::End, Point::new(90.0, 90.0), false);
+        let Kind::Bubble {
+            center: kept, tail, ..
+        } = aimed.kind
+        else {
+            panic!()
+        };
+        assert_eq!((kept, tail), (center, Point::new(90.0, 90.0)));
+        let moved = drag(&bubble, Grip::Start, Point::new(70.0, 0.0), false);
+        let Kind::Bubble {
+            center: body, tail, ..
+        } = moved.kind
+        else {
+            panic!()
+        };
+        assert_eq!((body, tail), (Point::new(70.0, 0.0), tip));
     }
 
     #[test]

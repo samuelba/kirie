@@ -764,12 +764,13 @@ impl Overlay {
         crate::marks::shown_paint(self.document(), &self.picked, self.paint)
     }
 
-    /// Whether the text controls apply: to text being typed, picked text marks, or the next.
+    /// Whether the text controls apply: to words being typed, picked text marks and bubbles, or
+    /// the next.
     fn texting(&self) -> bool {
-        self.tool == Some(Tool::Text)
+        matches!(self.tool, Some(Tool::Text | Tool::Bubble))
             || self.typing.is_some()
             || crate::marks::all(self.document(), &self.picked, |kind| {
-                matches!(kind, Kind::Text { .. })
+                matches!(kind, Kind::Text { .. } | Kind::Bubble { .. })
             })
     }
 
@@ -949,9 +950,11 @@ impl Overlay {
                 self.commit_text();
                 let double = typing::double_click(&mut self.last_click, at);
                 let words = match tool {
-                    Tool::Text => typing::text_at(self.document(), to_kurbo(at), MARK_REACH),
+                    Tool::Text | Tool::Bubble => {
+                        typing::words_at(self.document(), to_kurbo(at), MARK_REACH)
+                    }
                     Tool::Select if double => {
-                        typing::text_at(self.document(), to_kurbo(at), MARK_REACH)
+                        typing::words_at(self.document(), to_kurbo(at), MARK_REACH)
                     }
                     _ => None,
                 };
@@ -992,6 +995,10 @@ impl Overlay {
             Pointer::Released(at) => {
                 if let Some(draft) = self.draft.take() {
                     let draft = draft.drag(to_kurbo(at), self.modifiers.shift());
+                    if let Some((center, tail)) = draft.bubble() {
+                        self.typing = Some(Typing::bubble(center, tail));
+                        return iced::widget::operation::focus(view::TEXT_INPUT);
+                    }
                     let document = self.history.current();
                     if let Some(op) =
                         crate::marks::release(draft, document, &mut self.picked, self.paint)
