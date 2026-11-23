@@ -109,6 +109,7 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
         | Kind::Blur { .. }
         | Kind::Pixelate { .. }
         | Kind::Spotlight { .. }
+        | Kind::Sticker { .. }
         | Kind::Image { .. } => Vec::new(),
     }
 }

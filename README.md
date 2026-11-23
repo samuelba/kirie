@@ -81,9 +81,17 @@ the selection.
 | Arrow keys | Move the selection (with Shift: by 10) |
 | Ctrl+Z, Ctrl+Shift+Z | Undo, redo |
 | Esc | Put the tool down, then cancel |
-| V A L R E P H T C N B X D S | Select, Arrow, Line, Rectangle, Ellipse, Pen, Highlighter, Text, Speech bubble, Step number, Blur, Pixelate, Redact, Spotlight |
+| V A L R E P H T C N K B X D S | Select, Arrow, Line, Rectangle, Ellipse, Pen, Highlighter, Text, Speech bubble, Step number, Sticker, Blur, Pixelate, Redact, Spotlight |
 
 Hold **Shift** while drawing to snap lines to 45° and boxes to squares.
+
+In text and speech bubbles, type `:` and a name for an emoji: `:thu` offers 👍 and the others whose
+names start so (Up and Down to choose, Tab or Enter to put it in), and a finished `:rocket:` turns
+into 🚀. Not sure of the name? The smile button beside the text box opens the emoji picker under
+it. The sticker tool (K) places an emoji on its own: pick it from the panel, by search or by
+category, then click to place it or drag its size. Stickers turn and resize from their corners,
+always keeping their proportions; pick one to change its emoji. The hand beside the picker's
+search sets the skin tone, for the picker and for names typed after `:`; Kirie remembers it.
 
 With the select tool, drag a box around marks to pick them all, or Shift+click a mark to add it
 or take it out. Picked marks move, change color and delete together; in the editor, Ctrl+A picks
@@ -184,5 +192,7 @@ on every image the editor opens (close a running editor first, or the image goes
 ## License
 
 MIT. The GNOME Shell extension in `gnome-extension/` is GPL-2.0-or-later. The bundled fonts
-(Inter, Caveat, Source Code Pro) are under the SIL Open Font License, and the icons come from
-[Lucide](https://lucide.dev) under the ISC license; their licenses are in `assets/`.
+(Inter, Caveat, Source Code Pro) are under the SIL Open Font License, the emoji are
+[Twemoji](https://github.com/twitter/twemoji) by Twitter, Inc and other contributors under
+CC-BY 4.0, from Mozilla's [Twemoji font](https://github.com/mozilla/twemoji-colr), and the icons
+come from [Lucide](https://lucide.dev) under the ISC license; their licenses are in `assets/`.

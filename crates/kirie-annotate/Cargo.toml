@@ -19,6 +19,8 @@ tiny-skia = { version = "0.11", default-features = false, features = ["std", "si
 cosmic-text = { version = "0.15", default-features = false, features = ["std", "swash"] }
 ron = "0.12"
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+emojis = { version = "0.9", features = ["serde"] }
+swash = { version = "0.2", default-features = false, features = ["std", "scale"] }
 
 [lints]
 workspace = true

@@ -747,6 +747,27 @@ mod tests {
     }
 
     #[test]
+    fn turned_stickers_are_hit_inside_their_turned_box() {
+        let doc = Document::new(400, 200, 1.0).apply(Op::Add {
+            kind: Kind::Sticker {
+                rect: kurbo::Rect::new(100.0, 50.0, 200.0, 150.0),
+                emoji: "\u{1f44d}".into(),
+            },
+            paint: Paint::default(),
+        });
+        let corner = Point::new(103.0, 53.0);
+        assert_eq!(doc.hit(corner, 1.0), Some(ShapeId(1)));
+        let turned = doc.apply(Op::Reshape {
+            id: ShapeId(1),
+            kind: doc.shape(ShapeId(1)).unwrap().kind.clone(),
+            rotation: std::f64::consts::FRAC_PI_4,
+        });
+        assert_eq!(turned.hit(corner, 1.0), None);
+        assert_eq!(turned.hit(Point::new(150.0, 70.0), 1.0), Some(ShapeId(1)));
+        assert_eq!(turned.hit(Point::new(150.0, 32.0), 1.0), Some(ShapeId(1)));
+    }
+
+    #[test]
     fn text_is_hit_where_its_letters_are() {
         let doc = Document::new(400, 200, 1.0).apply(Op::Add {
             kind: Kind::Text {

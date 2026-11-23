@@ -22,6 +22,7 @@ use kirie_capture::{Frame, geometry};
 use kirie_ui::Palette;
 
 use crate::drawing::Drawing;
+use crate::emoji_picker::EmojiPicker;
 use crate::picker::{self, Picker, Target};
 use crate::selection::{self, Release, Selection};
 use crate::swatches::Swatches;
@@ -79,6 +80,9 @@ pub enum Message {
     Brightness(crate::controls::BrightnessEvent),
     Spot(kirie_annotate::SpotShape),
     Look(crate::controls::TextEvent),
+    Emoji(crate::emoji_picker::Event),
+    /// Moves through or picks the emoji offered while typing.
+    Choose(crate::typing::Choice),
     TextEdit(iced::widget::text_editor::Action),
     TextDone,
     Undo,
@@ -200,6 +204,7 @@ pub struct Overlay {
     paint: Paint,
     swatches: Swatches,
     picker: Option<Picker>,
+    emojis: EmojiPicker,
     history: History,
     draft: Option<Draft>,
     /// The tool the current pointer gesture draws with, if it draws at all.
@@ -354,6 +359,7 @@ impl Overlay {
             paint: drawing.paint_for(None, &swatches),
             swatches,
             picker: None,
+            emojis: EmojiPicker::load(),
             history: History::new(document),
             draft: None,
             drawing: None,
@@ -500,10 +506,11 @@ impl Overlay {
             }
             Message::TextEdit(action) => {
                 if let Some(typing) = &mut self.typing {
-                    typing.content.perform(action);
+                    typing.act(action, self.emojis.tone());
                 }
                 Task::none()
             }
+            Message::Emoji(_) | Message::Choose(_) => self.emoji(message),
             Message::TextDone => {
                 self.commit_text();
                 Task::none()
@@ -774,6 +781,37 @@ impl Overlay {
             })
     }
 
+    /// An emoji picked for the stickers, or among those offered while typing.
+    fn emoji(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Emoji(event) => {
+                if let Some(emoji) = self.emojis.update(event)
+                    && let Some(op) = crate::marks::restick(self.document(), &self.picked, &emoji)
+                {
+                    self.history.apply(op);
+                }
+                Task::none()
+            }
+            Message::Choose(choice) => {
+                let refocus = self
+                    .typing
+                    .as_mut()
+                    .is_some_and(|typing| typing.choose(choice, &mut self.emojis));
+                if refocus {
+                    iced::widget::operation::focus(view::TEXT_INPUT)
+                } else {
+                    Task::none()
+                }
+            }
+            _ => Task::none(),
+        }
+    }
+
+    /// Whether the emoji picker shows: for the sticker tool or picked stickers.
+    fn stickering(&self) -> bool {
+        crate::marks::stickering(self.tool, self.document(), &self.picked)
+    }
+
     /// Whether the spotlight controls apply: to the spotlight tool or picked spotlights.
     fn spotlighting(&self) -> bool {
         self.tool == Some(Tool::Spotlight)
@@ -824,6 +862,11 @@ impl Overlay {
         if self.sampling() {
             self.change_style(Message::Picker(picker::Event::Eyedropper));
             return Task::none();
+        }
+        if let Some(typing) = &mut self.typing
+            && typing.dismiss()
+        {
+            return iced::widget::operation::focus(view::TEXT_INPUT);
         }
         if self.picker.take().is_some()
             || self.typing.take().is_some()
@@ -982,6 +1025,12 @@ impl Overlay {
                     Press::TypeAt(at) => {
                         self.typing = Some(Typing::new(at));
                         return iced::widget::operation::focus(view::TEXT_INPUT);
+                    }
+                    Press::PlaceSticker(at) => {
+                        let size = kirie_annotate::tools::STICKER_SIZE * self.document().unit;
+                        let draft = Draft::sticker(self.emojis.chosen(), at, size);
+                        crate::marks::pressed(&draft, &mut self.picked);
+                        self.draft = Some(draft);
                     }
                     Press::Toggle(id) => crate::marks::toggle(&mut self.picked, id),
                     Press::Nothing => self.picked.clear(),
@@ -1309,12 +1358,14 @@ pub fn run(
                     ..LayerShellSettings::default()
                 },
                 antialiasing: true,
+                fonts: vec![kirie_annotate::text::EMOJI_FONT.into()],
                 ..Settings::default()
             })
             .run()
             .map_err(|error| error.to_string()),
         Host::Window | Host::Shell => iced::daemon(boot, Overlay::update, Overlay::view)
             .antialiasing(true)
+            .font(kirie_annotate::text::EMOJI_FONT)
             .title(Overlay::title)
             .theme(Overlay::theme)
             .subscription(Overlay::subscription)

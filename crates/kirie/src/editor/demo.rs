@@ -40,18 +40,23 @@ pub fn marked(document: Document) -> Document {
             shadow: true,
             overflow: false,
         }));
-    let tilted = document
+    let tilted: Vec<_> = document
         .shapes()
-        .find(|shape| matches!(shape.kind, Kind::Rectangle { .. }))
-        .cloned();
-    match tilted {
-        Some(shape) => document.apply(Op::Reshape {
-            id: shape.id,
-            kind: shape.kind,
-            rotation: -0.06,
-        }),
-        None => document,
-    }
+        .filter_map(|shape| match shape.kind {
+            Kind::Rectangle { .. } => Some((shape.clone(), -0.06)),
+            Kind::Sticker { .. } => Some((shape.clone(), 0.2)),
+            _ => None,
+        })
+        .collect();
+    tilted
+        .into_iter()
+        .fold(document, |document, (shape, rotation)| {
+            document.apply(Op::Reshape {
+                id: shape.id,
+                kind: shape.kind,
+                rotation,
+            })
+        })
 }
 
 /// The mark the demo shows as picked, with its handles.
@@ -133,7 +138,7 @@ fn strokes(image: Image) -> Vec<(Kind, Paint)> {
         (
             Kind::Text {
                 at: image.at(0.40, 0.43),
-                text: "Cut it out, mark it up".into(),
+                text: "Cut it out, mark it up \u{2702}\u{fe0f}".into(),
             },
             label,
         ),
@@ -158,6 +163,16 @@ fn strokes(image: Image) -> Vec<(Kind, Paint)> {
             image.paint(HIGHLIGHT, 18.0),
         ),
         (Kind::Pen { points: squiggle }, image.paint(BLUE, 4.0)),
+        (
+            Kind::Sticker {
+                rect: Rect::from_center_size(
+                    image.at(0.56, 0.84),
+                    (0.14 * image.height, 0.14 * image.height),
+                ),
+                emoji: "\u{1f44d}".into(),
+            },
+            image.paint(WHITE, 4.0),
+        ),
         (
             Kind::Line {
                 from: image.at(0.06, 0.80),
@@ -220,7 +235,7 @@ mod tests {
             .shapes()
             .map(|shape| std::mem::discriminant(&shape.kind))
             .collect();
-        assert_eq!(kinds.len(), 12);
+        assert_eq!(kinds.len(), 13);
         let image = Rect::new(0.0, 0.0, 1600.0, 900.0);
         for shape in document.shapes() {
             let bounds = shape.kind.bounds();

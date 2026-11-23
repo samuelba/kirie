@@ -201,9 +201,12 @@ pub fn draw(pixmap: &mut Pixmap, primitive: &Primitive, typesetter: &mut Typeset
         } => {
             let outline = typesetter.outline(text, *font, *size, *at, *align, *centered);
             if let Some(halo) = halo {
-                stroke(pixmap, &outline, *halo, size * 0.16);
+                stroke(pixmap, &outline.silhouette(), *halo, size * 0.16);
             }
-            fill(pixmap, &outline, *color, FillRule::NonZero);
+            fill(pixmap, &outline.plain, *color, FillRule::NonZero);
+            for (layer, own) in &outline.layers {
+                fill(pixmap, layer, own.unwrap_or(*color), FillRule::NonZero);
+            }
         }
         Primitive::Cover { path, color } => cover(pixmap, path, *color),
         Primitive::Effect { rect, effect } => {
