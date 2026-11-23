@@ -39,7 +39,11 @@ impl Editor {
             text_color: Some(palette.text),
             ..container::Style::default()
         });
-        match self.closing_dialog().or_else(|| self.about_dialog()) {
+        let dialog = self
+            .closing_dialog()
+            .or_else(|| self.about_dialog())
+            .or_else(|| self.settings_dialog());
+        match dialog {
             Some(dialog) => stack![window, dialog].into(),
             None => window.into(),
         }
@@ -94,40 +98,16 @@ impl Editor {
             .spacing(space::S)
             .align_y(Alignment::Center);
         if has_image {
-            actions = actions
-                .push(divider(palette))
-                .push(icon_button(
-                    Icon::Delete,
-                    "Discard the image (Ctrl+W)",
-                    palette,
-                    false,
-                    Some(Message::Discard),
-                ))
-                .push(icon_button(
-                    Icon::Project,
-                    "Save editable project to Pictures, with the original under the marks \
-                     (Ctrl+Alt+S)",
-                    palette,
-                    false,
-                    Some(Message::SaveProject),
-                ))
-                .push(icon_button(
-                    Icon::SaveAs,
-                    "Save as… (Ctrl+Shift+S)",
-                    palette,
-                    false,
-                    Some(Message::SaveAs),
-                ))
-                .push(icon_button(
-                    Icon::Save,
-                    "Save to Pictures and copy (Ctrl+S or Shift+Enter)",
-                    palette,
-                    false,
-                    Some(Message::Save),
-                ))
-                .push(primary_button(Icon::Copy, "Copy", palette, Message::Copy));
+            actions = actions.push(divider(palette)).push(self.image_actions());
         }
-        actions = actions.push(divider(palette)).push(theme);
+        let settings = icon_button(
+            Icon::Settings,
+            "Settings (Ctrl+,)",
+            palette,
+            false,
+            Some(Message::Settings(super::settings::Event::Open)),
+        );
+        actions = actions.push(divider(palette)).push(settings).push(theme);
         let document = self.document();
         let styles = controls::styles(document.style, palette, Message::PickStyle);
         container(
@@ -143,6 +123,45 @@ impl Editor {
         .padding([space::S, space::L])
         .style(panel(palette))
         .into()
+    }
+
+    /// Discarding, saving and copying the image.
+    fn image_actions(&self) -> Element<'_, Message> {
+        let palette = self.palette;
+        row![]
+            .push(icon_button(
+                Icon::Delete,
+                "Discard the image (Ctrl+W)",
+                palette,
+                false,
+                Some(Message::Discard),
+            ))
+            .push(icon_button(
+                Icon::Project,
+                "Save editable project to Pictures, with the original under the marks \
+                     (Ctrl+Alt+S)",
+                palette,
+                false,
+                Some(Message::SaveProject),
+            ))
+            .push(icon_button(
+                Icon::SaveAs,
+                "Save as… (Ctrl+Shift+S)",
+                palette,
+                false,
+                Some(Message::SaveAs),
+            ))
+            .push(icon_button(
+                Icon::Save,
+                "Save to Pictures and copy (Ctrl+S or Shift+Enter)",
+                palette,
+                false,
+                Some(Message::Save),
+            ))
+            .push(primary_button(Icon::Copy, "Copy", palette, Message::Copy))
+            .spacing(space::S)
+            .align_y(Alignment::Center)
+            .into()
     }
 
     /// Kirie's icon and name, which open the about card.

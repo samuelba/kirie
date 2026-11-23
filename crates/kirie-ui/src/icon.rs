@@ -67,6 +67,7 @@ icons! {
     Pipette => "pipette",
     BringToFront => "bring-to-front",
     SendToBack => "send-to-back",
+    Settings => "settings",
 }
 
 impl Icon {

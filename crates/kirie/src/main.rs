@@ -19,6 +19,7 @@ mod picker;
 mod region;
 mod save;
 mod selection;
+mod settings;
 mod shortcuts;
 mod store;
 mod swatches;
@@ -92,6 +93,9 @@ enum Command {
     /// Opens the editor with the about card.
     #[command(hide = true)]
     About,
+    /// Opens the editor with the settings.
+    #[command(hide = true)]
+    Settings,
 }
 
 #[derive(Debug, Subcommand)]
@@ -144,7 +148,8 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Debug(Debug::Globals)) => print_globals(),
         Some(Command::ServeClipboard { kind }) => clipboard::serve(&kind),
         Some(Command::Tray) => tray::run(),
-        Some(Command::About) => about(),
+        Some(Command::About) => show(editor::Card::About),
+        Some(Command::Settings) => show(editor::Card::Settings),
         Some(Command::Shortcuts(Shortcuts::Install)) => shortcuts::install(),
         Some(Command::SelfUpdate) => update::run(),
         Some(Command::GnomeExtension(GnomeExtension::Install)) => extension::install(),
@@ -211,16 +216,16 @@ fn edit(path: Option<&std::path::Path>) -> anyhow::Result<()> {
         .map(editor::load)
         .transpose()
         .map_err(anyhow::Error::msg)?;
-    editor::run(loaded, false, token).map_err(anyhow::Error::from)
+    editor::run(loaded, None, token).map_err(anyhow::Error::from)
 }
 
-/// Shows the about card in the running editor, or in a new one.
-fn about() -> anyhow::Result<()> {
+/// Shows `card` in the running editor, or in a new one.
+fn show(card: editor::Card) -> anyhow::Result<()> {
     let token = activation::from_env();
-    if block_on(ipc::about(token.as_deref()))? {
+    if block_on(ipc::show(card, token.as_deref()))? {
         return Ok(());
     }
-    editor::run(None, true, token).map_err(anyhow::Error::from)
+    editor::run(None, Some(card), token).map_err(anyhow::Error::from)
 }
 
 /// Runs a future to completion before any UI event loop exists.

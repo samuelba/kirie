@@ -18,6 +18,8 @@ pub enum Request {
     Present(Option<String>),
     /// Brings the editor window to the front with the about card open.
     About(Option<String>),
+    /// Brings the editor window to the front with the settings open.
+    Settings(Option<String>),
     /// A capture the editor hid for has ended without handing it anything.
     Resume,
 }
@@ -57,6 +59,11 @@ impl Service {
         self.send(Request::About(token_of(token)))
     }
 
+    /// Brings the editor window to the front with the settings open.
+    fn settings(&self, token: &str) -> fdo::Result<()> {
+        self.send(Request::Settings(token_of(token)))
+    }
+
     /// Shows the editor window again if it hid for a capture.
     fn resume(&self) -> fdo::Result<()> {
         self.send(Request::Resume)
@@ -72,6 +79,7 @@ trait Kirie {
     fn open(&self, path: &str, token: &str) -> zbus::Result<()>;
     fn present(&self, token: &str) -> zbus::Result<()>;
     fn about(&self, token: &str) -> zbus::Result<()>;
+    fn settings(&self, token: &str) -> zbus::Result<()>;
     fn resume(&self) -> zbus::Result<()>;
 }
 
@@ -102,9 +110,9 @@ pub async fn hand_over(path: Option<&Path>, token: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
-/// Opens the about card in a running editor, with the activation `token` this Kirie was started
-/// with. True when one did.
-pub async fn about(token: Option<&str>) -> bool {
+/// Opens `card` in a running editor, with the activation `token` this Kirie was started with.
+/// True when one did.
+pub async fn show(card: crate::editor::Card, token: Option<&str>) -> bool {
     let token = token.unwrap_or_default();
     let attempt = async {
         let connection = zbus::Connection::session().await?;
@@ -112,12 +120,16 @@ pub async fn about(token: Option<&str>) -> bool {
         if !dbus.name_has_owner(BUS_NAME.try_into()?).await? {
             return Ok::<_, zbus::Error>(false);
         }
-        KirieProxy::new(&connection).await?.about(token).await?;
+        let editor = KirieProxy::new(&connection).await?;
+        match card {
+            crate::editor::Card::About => editor.about(token).await?,
+            crate::editor::Card::Settings => editor.settings(token).await?,
+        }
         Ok(true)
     };
     attempt
         .await
-        .inspect_err(|error| tracing::debug!(%error, "no editor to show the about card"))
+        .inspect_err(|error| tracing::debug!(%error, "no editor to show the card"))
         .unwrap_or(false)
 }
 
@@ -170,6 +182,7 @@ mod tests {
         assert!(service.open("/abs/shot.png", "").is_ok());
         assert!(service.present("token").is_ok());
         assert!(service.about("").is_ok());
+        assert!(service.settings("").is_ok());
         assert!(service.resume().is_ok());
         assert_eq!(
             receiver.try_recv().ok(),
@@ -180,6 +193,7 @@ mod tests {
             Some(Request::Present(Some("token".to_owned())))
         );
         assert_eq!(receiver.try_recv().ok(), Some(Request::About(None)));
+        assert_eq!(receiver.try_recv().ok(), Some(Request::Settings(None)));
         assert_eq!(receiver.try_recv().ok(), Some(Request::Resume));
     }
 }

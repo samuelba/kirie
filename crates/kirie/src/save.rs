@@ -73,8 +73,13 @@ impl Format {
     }
 }
 
-/// `~/Pictures/Screenshots`, or the home folder's `Screenshots` without a pictures folder.
+/// The folder screenshots are saved to, as set in the settings.
 pub fn screenshots_dir() -> PathBuf {
+    crate::settings::Settings::load().folder()
+}
+
+/// `~/Pictures/Screenshots`, or the home folder's `Screenshots` without a pictures folder.
+pub fn default_dir() -> PathBuf {
     let dirs = directories::UserDirs::new();
     let pictures = dirs
         .as_ref()
@@ -85,18 +90,24 @@ pub fn screenshots_dir() -> PathBuf {
     pictures.join("Screenshots")
 }
 
-/// `Kirie_2026-11-22_10-30-15.png`, with a counter when that name is taken.
+/// `Kirie_2026-11-22_10-30-15.png`, or as the settings name it, with a counter when that name
+/// is taken.
 pub fn file_name(dir: &Path, now: &jiff::Zoned, taken: impl Fn(&Path) -> bool) -> PathBuf {
-    named(dir, now, "png", taken)
+    named(dir, &stem(now), "png", taken)
 }
 
-/// `Kirie_2026-11-22_10-30-15`, the name of a screenshot taken `now`, without extension.
+/// The name of a screenshot taken `now`, without extension, as the settings name it.
 pub fn stem(now: &jiff::Zoned) -> String {
+    crate::settings::Settings::load().stem(now)
+}
+
+/// `Kirie_2026-11-22_10-30-15`: the name a capture handed to the editor gets, whatever the
+/// settings say, so that only such files are ever deleted.
+fn handoff_stem(now: &jiff::Zoned) -> String {
     format!("Kirie_{}", now.strftime("%Y-%m-%d_%H-%M-%S"))
 }
 
-fn named(dir: &Path, now: &jiff::Zoned, extension: &str, taken: impl Fn(&Path) -> bool) -> PathBuf {
-    let stem = stem(now);
+fn named(dir: &Path, stem: &str, extension: &str, taken: impl Fn(&Path) -> bool) -> PathBuf {
     let first = dir.join(format!("{stem}.{extension}"));
     if !taken(&first) {
         return first;
@@ -162,7 +173,7 @@ pub fn save_handoff(project: &kirie_annotate::project::Project) -> Result<PathBu
         .map_err(|error| format!("cannot protect {}: {error}", dir.display()))?;
     let path = named(
         &dir,
-        &jiff::Zoned::now(),
+        &handoff_stem(&jiff::Zoned::now()),
         kirie_annotate::project::EXTENSION,
         Path::exists,
     );
@@ -185,7 +196,7 @@ pub async fn save_project(project: kirie_annotate::project::Project) -> Result<P
             .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
         let path = named(
             &dir,
-            &jiff::Zoned::now(),
+            &stem(&jiff::Zoned::now()),
             kirie_annotate::project::EXTENSION,
             Path::exists,
         );
@@ -219,6 +230,9 @@ pub async fn save(image: RgbaImage) -> Result<PathBuf, String> {
 /// whether the copy worked. Only the save must work.
 pub async fn save_and_copy(image: RgbaImage) -> Result<(PathBuf, bool), String> {
     let path = save(image.clone()).await?;
+    if !crate::settings::Settings::load().copy_on_save {
+        return Ok((path, false));
+    }
     let copied = crate::clipboard::copy(image)
         .await
         .inspect_err(|error| tracing::warn!(%error, "saved, but not copied"))
@@ -367,5 +381,15 @@ mod tests {
     #[test]
     fn the_folder_is_called_screenshots() {
         assert!(screenshots_dir().ends_with("Screenshots"));
+        assert_eq!(
+            screenshots_dir(),
+            default_dir(),
+            "unless the settings say otherwise"
+        );
+    }
+
+    #[test]
+    fn handoffs_keep_kiries_own_names() {
+        assert_eq!(handoff_stem(&noon()), "Kirie_2026-11-22_12-00-05");
     }
 }

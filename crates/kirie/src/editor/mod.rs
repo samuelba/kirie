@@ -5,6 +5,7 @@ mod canvas;
 mod closing;
 mod demo;
 mod frame;
+mod settings;
 mod view;
 mod viewport;
 
@@ -186,6 +187,7 @@ pub enum Message {
     Discard,
     /// Opens or closes the about card.
     About(bool),
+    Settings(settings::Event),
     OpenLink(&'static str),
     Opened(Result<Loaded, String>),
     Dropped(crate::drops::Dropped),
@@ -255,6 +257,8 @@ pub struct Editor {
     closing: Closing,
     /// The about card is open.
     about: bool,
+    /// The settings card, while it is open.
+    settings: Option<settings::Form>,
     /// What to do once the question about unsaved changes is answered.
     then: Then,
     viewport: Viewport,
@@ -324,6 +328,7 @@ impl Editor {
             kept: blank,
             closing: Closing::No,
             about: false,
+            settings: None,
             then: Then::Exit,
             viewport: Viewport::fitted(),
             cropping: None,
@@ -558,6 +563,8 @@ impl Editor {
             | Message::Pasted(_) => return self.edit_marks(message),
             Message::Escape if self.closing == Closing::Asking => self.closing = Closing::No,
             Message::Escape | Message::About(false) if self.about => self.about = false,
+            Message::Escape if self.settings.is_some() => self.settings = None,
+            Message::Settings(event) => return self.edit_settings(event),
             Message::About(_) | Message::OpenLink(_) | Message::ShowInFiles(_) => {
                 return self.outside(message);
             }
@@ -748,6 +755,10 @@ impl Editor {
             Message::Ipc(crate::ipc::Request::Present(token)) => self.raise(token),
             Message::Ipc(crate::ipc::Request::About(token)) => {
                 self.about = true;
+                self.raise(token)
+            }
+            Message::Ipc(crate::ipc::Request::Settings(token)) => {
+                let _ = self.edit_settings(settings::Event::Open);
                 self.raise(token)
             }
             Message::Ipc(crate::ipc::Request::Resume) if self.window.is_none() => self.raise(None),
@@ -1381,7 +1392,8 @@ impl Editor {
         let quiet = self.typing.is_some()
             || self.picker.is_some()
             || self.closing != Closing::No
-            || self.about;
+            || self.about
+            || self.settings.is_some();
         let keys = if quiet {
             event::listen_with(typing_key)
         } else if self.cropping.is_some() {
@@ -1647,6 +1659,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("v") if command => Some(Message::Paste),
         keyboard::Key::Character("w") if command => Some(Message::Discard),
         keyboard::Key::Character("a") if command => Some(Message::SelectAll),
+        keyboard::Key::Character(",") if command => Some(Message::Settings(settings::Event::Open)),
         keyboard::Key::Character("o") if command => Some(Message::Open),
         keyboard::Key::Character("s") if command && modifiers.shift() => Some(Message::SaveAs),
         keyboard::Key::Character("s") if command && modifiers.alt() => Some(Message::SaveProject),
@@ -1665,9 +1678,16 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
     }
 }
 
-/// Opens the editor window, with `loaded` in it if given, and the about card if `about`; the
-/// activation `token` brings it to the front.
-pub fn run(loaded: Option<Loaded>, about: bool, token: Option<String>) -> iced::Result {
+/// A card the editor opens with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Card {
+    About,
+    Settings,
+}
+
+/// Opens the editor window, with `loaded` in it if given, and `card` if given; the activation
+/// `token` brings it to the front.
+pub fn run(loaded: Option<Loaded>, card: Option<Card>, token: Option<String>) -> iced::Result {
     let loaded = std::sync::Mutex::new(loaded);
     iced::daemon(
         move || {
@@ -1675,7 +1695,13 @@ pub fn run(loaded: Option<Loaded>, about: bool, token: Option<String>) -> iced::
                 loaded.lock().ok().and_then(|mut loaded| loaded.take()),
                 token.clone(),
             );
-            editor.about = about;
+            match card {
+                Some(Card::About) => editor.about = true,
+                Some(Card::Settings) => {
+                    let _ = editor.edit_settings(settings::Event::Open);
+                }
+                None => {}
+            }
             (editor, task)
         },
         Editor::update,

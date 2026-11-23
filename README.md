@@ -63,7 +63,7 @@ the selection.
 | Key | Does |
 |---|---|
 | Enter or Ctrl+C | Copy the picture and close |
-| Ctrl+S, Shift+Enter or Ctrl+Enter | Save it to `~/Pictures/Screenshots`, copy it too, and close |
+| Ctrl+S, Shift+Enter or Ctrl+Enter | Save it to `~/Pictures/Screenshots` (or the folder in the settings), copy it too, and close |
 | Ctrl+Shift+S | Save it where you choose, as PNG, JPEG, WebP or a `.kirie` project |
 | Ctrl+E | Open it in the editor, with its marks still editable |
 | Ctrl+A | Select every screen |
@@ -95,6 +95,11 @@ with that region selected, so Enter takes it at once. Moving or resizing the sel
 Right-click a color, or press +, to open the color picker. Its lowest strip sets how opaque
 the color is, for marks you can see through. Its pipette takes a color from the screenshot: a loupe follows the pointer with the color under it, and a click takes it (Esc
 puts the pipette down).
+
+**Settings** (the gear in the editor's header, Ctrl+, or the tray menu) choose the folder
+screenshots are saved to, their file name (with `%Y`, `%m`, `%d`, `%H`, `%M` and `%S` for the
+time they were taken), and whether saving copies them too. They live in
+`~/.config/kirie/settings.ron`.
 
 Kirie keeps the style, color, weight, text look, shadow, spotlight brightness and frame you last
 used for the next screenshot, in `~/.local/state/kirie/drawing.ron`.

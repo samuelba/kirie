@@ -48,6 +48,38 @@ pub async fn open_image() -> Result<Option<PathBuf>, String> {
     Ok(uris.first().and_then(|uri| portal::file_path(uri)))
 }
 
+/// Asks for a folder, starting in `current`; `None` when the dialog was canceled.
+pub async fn choose_folder(current: &Path) -> Result<Option<PathBuf>, String> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let token = portal::token();
+    let mut folder = current.as_os_str().as_bytes().to_vec();
+    folder.push(0);
+    let options: HashMap<&str, Variant<'_>> = HashMap::from([
+        ("handle_token", Variant::from(token.as_str())),
+        ("modal", Variant::from(true)),
+        ("directory", Variant::from(true)),
+        ("current_folder", Variant::from(folder)),
+    ]);
+    let results = match portal::request(
+        "org.freedesktop.portal.FileChooser",
+        "OpenFile",
+        &token,
+        &("", "Save screenshots in", options),
+    )
+    .await
+    {
+        Ok(results) => results,
+        Err(CaptureError::Canceled) => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let uris: Vec<String> = results
+        .get("uris")
+        .and_then(|uris| Vec::<String>::try_from(uris.clone()).ok())
+        .unwrap_or_default();
+    Ok(uris.first().and_then(|uri| portal::file_path(uri)))
+}
+
 /// A filter of the file dialog: its name, and patterns (0) or mime types (1).
 type Filter = (&'static str, Vec<(u32, &'static str)>);
 

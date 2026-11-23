@@ -32,16 +32,18 @@ enum Entry {
     /// A screenshot after this many seconds.
     Delayed(u32),
     Separator,
+    Settings,
     About,
     Quit,
 }
 
-const ENTRIES: [Entry; 7] = [
+const ENTRIES: [Entry; 8] = [
     Entry::Open,
     Entry::Capture,
     Entry::Delayed(3),
     Entry::Delayed(10),
     Entry::Separator,
+    Entry::Settings,
     Entry::About,
     Entry::Quit,
 ];
@@ -63,6 +65,7 @@ impl Entry {
             Self::Capture => Some("Take a Screenshot".to_owned()),
             Self::Delayed(seconds) => Some(format!("Take a Screenshot in {seconds} Seconds")),
             Self::Separator => None,
+            Self::Settings => Some("Settings…".to_owned()),
             Self::About => Some("About Kirie".to_owned()),
             Self::Quit => Some("Quit".to_owned()),
         }
@@ -74,6 +77,7 @@ impl Entry {
             Self::Capture => Some(Command::Capture),
             Self::Delayed(seconds) => Some(Command::CaptureIn(seconds)),
             Self::Separator => None,
+            Self::Settings => Some(Command::Settings),
             Self::About => Some(Command::About),
             Self::Quit => Some(Command::Quit),
         }
@@ -272,12 +276,13 @@ mod tests {
                 Some("Take a Screenshot in 3 Seconds".to_owned()),
                 Some("Take a Screenshot in 10 Seconds".to_owned()),
                 None,
+                Some("Settings…".to_owned()),
                 Some("About Kirie".to_owned()),
                 Some("Quit".to_owned()),
             ]
         );
         let ids: Vec<i32> = children.iter().map(|child| child.id).collect();
-        assert_eq!(ids, [1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(ids, [1, 2, 3, 4, 5, 6, 7, 8]);
         assert!(children[4].properties.contains_key("type"));
     }
 
@@ -298,8 +303,9 @@ mod tests {
         assert_eq!(command_for(2, "clicked"), Some(Command::Capture));
         assert_eq!(command_for(3, "clicked"), Some(Command::CaptureIn(3)));
         assert_eq!(command_for(4, "clicked"), Some(Command::CaptureIn(10)));
-        assert_eq!(command_for(6, "clicked"), Some(Command::About));
-        assert_eq!(command_for(7, "clicked"), Some(Command::Quit));
+        assert_eq!(command_for(6, "clicked"), Some(Command::Settings));
+        assert_eq!(command_for(7, "clicked"), Some(Command::About));
+        assert_eq!(command_for(8, "clicked"), Some(Command::Quit));
     }
 
     #[test]

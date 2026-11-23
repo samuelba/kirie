@@ -38,6 +38,7 @@ pub enum Command {
     Capture,
     /// A screenshot after this many seconds.
     CaptureIn(u32),
+    Settings,
     About,
     Quit,
 }
@@ -110,6 +111,7 @@ async fn obey(command: Command, token: &Token) {
             tokio::time::sleep(MENU_CLOSES).await;
             start(&["capture", "--delay", &seconds.to_string()], token);
         }
+        Command::Settings => start(&["settings"], token),
         Command::About => start(&["about"], token),
         Command::Quit => {}
     }
