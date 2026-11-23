@@ -33,9 +33,9 @@ const HANDLE_REACH: f32 = 8.0;
 /// How close to a mark the select tool picks it, in logical pixels.
 const MARK_REACH: f64 = 6.0;
 /// How long the flash that tells the screen was taken takes to fade.
-const FLASH: std::time::Duration = std::time::Duration::from_millis(300);
+const FLASH: std::time::Duration = std::time::Duration::from_millis(200);
 /// How bright the flash starts, as the opacity of white over the screens.
-const FLASH_START: f32 = 0.8;
+const FLASH_START: f32 = 0.35;
 
 /// One frozen screen.
 #[derive(Debug)]
