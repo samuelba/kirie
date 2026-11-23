@@ -281,13 +281,9 @@ impl canvas::Program<Message> for Backdrop<'_> {
             document.visible()
         };
         let kept = to_rectangle(transform.transform_rect_bbox(shown));
-        if shown == canvas {
-            frame.fill_rectangle(
-                area.position() + Vector::new(0.0, 6.0),
-                area.size(),
-                Color::BLACK.scale_alpha(0.25),
-            );
-        } else {
+        // Without a frame the picture stands alone: anything drawn around it would look like
+        // part of it, though it is never saved.
+        if shown != canvas {
             let on_screen = area
                 .intersection(&Rectangle::with_size(bounds.size()))
                 .unwrap_or(area);
