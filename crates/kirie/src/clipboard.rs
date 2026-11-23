@@ -11,6 +11,8 @@ pub const SERVE: &str = "serve-clipboard";
 pub const PNG: &str = "image/png";
 /// What the background copy offers.
 pub const KINDS: [&str; 2] = [PNG, crate::marks::MIME];
+/// The most bytes read from the clipboard.
+const MAX_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Encodes `image` as PNG and hands it to a background process that offers it on the clipboard.
 pub async fn copy(image: RgbaImage) -> Result<(), String> {
@@ -43,6 +45,19 @@ pub async fn offer(bytes: Vec<u8>, kind: &'static str) -> Result<(), String> {
             .ok_or("the clipboard service has no input")?
             .write_all(&bytes)
             .map_err(|error| format!("cannot hand it to the clipboard: {error}"))?;
+        // A service that cannot take the clipboard, as where the compositor lets no program
+        // do so, gives up at once; one that took it keeps running.
+        for _ in 0..10 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            match child.try_wait() {
+                Ok(Some(status)) if !status.success() => {
+                    return Err("the clipboard cannot be reached here".to_owned());
+                }
+                Ok(Some(_)) => return Ok(()),
+                Ok(None) => {}
+                Err(error) => return Err(format!("cannot follow the clipboard service: {error}")),
+            }
+        }
         Ok(())
     })
     .await
@@ -70,14 +85,15 @@ pub async fn paste(kinds: &'static [&'static str]) -> Result<(String, Vec<u8>), 
             .iter()
             .find(|kind| offered.contains(**kind))
             .ok_or("there is no image on the clipboard")?;
-        let (mut pipe, _) = get_contents(
+        let (pipe, _) = get_contents(
             ClipboardType::Regular,
             Seat::Unspecified,
             MimeType::Specific(kind),
         )
         .map_err(|error| format!("cannot read the clipboard ({error})"))?;
         let mut bytes = Vec::new();
-        pipe.read_to_end(&mut bytes)
+        pipe.take(MAX_BYTES)
+            .read_to_end(&mut bytes)
             .map_err(|error| format!("cannot read the clipboard: {error}"))?;
         Ok(((*kind).to_owned(), bytes))
     })

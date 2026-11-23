@@ -17,6 +17,8 @@ const FORMAT: &str = "kirie";
 const VERSION: u32 = 3;
 /// What a project without image marks is written as, so an older Kirie still opens it.
 const PLAIN: u32 = 2;
+/// The most pixels a project's image marks may hold together.
+const MAX_PIXELS: u64 = 4 * crate::pixels::MAX_PIXELS;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Project {
@@ -106,7 +108,8 @@ pub fn load(reader: impl Read + Seek) -> Result<Project, ProjectError> {
     let mut png = Vec::new();
     zip.by_name("image.png")?.read_to_end(&mut png)?;
     let image = image::load_from_memory_with_format(&png, image::ImageFormat::Png)?.to_rgba8();
-    let document: Document = ron::from_str(&read_text(&mut zip, "document.ron")?)?;
+    let text = read_text(&mut zip, "document.ron")?;
+    let document: Document = crate::pixels::budget(MAX_PIXELS, || ron::from_str(&text))?;
     if image.dimensions() != (document.width, document.height) {
         return Err(ProjectError::SizeMismatch {
             expected: (document.width, document.height),

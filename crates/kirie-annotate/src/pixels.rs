@@ -1,6 +1,7 @@
 //! The pixels of an image mark: shared between the document versions undo keeps, and written
 //! into projects and the clipboard as a PNG.
 
+use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -10,8 +11,49 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// The widest or tallest image a mark may hold, in pixels.
 pub const MAX_SIDE: u32 = 16_384;
+/// The most pixels an image mark may hold: an 8K screenshot fits, with room to spare.
+pub const MAX_PIXELS: u64 = 48_000_000;
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    /// How many more pixels the images being read may hold together, while [`budget`] runs.
+    static LEFT: Cell<Option<u64>> = const { Cell::new(None) };
+}
+
+/// Runs `read` with image marks it reads holding `pixels` together at most, so a project or a
+/// paste full of small files that unpack into huge images is refused before they unpack.
+pub fn budget<T>(pixels: u64, read: impl FnOnce() -> T) -> T {
+    let before = LEFT.replace(Some(pixels));
+    let read = read();
+    LEFT.set(before);
+    read
+}
+
+/// Whether `width`×`height` is an image a mark may hold, taking it from the budget if one runs.
+fn allowed(width: u32, height: u32) -> Result<(), String> {
+    let pixels = u64::from(width) * u64::from(height);
+    if width > MAX_SIDE || height > MAX_SIDE || pixels > MAX_PIXELS {
+        return Err(format!("an image of {width}×{height} pixels is too large"));
+    }
+    match LEFT.get() {
+        Some(left) if pixels > left => Err("the images hold too many pixels together".to_owned()),
+        Some(left) => {
+            LEFT.set(Some(left - pixels));
+            Ok(())
+        }
+        None => Ok(()),
+    }
+}
+
+/// Whether `width`×`height` is an image a mark may hold.
+pub fn fits(width: u32, height: u32) -> bool {
+    width > 0
+        && height > 0
+        && width <= MAX_SIDE
+        && height <= MAX_SIDE
+        && u64::from(width) * u64::from(height) <= MAX_PIXELS
+}
 
 #[derive(Clone)]
 pub struct Pixels {
@@ -70,18 +112,19 @@ impl Serialize for Pixels {
 
 impl<'de> Deserialize<'de> for Pixels {
     fn deserialize<D: Deserializer<'de>>(from: D) -> Result<Self, D::Error> {
+        use image::ImageDecoder as _;
         use serde::de::Error as _;
         let text = String::deserialize(from)?;
         let png = base64::engine::general_purpose::STANDARD
             .decode(text)
             .map_err(D::Error::custom)?;
-        let mut reader =
-            image::ImageReader::with_format(std::io::Cursor::new(png), image::ImageFormat::Png);
-        let mut limits = image::Limits::default();
-        limits.max_image_width = Some(MAX_SIDE);
-        limits.max_image_height = Some(MAX_SIDE);
-        reader.limits(limits);
-        let image = reader.decode().map_err(D::Error::custom)?.to_rgba8();
+        let decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(png))
+            .map_err(D::Error::custom)?;
+        let (width, height) = decoder.dimensions();
+        allowed(width, height).map_err(D::Error::custom)?;
+        let image = image::DynamicImage::from_decoder(decoder)
+            .map_err(D::Error::custom)?
+            .to_rgba8();
         Ok(Self::new(image))
     }
 }
@@ -102,6 +145,22 @@ mod tests {
         assert_ne!(back.id(), pixels.id());
         assert_ne!(Pixels::new(RgbaImage::new(3, 2)), pixels);
         assert_eq!(format!("{pixels:?}"), "Pixels(3×2)");
+    }
+
+    #[test]
+    fn images_too_large_together_are_refused_before_they_unpack() {
+        let text = ron::to_string(&Pixels::new(RgbaImage::new(100, 100))).unwrap();
+        let two = format!("({text}, {text})");
+        let read = |pixels| budget(pixels, || ron::from_str::<(Pixels, Pixels)>(&two));
+        assert!(read(20_000).is_ok());
+        assert!(read(15_000).is_err());
+        assert!(
+            ron::from_str::<(Pixels, Pixels)>(&two).is_ok(),
+            "no budget outside one"
+        );
+        let wide = ron::to_string(&Pixels::new(RgbaImage::new(MAX_SIDE + 1, 1))).unwrap();
+        assert!(ron::from_str::<Pixels>(&wide).is_err());
+        assert!(fits(10, 10) && !fits(0, 10) && !fits(MAX_SIDE, MAX_SIDE));
     }
 
     #[test]

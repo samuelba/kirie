@@ -213,7 +213,7 @@ impl Document {
             })
             .max()
             .unwrap_or(0)
-            + 1
+            .saturating_add(1)
     }
 
     /// What the saved image covers, in whole pixels: the image area kept and, when the frame

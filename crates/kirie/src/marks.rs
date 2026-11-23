@@ -14,6 +14,14 @@ const STEP: f64 = 12.0;
 const MOST: usize = 5000;
 /// How far out a pasted mark may reach, in image pixels; anything beyond is not a real mark.
 const FARTHEST: f64 = 1.0e6;
+/// The most bytes of marks read from the clipboard.
+pub const MAX_BYTES: usize = 256 * 1024 * 1024;
+/// The most pixels the image marks of one paste hold together.
+const MAX_PIXELS: u64 = 4 * kirie_annotate::pixels::MAX_PIXELS;
+/// The longest pasted text, in characters, and the most points of a pasted stroke.
+const LONGEST: usize = 100_000;
+/// The highest step number pasted.
+const HIGHEST: u32 = 9999;
 
 /// Marks on the clipboard.
 #[derive(Debug, Serialize, Deserialize)]
@@ -111,44 +119,65 @@ pub fn prune(document: &Document, picked: &mut Vec<ShapeId>) {
     picked.retain(|id| document.shape(*id).is_some());
 }
 
-/// The picked marks, bottom first, as the clipboard holds them; `None` when none is picked.
-pub fn encode(document: &Document, picked: &[ShapeId]) -> Option<Result<Vec<u8>, String>> {
-    let marks: Vec<Shape> = document
+/// The picked marks, bottom first.
+pub fn of(document: &Document, picked: &[ShapeId]) -> Vec<Shape> {
+    document
         .shapes()
         .filter(|shape| picked.contains(&shape.id))
         .cloned()
-        .collect();
-    if marks.is_empty() {
-        return None;
-    }
-    Some(
-        ron::to_string(&Clip { marks })
-            .map(String::into_bytes)
-            .map_err(|error| format!("cannot copy the marks: {error}")),
-    )
+        .collect()
+}
+
+/// `marks` as the clipboard holds them. Image marks make this slow: run it off the UI thread.
+pub fn encode(marks: Vec<Shape>) -> Result<Vec<u8>, String> {
+    ron::to_string(&Clip { marks })
+        .map(String::into_bytes)
+        .map_err(|error| format!("cannot copy the marks: {error}"))
 }
 
 /// Marks read from the clipboard, which any program may have put there: marks out of all
 /// reason are left out.
 pub fn decode(bytes: &[u8]) -> Result<Vec<Shape>, String> {
+    if bytes.len() > MAX_BYTES {
+        return Err("too many marks are copied to paste them".to_owned());
+    }
     let text = std::str::from_utf8(bytes).map_err(|_| "the copied marks are not text")?;
-    let clip: Clip =
-        ron::from_str(text).map_err(|error| format!("the copied marks cannot be read: {error}"))?;
+    let clip: Clip = kirie_annotate::pixels::budget(MAX_PIXELS, || ron::from_str(text))
+        .map_err(|error| format!("the copied marks cannot be read: {error}"))?;
     if clip.marks.len() > MOST {
         return Err(format!("more than {MOST} marks cannot be pasted at once"));
     }
     Ok(clip.marks.into_iter().filter_map(sane).collect())
 }
 
-/// `shape` if its numbers are finite and near, with its text size kept in range.
+/// `shape` if its numbers are finite and near and its text and strokes not endless, with its
+/// text size and step number kept in range, and turned only if its kind turns.
 fn sane(shape: Shape) -> Option<Shape> {
     let bounds = shape.kind.bounds();
     let near = [bounds.x0, bounds.y0, bounds.x1, bounds.y1]
         .iter()
         .all(|value| value.is_finite() && value.abs() <= FARTHEST);
-    if !near || !shape.rotation.is_finite() {
+    let bounded = match &shape.kind {
+        Kind::Text { text, .. } => text.chars().count() <= LONGEST,
+        Kind::Pen { points } | Kind::Highlighter { points } => points.len() <= LONGEST,
+        Kind::Image { .. } => bounds.width() > 0.0 && bounds.height() > 0.0,
+        _ => true,
+    };
+    if !near || !bounded || !shape.rotation.is_finite() {
         return None;
     }
+    let kind = match shape.kind {
+        Kind::Counter { at, number } => Kind::Counter {
+            at,
+            number: number.min(HIGHEST),
+        },
+        kind => kind,
+    };
+    let rotation = if kirie_annotate::edit::turns(&kind) {
+        shape.rotation
+    } else {
+        0.0
+    };
     let text = shape.paint.text;
     let size = if text.size.is_finite() {
         text.size.clamp(TextLook::MIN_SIZE, TextLook::MAX_SIZE)
@@ -156,6 +185,8 @@ fn sane(shape: Shape) -> Option<Shape> {
         TextLook::default().size
     };
     Some(Shape {
+        kind,
+        rotation,
         paint: Paint {
             text: TextLook { size, ..text },
             ..shape.paint
@@ -179,10 +210,20 @@ pub fn paste(document: &Document, clip: &[Shape]) -> Option<(Op, Vec<ShapeId>)> 
         visible.center() - bounds.center()
     };
     let step = Vec2::new(STEP, STEP) * document.unit;
+    let key = |rect: kurbo::Rect| [rect.x0, rect.y0, rect.x1, rect.y1].map(f64::to_bits);
+    let mut placed: std::collections::HashMap<_, Vec<&Kind>> = std::collections::HashMap::new();
+    for shape in document.shapes() {
+        placed
+            .entry(key(shape.kind.bounds()))
+            .or_default()
+            .push(&shape.kind);
+    }
     let taken = |by: Vec2| {
         clip.iter().any(|copy| {
             let kind = copy.kind.translated(by);
-            document.shapes().any(|shape| shape.kind == kind)
+            placed
+                .get(&key(kind.bounds()))
+                .is_some_and(|kinds| kinds.contains(&&kind))
         })
     };
     let by = (0..100u32)
@@ -209,9 +250,10 @@ pub fn place_image(document: &Document, image: image::RgbaImage) -> Result<(Op, 
     if image.width() == 0 || image.height() == 0 {
         return Err("the pasted image is empty".to_owned());
     }
-    if image.width() > most || image.height() > most {
+    if !kirie_annotate::pixels::fits(image.width(), image.height()) {
         return Err(format!(
-            "images over {most} pixels wide or tall cannot be pasted"
+            "images over {most} pixels wide or tall, or of over {} megapixels, cannot be pasted",
+            kirie_annotate::pixels::MAX_PIXELS / 1_000_000
         ));
     }
     let visible = document.visible();
@@ -267,10 +309,8 @@ mod tests {
     #[test]
     fn copied_marks_survive_the_clipboard() {
         let document = boxes();
-        assert!(encode(&document, &[]).is_none());
-        let bytes = encode(&document, &[ShapeId(3), ShapeId(1)])
-            .unwrap()
-            .unwrap();
+        assert!(of(&document, &[]).is_empty());
+        let bytes = encode(of(&document, &[ShapeId(3), ShapeId(1)])).unwrap();
         let marks = decode(&bytes).unwrap();
         let ids: Vec<ShapeId> = marks.iter().map(|shape| shape.id).collect();
         assert_eq!(ids, [ShapeId(1), ShapeId(3)], "bottom first, as drawn");
@@ -287,13 +327,34 @@ mod tests {
         };
         let mut huge = boxes().shape(ShapeId(2)).unwrap().clone();
         huge.paint.text.size = 1.0e6;
+        let mut counter = huge.clone();
+        counter.kind = Kind::Counter {
+            at: Point::ORIGIN,
+            number: u32::MAX,
+        };
+        counter.rotation = 1.0;
+        let mut endless = huge.clone();
+        endless.kind = Kind::Pen {
+            points: vec![Point::ORIGIN; LONGEST + 1],
+        };
         let bytes = ron::to_string(&Clip {
-            marks: vec![far, huge],
+            marks: vec![far, huge, counter, endless],
         })
         .unwrap();
         let marks = decode(bytes.as_bytes()).unwrap();
-        assert_eq!(marks.len(), 1);
+        assert_eq!(marks.len(), 2);
         assert!((marks[0].paint.text.size - TextLook::MAX_SIZE).abs() < f64::EPSILON);
+        assert!(matches!(
+            marks[1].kind,
+            Kind::Counter {
+                number: HIGHEST,
+                ..
+            }
+        ));
+        assert!(
+            marks[1].rotation.abs() < f64::EPSILON,
+            "step numbers do not turn"
+        );
     }
 
     #[test]

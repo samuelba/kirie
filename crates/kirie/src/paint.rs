@@ -232,6 +232,7 @@ impl Painter<'_> {
                 _ => shape,
             })
             .collect();
+        self.forget_pictures(&shapes);
         let stage = style::Stage::new(document, marks.visible, &shapes);
         let mut picked = Vec::new();
         let mut layer = 0;
@@ -280,14 +281,26 @@ impl Painter<'_> {
         );
     }
 
+    /// Drops the handles on pictures none of `shapes` shows any more.
+    fn forget_pictures(&self, shapes: &[Shape]) {
+        let shown: std::collections::HashSet<u64> = shapes
+            .iter()
+            .filter_map(|shape| match &shape.kind {
+                kirie_annotate::Kind::Image { pixels, .. } => Some(pixels.id()),
+                _ => None,
+            })
+            .collect();
+        let mut pictures = self.pictures.borrow_mut();
+        if pictures.len() > shown.len() {
+            pictures.retain(|id, _| shown.contains(id));
+        }
+    }
+
     /// The renderer's handle on `pixels`, made once.
     fn picture(&self, pixels: &kirie_annotate::Pixels) -> image::Handle {
         let mut pictures = self.pictures.borrow_mut();
         if let Some(handle) = pictures.get(&pixels.id()) {
             return handle.clone();
-        }
-        if pictures.len() >= PATCH_LIMIT {
-            pictures.clear();
         }
         let handle = image::Handle::from_rgba(
             pixels.width(),

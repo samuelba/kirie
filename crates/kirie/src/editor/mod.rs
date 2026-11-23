@@ -268,6 +268,9 @@ pub struct Editor {
     draft: Option<Draft>,
     /// The marks the select tool picked; a lone one shows its grips.
     picked: Vec<ShapeId>,
+    /// The marks copied last, which Ctrl+V pastes when the clipboard holds neither marks nor an
+    /// image, as where the compositor lets no program offer them.
+    clip: Vec<Shape>,
     /// A slider is being dragged; its moves undo as one step.
     sliding: bool,
     typing: Option<Typing>,
@@ -330,6 +333,7 @@ impl Editor {
             picker: None,
             draft: None,
             picked: Vec::new(),
+            clip: Vec::new(),
             sliding: false,
             typing: None,
             last_click: None,
@@ -677,27 +681,29 @@ impl Editor {
     }
 
     /// Puts the picked marks on the clipboard, for Ctrl+V here or in another Kirie.
-    fn copy_marks(&self) -> Task<Message> {
-        let count = self.picked.len();
-        let Some(encoded) = crate::marks::encode(self.document(), &self.picked) else {
+    fn copy_marks(&mut self) -> Task<Message> {
+        let marks = crate::marks::of(self.document(), &self.picked);
+        if marks.is_empty() {
             return Task::none();
+        }
+        self.clip.clone_from(&marks);
+        let copied = if marks.len() == 1 {
+            "Copied the mark; Ctrl+V pastes it".to_owned()
+        } else {
+            format!("Copied {} marks; Ctrl+V pastes them", marks.len())
         };
-        let bytes = match encoded {
-            Ok(bytes) => bytes,
-            Err(error) => return Task::done(Message::Done(Err(error))),
+        let offered = async move {
+            let bytes = tokio::task::spawn_blocking(move || crate::marks::encode(marks))
+                .await
+                .map_err(|error| error.to_string())??;
+            crate::clipboard::offer(bytes, crate::marks::MIME).await
         };
-        Task::perform(
-            crate::clipboard::offer(bytes, crate::marks::MIME),
-            move |offered| {
-                Message::Done(offered.map(|()| {
-                    if count == 1 {
-                        "Copied the mark; Ctrl+V pastes it".to_owned()
-                    } else {
-                        format!("Copied {count} marks; Ctrl+V pastes them")
-                    }
-                }))
-            },
-        )
+        Task::perform(offered, move |offered| {
+            Message::Done(Ok(match offered {
+                Ok(()) => copied,
+                Err(error) => format!("{copied} here; other apps cannot ({error})"),
+            }))
+        })
     }
 
     fn zoom(&mut self, message: &Message) {
@@ -891,7 +897,10 @@ impl Editor {
                     }
                 })
             }
-            Message::Paste => Task::perform(paste(self.device.clone()), Message::Pasted),
+            Message::Paste => Task::perform(
+                paste(self.device.clone(), self.clip.clone()),
+                Message::Pasted,
+            ),
             Message::Save => self.export(Export::Save),
             Message::SaveProject => self.export(Export::Project),
             Message::SaveAs if self.image.is_some() => {
@@ -1384,18 +1393,28 @@ impl Editor {
 
 /// The image on the clipboard, read through the window's data device, else through the
 /// clipboard protocol of wlroots compositors.
-async fn paste(device: Option<crate::drops::Device>) -> Result<Pasted, String> {
+/// What is on the clipboard: marks, else an image, else `clip`, the marks copied last.
+async fn paste(device: Option<crate::drops::Device>, clip: Vec<Shape>) -> Result<Pasted, String> {
     const KINDS: &[&str] = &[crate::marks::MIME, crate::drops::PNG];
-    let (kind, bytes) = match crate::drops::clipboard_kind(device, KINDS).await {
-        Some(found) => found,
-        None => crate::clipboard::paste(KINDS).await?,
+    let found = match crate::drops::clipboard_kind(device, KINDS).await {
+        Some(found) => Ok(found),
+        None => crate::clipboard::paste(KINDS).await,
     };
-    if kind == crate::marks::MIME {
-        return crate::marks::decode(&bytes).map(Pasted::Marks);
-    }
-    ::image::load_from_memory_with_format(&bytes, ::image::ImageFormat::Png)
-        .map(|image| Pasted::Image(image.to_rgba8()))
-        .map_err(|error| format!("the clipboard image cannot be read: {error}"))
+    let (kind, bytes) = match found {
+        Ok(found) => found,
+        Err(_) if !clip.is_empty() => return Ok(Pasted::Marks(clip)),
+        Err(error) => return Err(error),
+    };
+    tokio::task::spawn_blocking(move || {
+        if kind == crate::marks::MIME {
+            return crate::marks::decode(&bytes).map(Pasted::Marks);
+        }
+        ::image::load_from_memory_with_format(&bytes, ::image::ImageFormat::Png)
+            .map(|image| Pasted::Image(image.to_rgba8()))
+            .map_err(|error| format!("the clipboard image cannot be read: {error}"))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 async fn load_async(path: PathBuf) -> Result<Loaded, String> {
