@@ -69,8 +69,9 @@ enum Command {
         /// Draw the mouse pointer into the screenshot.
         #[arg(long)]
         cursor: bool,
-        /// Enter opens the selection in the editor instead of copying it.
-        #[arg(long, conflicts_with_all = ["output", "region", "window"])]
+        /// Open the screenshot in the editor. With the overlay, Enter opens the selection there
+        /// instead of copying it.
+        #[arg(long, conflicts_with = "output")]
         edit: bool,
         /// Wait this many seconds before taking the screenshot, to open a menu or hover first.
         #[arg(long, value_name = "SECONDS", default_value_t = 0, value_parser = clap::value_parser!(u64).range(0..=MAX_DELAY))]
@@ -151,10 +152,9 @@ fn main() -> anyhow::Result<()> {
             edit,
             delay,
         }) => match area(mode, region, window) {
-            Some(_) if edit => anyhow::bail!("--edit needs the overlay: leave out `all`"),
             Some(area) => {
                 wait(delay);
-                script::capture(area, &script::Target::of(output), cursor)
+                script::capture(area, &script::Target::of(output, edit), cursor)
             }
             None if output.is_some() => {
                 anyhow::bail!("-o needs `all`, --region or --window: the overlay keeps no file")
@@ -301,16 +301,19 @@ fn take_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
             Ok(())
         }
         overlay::Outcome::Canceled => Ok(()),
-        overlay::Outcome::Edit(path) => {
-            if !block_on(ipc::hand_over(Some(&path), None))? {
-                editor_command(&std::env::current_exe()?, &path)
-                    .spawn()
-                    .context("cannot open the editor")?;
-            }
-            Ok(())
-        }
+        overlay::Outcome::Edit(path) => open_handoff(&path),
         overlay::Outcome::Failed(error) => anyhow::bail!(error),
     }
+}
+
+/// Opens a project from the hand-off folder in the running editor, or in a new one.
+fn open_handoff(path: &std::path::Path) -> anyhow::Result<()> {
+    if !block_on(ipc::hand_over(Some(path), None))? {
+        editor_command(&std::env::current_exe()?, path)
+            .spawn()
+            .context("cannot open the editor")?;
+    }
+    Ok(())
 }
 
 /// Tells where the overlay's picture was saved.
@@ -471,7 +474,22 @@ mod tests {
         );
         assert!(parsed(&["kirie", "capture", "--region", "1,2,3"]).is_err());
         assert!(parsed(&["kirie", "capture", "--region", "1,2,3,4", "--window"]).is_err());
-        assert!(parsed(&["kirie", "capture", "--window", "--edit"]).is_err());
+        assert_eq!(
+            parsed(&["kirie", "capture", "--region", "0,0,200,100", "--edit"]),
+            Ok(Some(script::Area::Region(
+                kirie_capture::geometry::Rect::new(0, 0, 200, 100)
+            )))
+        );
+        assert_eq!(
+            parsed(&["kirie", "capture", "--window", "--edit"]),
+            Ok(Some(script::Area::Window))
+        );
+        assert!(
+            parsed(&[
+                "kirie", "capture", "--region", "1,2,3,4", "--edit", "-o", "-"
+            ])
+            .is_err()
+        );
     }
 
     #[test]
