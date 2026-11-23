@@ -119,8 +119,17 @@ pub enum Draft {
     },
     Moving {
         ids: Vec<ShapeId>,
+        /// The mark pressed on, which a click without a move picks alone.
+        held: ShapeId,
         start: Point,
         by: Vec2,
+    },
+    /// A box dragged over empty space, picking the marks inside it.
+    Marquee {
+        start: Point,
+        end: Point,
+        /// Adds to the picked marks, as Shift held at the press asked.
+        extend: bool,
     },
     /// A grip of a picked mark being dragged.
     Editing {
@@ -138,6 +147,8 @@ pub enum Press {
     Done(Op),
     /// Ask for text to place here.
     TypeAt(Point),
+    /// Adds the mark to the picked ones, or takes it out.
+    Toggle(ShapeId),
     Nothing,
 }
 
@@ -147,17 +158,20 @@ const MIN_DRAG: f64 = 3.0;
 const MIN_STEP: f64 = 1.5;
 
 /// What a press with `tool` at `at` starts. `reach` is how near a mark or grip must be, and
-/// `picked` the mark whose grips are showing.
+/// `picked` the marks picked, a lone one showing its grips. `extend` (Shift) adds a mark to
+/// them or takes it out, instead of picking it alone.
 pub fn press(
     tool: Tool,
     at: Point,
     document: &Document,
     paint: Paint,
     reach: f64,
-    picked: Option<ShapeId>,
+    picked: &[ShapeId],
+    extend: bool,
 ) -> Press {
     if tool == Tool::Select
-        && let Some(shape) = picked.and_then(|id| document.shape(id))
+        && let [id] = picked
+        && let Some(shape) = document.shape(*id)
         && let Some(grip) = crate::edit::grip_at(shape, at, reach, reach / 6.0)
     {
         return Press::Draft(Draft::Editing {
@@ -167,13 +181,27 @@ pub fn press(
         });
     }
     match tool {
-        Tool::Select => document.hit(at, reach).map_or(Press::Nothing, |id| {
-            Press::Draft(Draft::Moving {
-                ids: vec![id],
+        Tool::Select => match document.hit(at, reach) {
+            Some(id) if extend => Press::Toggle(id),
+            Some(id) => {
+                let ids = if picked.contains(&id) {
+                    picked.to_vec()
+                } else {
+                    vec![id]
+                };
+                Press::Draft(Draft::Moving {
+                    ids,
+                    held: id,
+                    start: at,
+                    by: Vec2::ZERO,
+                })
+            }
+            None => Press::Draft(Draft::Marquee {
                 start: at,
-                by: Vec2::ZERO,
-            })
-        }),
+                end: at,
+                extend,
+            }),
+        },
         Tool::Text => Press::TypeAt(at),
         Tool::Counter => Press::Done(Op::Add {
             kind: Kind::Counter {
@@ -221,10 +249,18 @@ impl Draft {
                 }
                 Draft::Stroke { tool, points }
             }
-            Draft::Moving { ids, start, .. } => Draft::Moving {
+            Draft::Moving {
+                ids, held, start, ..
+            } => Draft::Moving {
                 ids,
+                held,
                 start,
                 by: at - start,
+            },
+            Draft::Marquee { start, extend, .. } => Draft::Marquee {
+                start,
+                end: at,
+                extend,
             },
             Draft::Editing { grip, origin, .. } => {
                 let current = Box::new(crate::edit::drag(&origin, grip, at, constrain));
@@ -257,7 +293,15 @@ impl Draft {
                     points: points.clone(),
                 }),
             },
-            Draft::Moving { .. } | Draft::Editing { .. } => None,
+            Draft::Moving { .. } | Draft::Editing { .. } | Draft::Marquee { .. } => None,
+        }
+    }
+
+    /// The box of a marquee being dragged.
+    pub fn marquee(&self) -> Option<Rect> {
+        match self {
+            Draft::Marquee { start, end, .. } => Some(Rect::from_points(*start, *end)),
+            _ => None,
         }
     }
 
@@ -265,6 +309,7 @@ impl Draft {
     pub fn finish(self, paint: Paint) -> Option<Op> {
         match self {
             Draft::Span { start, end, .. } if start.distance(end) < MIN_DRAG => None,
+            Draft::Marquee { .. } => None,
             Draft::Moving { by, .. } if by.hypot() < f64::EPSILON => None,
             Draft::Moving { ids, by, .. } => Some(Op::Move { ids, by }),
             Draft::Editing {
@@ -332,7 +377,7 @@ mod tests {
     }
 
     fn drawn(tool: Tool, from: Point, to: Point) -> Option<Op> {
-        match press(tool, from, &doc(), Paint::default(), 4.0, None) {
+        match press(tool, from, &doc(), Paint::default(), 4.0, &[], false) {
             Press::Draft(draft) => draft.drag(to, false).finish(Paint::default()),
             other => panic!("{tool:?} started {other:?}"),
         }
@@ -412,7 +457,8 @@ mod tests {
             &doc(),
             Paint::default(),
             4.0,
-            None,
+            &[],
+            false,
         ) {
             Press::Draft(draft) => draft,
             other => panic!("{other:?}"),
@@ -456,7 +502,8 @@ mod tests {
             &document,
             Paint::default(),
             4.0,
-            None,
+            &[],
+            false,
         )
         else {
             panic!()
@@ -468,7 +515,7 @@ mod tests {
     fn text_asks_for_words() {
         let at = Point::new(3.0, 4.0);
         assert_eq!(
-            press(Tool::Text, at, &doc(), Paint::default(), 4.0, None),
+            press(Tool::Text, at, &doc(), Paint::default(), 4.0, &[], false),
             Press::TypeAt(at)
         );
     }
@@ -482,16 +529,14 @@ mod tests {
             paint: Paint::default(),
         });
         let paint = Paint::default();
+        let empty = Point::new(150.0, 150.0);
         assert_eq!(
-            press(
-                Tool::Select,
-                Point::new(150.0, 150.0),
-                &document,
-                paint,
-                4.0,
-                None
-            ),
-            Press::Nothing
+            press(Tool::Select, empty, &document, paint, 4.0, &[], false),
+            Press::Draft(Draft::Marquee {
+                start: empty,
+                end: empty,
+                extend: false,
+            })
         );
         let Press::Draft(draft) = press(
             Tool::Select,
@@ -499,7 +544,8 @@ mod tests {
             &document,
             paint,
             4.0,
-            None,
+            &[],
+            false,
         ) else {
             panic!()
         };
@@ -531,7 +577,8 @@ mod tests {
             &document,
             paint,
             4.0,
-            Some(ShapeId(1)),
+            &[ShapeId(1)],
+            false,
         ) else {
             panic!()
         };
@@ -551,11 +598,102 @@ mod tests {
             &document,
             paint,
             4.0,
-            Some(ShapeId(1)),
+            &[ShapeId(1)],
+            false,
         ) else {
             panic!()
         };
         assert_eq!(untouched.finish(paint), None);
+    }
+
+    #[test]
+    fn picked_marks_move_together_and_shift_toggles() {
+        let document = doc()
+            .apply(Op::Add {
+                kind: Kind::Rectangle {
+                    rect: Rect::new(10.0, 10.0, 50.0, 50.0),
+                },
+                paint: Paint::default(),
+            })
+            .apply(Op::Add {
+                kind: Kind::Rectangle {
+                    rect: Rect::new(100.0, 100.0, 140.0, 140.0),
+                },
+                paint: Paint::default(),
+            });
+        let paint = Paint::default();
+        let both = [ShapeId(1), ShapeId(2)];
+        let on_first = Point::new(30.0, 10.0);
+        let Press::Draft(Draft::Moving { ids, .. }) =
+            press(Tool::Select, on_first, &document, paint, 4.0, &both, false)
+        else {
+            panic!()
+        };
+        assert_eq!(ids, both);
+        let Press::Draft(Draft::Moving { ids, .. }) = press(
+            Tool::Select,
+            on_first,
+            &document,
+            paint,
+            4.0,
+            &[ShapeId(2)],
+            false,
+        ) else {
+            panic!()
+        };
+        assert_eq!(ids, [ShapeId(1)], "an unpicked mark is picked alone");
+        assert_eq!(
+            press(Tool::Select, on_first, &document, paint, 4.0, &both, true),
+            Press::Toggle(ShapeId(1))
+        );
+        let corner = Point::new(50.0, 50.0);
+        assert!(
+            matches!(
+                press(Tool::Select, corner, &document, paint, 4.0, &both, false),
+                Press::Draft(Draft::Moving { .. })
+            ),
+            "grips show on a lone pick only"
+        );
+        assert!(
+            matches!(
+                press(
+                    Tool::Select,
+                    corner,
+                    &document,
+                    paint,
+                    4.0,
+                    &[ShapeId(1)],
+                    true
+                ),
+                Press::Draft(Draft::Editing { .. })
+            ),
+            "Shift held on a grip constrains the resize"
+        );
+        assert!(matches!(
+            press(
+                Tool::Select,
+                Point::ORIGIN,
+                &document,
+                paint,
+                4.0,
+                &both,
+                true
+            ),
+            Press::Draft(Draft::Marquee { extend: true, .. })
+        ));
+    }
+
+    #[test]
+    fn a_marquee_spans_its_drag_and_makes_no_edit() {
+        let draft = Draft::Marquee {
+            start: Point::new(40.0, 40.0),
+            end: Point::new(40.0, 40.0),
+            extend: false,
+        }
+        .drag(Point::new(10.0, 70.0), true);
+        assert_eq!(draft.marquee(), Some(Rect::new(10.0, 40.0, 40.0, 70.0)));
+        assert_eq!(draft.preview(), None);
+        assert_eq!(draft.finish(Paint::default()), None);
     }
 
     #[test]

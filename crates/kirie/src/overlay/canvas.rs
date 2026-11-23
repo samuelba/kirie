@@ -9,7 +9,7 @@ use kirie_ui::{radius, space};
 use kirie_annotate::{Shape, Tool};
 
 use super::{HANDLE_REACH, MARK_REACH, Message, Overlay, Pointer, to_kurbo};
-use crate::paint::{Captures, Marks, Painter, draw_grips};
+use crate::paint::{Captures, Marks, Painter, draw_marquee, draw_picked};
 use crate::selection::Handle;
 
 const HANDLE_RADIUS: f32 = 4.5;
@@ -117,7 +117,7 @@ impl canvas::Program<Message> for Surface<'_> {
             Some(Tool::Select) => {
                 return crate::cursor::select(
                     self.overlay.document(),
-                    self.overlay.picked,
+                    &self.overlay.picked,
                     self.overlay.draft.as_ref(),
                     to_kurbo(at),
                     MARK_REACH,
@@ -175,21 +175,27 @@ impl Surface<'_> {
                 document,
                 draft: overlay.draft.as_ref(),
                 preview,
-                picked: overlay.picked,
+                picked: &overlay.picked,
                 visible,
             },
             transform,
         );
-        if let Some(picked) = picked {
-            let bounds = document.bounds(&picked);
-            draw_grips(
-                frame,
-                &picked,
-                bounds,
-                transform,
-                1.0,
-                overlay.palette.accent,
-            );
+        let accent = overlay.palette.accent;
+        draw_picked(
+            frame,
+            &picked,
+            &overlay.picked,
+            document,
+            transform,
+            1.0,
+            accent,
+        );
+        if let Some(rect) = overlay
+            .draft
+            .as_ref()
+            .and_then(kirie_annotate::Draft::marquee)
+        {
+            draw_marquee(frame, rect, transform, accent);
         }
     }
 

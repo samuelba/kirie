@@ -368,10 +368,14 @@ impl Editor {
                 super::frame::view(document.frame, document.unit, palette, Message::Frame),
             ));
         }
-        if self.picked.is_some() {
+        if !self.picked.is_empty() {
             content = content.push(icon_button(
                 Icon::Delete,
-                "Delete mark (Del)",
+                if self.picked.len() > 1 {
+                    "Delete marks (Del)"
+                } else {
+                    "Delete mark (Del)"
+                },
                 palette,
                 false,
                 Some(Message::Delete),

@@ -7,7 +7,7 @@ use iced::{Color, Point, Rectangle, Renderer, Size, Theme, Vector};
 use kirie_annotate::{Draft, Shape, Tool};
 
 use super::{Editor, MARK_REACH, Message, Pointer, pixel};
-use crate::paint::{ImageSource, Marks, Painter, color_of, draw_grips};
+use crate::paint::{ImageSource, Marks, Painter, color_of, draw_marquee, draw_picked};
 use crate::selection::Handle;
 
 /// The radius of a crop handle, in screen pixels.
@@ -142,17 +142,19 @@ impl canvas::Program<Message> for Board<'_> {
         }
         let kept = to_rectangle(transform.transform_rect_bbox(editor.shown_canvas()));
         let picked = frame.with_clip(kept, |frame| self.draw_marks(frame, image, transform));
-        if let Some(picked) = picked {
-            let pixel = 1.0 / f64::from(editor.viewport.scale(self.content(), bounds.size()));
-            let bounds = editor.document().bounds(&picked);
-            draw_grips(
-                &mut frame,
-                &picked,
-                bounds,
-                transform,
-                pixel,
-                editor.palette.accent,
-            );
+        let pixel = 1.0 / f64::from(editor.viewport.scale(self.content(), bounds.size()));
+        let accent = editor.palette.accent;
+        draw_picked(
+            &mut frame,
+            &picked,
+            &editor.picked,
+            editor.document(),
+            transform,
+            pixel,
+            accent,
+        );
+        if let Some(rect) = editor.draft.as_ref().and_then(Draft::marquee) {
+            draw_marquee(&mut frame, rect, transform, accent);
         }
         vec![frame.into_geometry()]
     }
@@ -187,7 +189,7 @@ impl canvas::Program<Message> for Board<'_> {
                 let reach = MARK_REACH / f64::from(scale(self.editor, bounds.size()));
                 crate::cursor::select(
                     self.editor.document(),
-                    self.editor.picked,
+                    &self.editor.picked,
                     self.editor.draft.as_ref(),
                     at,
                     reach,
@@ -200,13 +202,13 @@ impl canvas::Program<Message> for Board<'_> {
 }
 
 impl Board<'_> {
-    /// Draws the marks and the one in progress; returns the picked mark as shown.
+    /// Draws the marks and the one in progress; returns the picked marks as shown.
     fn draw_marks(
         &self,
         frame: &mut Frame,
         image: &::image::RgbaImage,
         transform: kurbo::Affine,
-    ) -> Option<Shape> {
+    ) -> Vec<Shape> {
         let editor = self.editor;
         let document = editor.document();
         let source = ImageSource(image);
@@ -238,7 +240,7 @@ impl Board<'_> {
                 document,
                 draft: editor.draft.as_ref(),
                 preview,
-                picked: editor.picked,
+                picked: &editor.picked,
                 visible: document.visible(),
             },
             transform,

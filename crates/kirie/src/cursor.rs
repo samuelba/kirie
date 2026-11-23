@@ -9,10 +9,10 @@ use kirie_annotate::edit::{self, Grip};
 use kirie_annotate::{Document, Draft, Shape, ShapeId};
 
 /// The cursor at `at` with the select tool. `reach` is how near a mark or grip must be, in mark
-/// coordinates, as given to [`kirie_annotate::tools::press`].
+/// coordinates, as given to [`kirie_annotate::tools::press`]; only a lone picked mark has grips.
 pub fn select(
     document: &Document,
-    picked: Option<ShapeId>,
+    picked: &[ShapeId],
     draft: Option<&Draft>,
     at: kurbo::Point,
     reach: f64,
@@ -20,9 +20,14 @@ pub fn select(
     match draft {
         Some(Draft::Editing { grip, current, .. }) => return holding(current, *grip),
         Some(Draft::Moving { .. }) => return Interaction::Move,
+        Some(Draft::Marquee { .. }) => return Interaction::Crosshair,
         _ => {}
     }
-    let on_grip = picked
+    let lone = match picked {
+        [id] => Some(*id),
+        _ => None,
+    };
+    let on_grip = lone
         .and_then(|id| document.shape(id))
         .and_then(|shape| Some((shape, edit::grip_at(shape, at, reach, reach / 6.0)?)));
     if let Some((shape, grip)) = on_grip {
@@ -98,7 +103,7 @@ mod tests {
     #[test]
     fn hovering_tells_grips_from_the_mark() {
         let (document, id) = picked_box();
-        let at = |x, y| select(&document, Some(id), None, Point::new(x, y), 6.0);
+        let at = |x, y| select(&document, &[id], None, Point::new(x, y), 6.0);
         assert_eq!(at(120.0, 90.0), Interaction::ResizingDiagonallyDown);
         assert_eq!(at(120.0, 40.0), Interaction::ResizingDiagonallyUp);
         assert_eq!(at(70.0, 40.0), Interaction::ResizingVertically);
@@ -107,8 +112,10 @@ mod tests {
         assert_eq!(at(70.0, 90.5), Interaction::ResizingVertically);
         assert_eq!(at(50.0, 90.0), Interaction::Move);
         assert_eq!(at(180.0, 180.0), Interaction::default());
-        let unpicked = select(&document, None, None, Point::new(120.0, 90.0), 6.0);
+        let unpicked = select(&document, &[], None, Point::new(120.0, 90.0), 6.0);
         assert_eq!(unpicked, Interaction::Move, "no grips without a pick");
+        let several = select(&document, &[id, id], None, Point::new(120.0, 90.0), 6.0);
+        assert_eq!(several, Interaction::Move, "no grips on several picks");
     }
 
     #[test]
@@ -139,7 +146,7 @@ mod tests {
             current: shape.clone(),
         };
         let far = Point::new(180.0, 180.0);
-        let held = |draft: &Draft| select(&document, Some(id), Some(draft), far, 6.0);
+        let held = |draft: &Draft| select(&document, &[id], Some(draft), far, 6.0);
         assert_eq!(held(&editing(Grip::Rotate)), Interaction::Grabbing);
         assert_eq!(
             held(&editing(Grip::Edge(1))),
@@ -148,6 +155,7 @@ mod tests {
         assert_eq!(held(&editing(Grip::End)), Interaction::Crosshair);
         let moving = Draft::Moving {
             ids: vec![id],
+            held: id,
             start: far,
             by: kurbo::Vec2::ZERO,
         };

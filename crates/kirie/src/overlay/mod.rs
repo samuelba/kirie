@@ -194,8 +194,8 @@ pub struct Overlay {
     draft: Option<Draft>,
     /// The tool the current pointer gesture draws with, if it draws at all.
     drawing: Option<Tool>,
-    /// The mark the select tool picked, whose grips are showing.
-    picked: Option<kirie_annotate::ShapeId>,
+    /// The marks the select tool picked; a lone one shows its grips.
+    picked: Vec<kirie_annotate::ShapeId>,
     /// A slider is being dragged; its moves undo as one step.
     sliding: bool,
     typing: Option<Typing>,
@@ -339,7 +339,7 @@ impl Overlay {
             history: History::new(document),
             draft: None,
             drawing: None,
-            picked: None,
+            picked: Vec::new(),
             sliding: false,
             typing: None,
             toolbar_at: None,
@@ -418,7 +418,7 @@ impl Overlay {
                 kind: first.kind,
                 rotation: -0.12,
             });
-            self.picked = Some(first.id);
+            self.picked = vec![first.id];
         }
         self
     }
@@ -454,7 +454,7 @@ impl Overlay {
             Message::PickTool(tool) => {
                 self.commit_text();
                 if tool != Some(Tool::Select) {
-                    self.picked = None;
+                    self.picked.clear();
                 }
                 self.tool = tool;
                 self.paint.color = crate::controls::tool_color(
@@ -497,8 +497,9 @@ impl Overlay {
                 Task::none()
             }
             Message::Delete => {
-                if let Some(id) = self.picked.take() {
-                    self.history.apply(Op::Remove { ids: vec![id] });
+                if !self.picked.is_empty() {
+                    let ids = std::mem::take(&mut self.picked);
+                    self.history.apply(Op::Remove { ids });
                 }
                 Task::none()
             }
@@ -672,6 +673,7 @@ impl Overlay {
         } else {
             self.history.redo();
         }
+        crate::marks::prune(self.history.current(), &mut self.picked);
         self.follow_style(before);
     }
 
@@ -693,14 +695,8 @@ impl Overlay {
     /// Like [`Self::repaint`]; a `gradual` change joins the step the slider drag began.
     fn repaint_gradually(&mut self, change: impl Fn(&mut Paint), gradual: bool) {
         change(&mut self.paint);
-        let Some(shape) = self.picked.and_then(|id| self.document().shape(id)) else {
+        let Some(op) = crate::marks::repaint(self.document(), &self.picked, change) else {
             return;
-        };
-        let mut paint = shape.paint;
-        change(&mut paint);
-        let op = Op::Repaint {
-            ids: vec![shape.id],
-            paint,
         };
         if gradual {
             self.history.apply_gradually(op, self.sliding);
@@ -710,30 +706,31 @@ impl Overlay {
         self.sliding = gradual;
     }
 
-    /// The paint the controls show: the picked mark's, else the one new marks get.
+    /// The paint the controls show: the first picked mark's, else the one new marks get.
     fn shown_paint(&self) -> Paint {
-        self.picked
-            .and_then(|id| self.document().shape(id))
-            .map_or(self.paint, |shape| shape.paint)
+        crate::marks::shown_paint(self.document(), &self.picked, self.paint)
     }
 
-    /// Whether the text controls apply: to text being typed, a picked text mark, or the next.
+    /// Whether the text controls apply: to text being typed, picked text marks, or the next.
     fn texting(&self) -> bool {
         self.tool == Some(Tool::Text)
             || self.typing.is_some()
-            || self
-                .picked
-                .and_then(|id| self.document().shape(id))
-                .is_some_and(|shape| matches!(shape.kind, Kind::Text { .. }))
+            || crate::marks::all(self.document(), &self.picked, |kind| {
+                matches!(kind, Kind::Text { .. })
+            })
     }
 
-    /// Whether the spotlight controls apply: to the spotlight tool or a picked spotlight.
+    /// Whether the spotlight controls apply: to the spotlight tool or picked spotlights.
     fn spotlighting(&self) -> bool {
         self.tool == Some(Tool::Spotlight)
-            || self
-                .picked
-                .and_then(|id| self.document().shape(id))
-                .is_some_and(|shape| matches!(shape.kind, Kind::Spotlight { .. }))
+            || crate::marks::all(self.document(), &self.picked, |kind| {
+                matches!(kind, Kind::Spotlight { .. })
+            })
+    }
+
+    /// Whether a press adds to the picked marks instead of picking anew.
+    fn extending(&self) -> bool {
+        self.modifiers.shift() || self.modifiers.command()
     }
 
     /// Shows the screen a fullscreen window landed on: the one with the window's size.
@@ -773,7 +770,7 @@ impl Overlay {
         if self.picker.take().is_some()
             || self.typing.take().is_some()
             || self.draft.take().is_some()
-            || self.picked.take().is_some()
+            || !std::mem::take(&mut self.picked).is_empty()
         {
             return Task::none();
         }
@@ -817,15 +814,15 @@ impl Overlay {
             .map(|(area, _)| *area)
     }
 
-    /// Whether `at` is on a grip of the picked mark.
+    /// Whether `at` is on a grip of the lone picked mark.
     fn on_grip(&self, at: kurbo::Point) -> bool {
+        let [id] = self.picked[..] else {
+            return false;
+        };
         self.tool == Some(Tool::Select)
-            && self
-                .picked
-                .and_then(|id| self.document().shape(id))
-                .is_some_and(|shape| {
-                    kirie_annotate::edit::grip_at(shape, at, MARK_REACH, 1.0).is_some()
-                })
+            && self.document().shape(id).is_some_and(|shape| {
+                kirie_annotate::edit::grip_at(shape, at, MARK_REACH, 1.0).is_some()
+            })
     }
 
     fn select(&mut self, pointer: Pointer) {
@@ -869,19 +866,19 @@ impl Overlay {
                 if let Some(id) = words {
                     return self.edit_text(id);
                 }
+                let extend = self.extending();
                 let press = kirie_annotate::tools::press(
                     tool,
                     to_kurbo(at),
                     self.document(),
                     self.paint,
                     MARK_REACH,
-                    self.picked,
+                    &self.picked,
+                    extend,
                 );
                 match press {
                     Press::Draft(draft) => {
-                        if let Draft::Moving { ids, .. } = &draft {
-                            self.picked = ids.first().copied();
-                        }
+                        crate::marks::pressed(&draft, &mut self.picked);
                         self.draft = Some(draft);
                     }
                     Press::Done(op) => {
@@ -891,7 +888,8 @@ impl Overlay {
                         self.typing = Some(Typing::new(at));
                         return iced::widget::operation::focus(view::TEXT_INPUT);
                     }
-                    Press::Nothing => self.picked = None,
+                    Press::Toggle(id) => crate::marks::toggle(&mut self.picked, id),
+                    Press::Nothing => self.picked.clear(),
                 }
             }
             Pointer::Moved(at) => {
@@ -902,7 +900,10 @@ impl Overlay {
             Pointer::Released(at) => {
                 if let Some(draft) = self.draft.take() {
                     let draft = draft.drag(to_kurbo(at), self.modifiers.shift());
-                    if let Some(op) = draft.finish(self.paint) {
+                    let document = self.history.current();
+                    if let Some(op) =
+                        crate::marks::release(draft, document, &mut self.picked, self.paint)
+                    {
                         self.history.apply(op);
                     }
                 }
@@ -927,7 +928,7 @@ impl Overlay {
             return Task::none();
         };
         self.typing = Some(typing);
-        self.picked = Some(id);
+        self.picked = vec![id];
         self.draft = None;
         iced::widget::operation::focus(view::TEXT_INPUT)
     }

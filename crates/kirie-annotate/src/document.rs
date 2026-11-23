@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use kurbo::{Rect, Vec2};
+use kurbo::{Point, Rect, Vec2};
 use serde::{Deserialize, Serialize};
 
 use crate::shape::{Kind, Paint, Rgba, Shape, ShapeId};
@@ -65,6 +65,8 @@ pub enum Op {
         ids: Vec<ShapeId>,
     },
     Clear,
+    /// Several edits as one step, applied in order.
+    Batch(Vec<Op>),
     /// Changes the style. Marks in the document's style painted the first color of a pair in
     /// `recolor` take the second: the old style's shade of a standard color becomes the new one's.
     SetStyle {
@@ -161,11 +163,23 @@ impl Document {
     }
 
     /// The topmost mark within `reach` of `point`.
-    pub fn hit(&self, point: kurbo::Point, reach: f64) -> Option<ShapeId> {
+    pub fn hit(&self, point: Point, reach: f64) -> Option<ShapeId> {
         self.shapes()
             .rev()
             .find(|shape| self.distance(shape, point) <= reach)
             .map(|shape| shape.id)
+    }
+
+    /// The marks lying wholly inside `rect`, as turned, bottom first.
+    pub fn within(&self, rect: Rect) -> Vec<ShapeId> {
+        let rect = rect.abs();
+        self.shapes()
+            .filter(|shape| {
+                let area = shape.turn().transform_rect_bbox(self.bounds(shape));
+                rect.x0 <= area.x0 && area.x1 <= rect.x1 && rect.y0 <= area.y0 && area.y1 <= rect.y1
+            })
+            .map(|shape| shape.id)
+            .collect()
     }
 
     /// The area `shape` covers here, before stroke width, with text measured in its face.
@@ -174,7 +188,7 @@ impl Document {
     }
 
     /// How far `point` is from `shape`, 0 when on or inside it.
-    pub fn distance(&self, shape: &Shape, point: kurbo::Point) -> f64 {
+    pub fn distance(&self, shape: &Shape, point: Point) -> f64 {
         match shape.kind {
             Kind::Text { .. } => {
                 let area = self.bounds(shape);
@@ -325,6 +339,11 @@ impl Document {
                 next.shapes = kept.into_iter().chain(raised).collect();
             }
             Op::Clear => next.shapes.clear(),
+            Op::Batch(ops) => {
+                for op in ops {
+                    next = next.apply(op);
+                }
+            }
             Op::SetStyle { style, recolor } => {
                 next.style = style;
                 let painted = |shape: &Shape| {
@@ -559,6 +578,48 @@ mod tests {
         });
         let order: Vec<_> = raised.shapes().map(|shape| shape.id.0).collect();
         assert_eq!(order, [3, 2, 1]);
+    }
+
+    #[test]
+    fn a_batch_is_one_step() {
+        let mut history = History::new(Document::new(100, 100, 1.0).apply(line(1.0)));
+        history.apply(Op::Batch(vec![
+            line(2.0),
+            Op::Move {
+                ids: vec![ShapeId(1)],
+                by: Vec2::new(3.0, 0.0),
+            },
+        ]));
+        assert_eq!(history.current().shapes().len(), 2);
+        assert_eq!(
+            history
+                .current()
+                .shape(ShapeId(1))
+                .unwrap()
+                .kind
+                .bounds()
+                .x0,
+            4.0
+        );
+        history.undo();
+        assert_eq!(history.current().shapes().len(), 1);
+        assert!(!history.apply(Op::Batch(Vec::new())));
+    }
+
+    #[test]
+    fn within_finds_marks_wholly_inside() {
+        let doc = Document::new(100, 100, 1.0)
+            .apply(line(10.0))
+            .apply(line(50.0));
+        assert_eq!(doc.within(Rect::new(0.0, -1.0, 20.0, 20.0)), [ShapeId(1)]);
+        assert_eq!(
+            doc.within(Rect::new(60.0, 20.0, 0.0, -1.0)),
+            [ShapeId(1), ShapeId(2)]
+        );
+        assert!(
+            doc.within(Rect::new(0.0, 5.0, 60.0, 20.0)).is_empty(),
+            "lines cut in half"
+        );
     }
 
     #[test]

@@ -72,7 +72,7 @@ pub struct Marks<'a> {
     pub draft: Option<&'a Draft>,
     /// A mark being drawn or typed: a new one, or one in place of the mark with its id.
     pub preview: Option<Shape>,
-    pub picked: Option<ShapeId>,
+    pub picked: &'a [ShapeId],
     /// The image area a spotlight dims around.
     pub visible: kurbo::Rect,
 }
@@ -145,13 +145,8 @@ impl Painter<'_> {
         }
     }
 
-    /// Draws every mark; returns the picked one as it is shown, for its grips.
-    pub fn draw_marks(
-        &self,
-        frame: &mut Frame,
-        marks: Marks<'_>,
-        transform: Affine,
-    ) -> Option<Shape> {
+    /// Draws every mark; returns the picked ones as they are shown, for their outlines.
+    pub fn draw_marks(&self, frame: &mut Frame, marks: Marks<'_>, transform: Affine) -> Vec<Shape> {
         let document = marks.document;
         let moving = match marks.draft {
             Some(Draft::Moving { ids, by, .. }) => Some((ids.as_slice(), *by)),
@@ -184,7 +179,7 @@ impl Painter<'_> {
             })
             .collect();
         let stage = style::Stage::new(document, marks.visible, &shapes);
-        let mut picked = None;
+        let mut picked = Vec::new();
         for shape in shapes {
             let draft = shape.id == document.next_id();
             for primitive in style::primitives(&shape, document.style, document.unit, &stage) {
@@ -194,8 +189,8 @@ impl Painter<'_> {
                     self.draw(frame, &primitive, transform);
                 }
             }
-            if marks.picked == Some(shape.id) {
-                picked = Some(shape);
+            if marks.picked.contains(&shape.id) {
+                picked.push(shape);
             }
         }
         picked
@@ -280,21 +275,62 @@ impl Painter<'_> {
     }
 }
 
-/// The outline and grips of a picked mark that covers `bounds`; `pixel` is one screen pixel in
-/// mark coordinates.
-pub fn draw_grips(
+/// Outlines the picked marks, `shown` as they are drawn and measured in `document`; a lone pick
+/// shows its grips too. `pixel` is one screen pixel in mark coordinates.
+pub fn draw_picked(
     frame: &mut Frame,
-    shape: &Shape,
-    bounds: kurbo::Rect,
+    shown: &[Shape],
+    picked: &[ShapeId],
+    document: &Document,
     transform: Affine,
     pixel: f64,
     accent: Color,
 ) {
+    if let ([shape], [_]) = (shown, picked) {
+        draw_grips(
+            frame,
+            shape,
+            document.bounds(shape),
+            transform,
+            pixel,
+            accent,
+        );
+        return;
+    }
+    for shape in shown {
+        draw_outline(frame, shape, document.bounds(shape), transform, accent);
+    }
+}
+
+/// The box being dragged to pick the marks inside it.
+pub fn draw_marquee(frame: &mut Frame, rect: kurbo::Rect, transform: Affine, accent: Color) {
+    let rect = transform.transform_rect_bbox(rect);
     #[allow(clippy::cast_possible_truncation)]
-    let at = |point: kurbo::Point| {
+    let area = Path::rectangle(
+        Point::new(rect.x0 as f32, rect.y0 as f32),
+        Size::new(rect.width() as f32, rect.height() as f32),
+    );
+    frame.fill(&area, accent.scale_alpha(0.12));
+    frame.stroke(&area, Stroke::default().with_color(accent).with_width(1.0));
+}
+
+fn screen_point(transform: Affine) -> impl Fn(kurbo::Point) -> Point {
+    #[allow(clippy::cast_possible_truncation)]
+    move |point: kurbo::Point| {
         let point = transform * point;
         Point::new(point.x as f32, point.y as f32)
-    };
+    }
+}
+
+/// A dashed line around a picked mark that covers `bounds`, turned with it.
+fn draw_outline(
+    frame: &mut Frame,
+    shape: &Shape,
+    bounds: kurbo::Rect,
+    transform: Affine,
+    accent: Color,
+) {
+    let at = screen_point(transform);
     let turn = shape.turn();
     let corners = [
         kurbo::Point::new(bounds.x0, bounds.y0),
@@ -319,6 +355,21 @@ pub fn draw_grips(
             ..Stroke::default().with_color(accent).with_width(1.0)
         },
     );
+}
+
+/// The outline and grips of a picked mark that covers `bounds`; `pixel` is one screen pixel in
+/// mark coordinates.
+pub fn draw_grips(
+    frame: &mut Frame,
+    shape: &Shape,
+    bounds: kurbo::Rect,
+    transform: Affine,
+    pixel: f64,
+    accent: Color,
+) {
+    let at = screen_point(transform);
+    let turn = shape.turn();
+    draw_outline(frame, shape, bounds, transform, accent);
     for (grip, point) in edit::grips(shape, pixel) {
         let center = at(point);
         if grip == edit::Grip::Rotate {

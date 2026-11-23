@@ -154,6 +154,8 @@ pub enum Message {
     Undo,
     Redo,
     Delete,
+    /// Picks every mark with the select tool.
+    SelectAll,
     Escape,
     Copy,
     Open,
@@ -249,7 +251,8 @@ pub struct Editor {
     swatches: Swatches,
     picker: Option<Picker>,
     draft: Option<Draft>,
-    picked: Option<ShapeId>,
+    /// The marks the select tool picked; a lone one shows its grips.
+    picked: Vec<ShapeId>,
     /// A slider is being dragged; its moves undo as one step.
     sliding: bool,
     typing: Option<Typing>,
@@ -310,7 +313,7 @@ impl Editor {
             swatches,
             picker: None,
             draft: None,
-            picked: None,
+            picked: Vec::new(),
             sliding: false,
             typing: None,
             last_click: None,
@@ -368,10 +371,10 @@ impl Editor {
         self.viewport = Viewport::fitted();
         self.cropping = None;
         self.draft = None;
-        self.picked = None;
+        self.picked.clear();
         if demo {
             self.tool = Tool::Select;
-            self.picked = demo::picked(self.document());
+            self.picked = demo::picked(self.document()).into_iter().collect();
         }
         self.typing = None;
         self.sliding = false;
@@ -391,7 +394,7 @@ impl Editor {
         self.cropping = None;
         self.hover = None;
         self.draft = None;
-        self.picked = None;
+        self.picked.clear();
         self.typing = None;
         self.sliding = false;
         self.closing = Closing::No;
@@ -502,7 +505,7 @@ impl Editor {
                 );
                 self.draft = None;
                 if tool != Tool::Select {
-                    self.picked = None;
+                    self.picked.clear();
                 }
             }
             Message::PickStyle(_)
@@ -523,11 +526,7 @@ impl Editor {
             }
             Message::Undo => self.travel(true),
             Message::Redo => self.travel(false),
-            Message::Delete => {
-                if let Some(id) = self.picked.take() {
-                    self.history.apply(Op::Remove { ids: vec![id] });
-                }
-            }
+            Message::Delete | Message::SelectAll => return self.edit_marks(&message),
             Message::Escape if self.closing == Closing::Asking => self.closing = Closing::No,
             Message::Escape | Message::About(false) if self.about => self.about = false,
             Message::About(_) | Message::OpenLink(_) | Message::ShowInFiles(_) => {
@@ -545,7 +544,7 @@ impl Editor {
                     && self.typing.take().is_none()
                     && self.draft.take().is_none()
                 {
-                    self.picked = None;
+                    self.picked.clear();
                 }
             }
             Message::Copy
@@ -575,6 +574,34 @@ impl Editor {
                     self.toast = None;
                 }
             }
+        }
+        Task::none()
+    }
+
+    /// Deleting and picking marks.
+    fn edit_marks(&mut self, message: &Message) -> Task<Message> {
+        match message {
+            Message::Delete if !self.picked.is_empty() => {
+                let ids = std::mem::take(&mut self.picked);
+                self.history.apply(Op::Remove { ids });
+            }
+            Message::SelectAll if self.image.is_some() && self.cropping.is_none() => {
+                let _ = self.update(Message::PickTool(Tool::Select));
+                let document = self.document();
+                let canvas = document.canvas();
+                self.picked = document
+                    .shapes()
+                    .filter(|shape| {
+                        let area = shape.turn().transform_rect_bbox(document.bounds(shape));
+                        area.x0 <= canvas.x1
+                            && canvas.x0 <= area.x1
+                            && area.y0 <= canvas.y1
+                            && canvas.y0 <= area.y1
+                    })
+                    .map(|shape| shape.id)
+                    .collect();
+            }
+            _ => {}
         }
         Task::none()
     }
@@ -842,7 +869,7 @@ impl Editor {
             Message::Crop if self.image.is_some() => {
                 self.commit_text();
                 self.draft = None;
-                self.picked = None;
+                self.picked.clear();
                 let selection = Selection::selected(to_rectangle(self.document().visible()));
                 self.cropping = Some(Cropping {
                     selection,
@@ -911,6 +938,7 @@ impl Editor {
         } else {
             self.history.redo();
         }
+        crate::marks::prune(self.history.current(), &mut self.picked);
         self.follow_style(before);
     }
 
@@ -932,14 +960,8 @@ impl Editor {
     /// Like [`Self::repaint`]; a `gradual` change joins the step the slider drag began.
     fn repaint_gradually(&mut self, change: impl Fn(&mut Paint), gradual: bool) {
         change(&mut self.paint);
-        let Some(shape) = self.picked.and_then(|id| self.document().shape(id)) else {
+        let Some(op) = crate::marks::repaint(self.document(), &self.picked, change) else {
             return;
-        };
-        let mut paint = shape.paint;
-        change(&mut paint);
-        let op = Op::Repaint {
-            ids: vec![shape.id],
-            paint,
         };
         if gradual {
             self.history.apply_gradually(op, self.sliding);
@@ -949,30 +971,31 @@ impl Editor {
         self.sliding = gradual;
     }
 
-    /// The paint the controls show: the picked mark's, else the one new marks get.
+    /// The paint the controls show: the first picked mark's, else the one new marks get.
     fn shown_paint(&self) -> Paint {
-        self.picked
-            .and_then(|id| self.document().shape(id))
-            .map_or(self.paint, |shape| shape.paint)
+        crate::marks::shown_paint(self.document(), &self.picked, self.paint)
     }
 
-    /// Whether the text controls apply: to text being typed, a picked text mark, or the next.
+    /// Whether the text controls apply: to text being typed, picked text marks, or the next.
     fn texting(&self) -> bool {
         self.tool == Tool::Text
             || self.typing.is_some()
-            || self
-                .picked
-                .and_then(|id| self.document().shape(id))
-                .is_some_and(|shape| matches!(shape.kind, Kind::Text { .. }))
+            || crate::marks::all(self.document(), &self.picked, |kind| {
+                matches!(kind, Kind::Text { .. })
+            })
     }
 
-    /// Whether the spotlight controls apply: to the spotlight tool or a picked spotlight.
+    /// Whether the spotlight controls apply: to the spotlight tool or picked spotlights.
     fn spotlighting(&self) -> bool {
         self.tool == Tool::Spotlight
-            || self
-                .picked
-                .and_then(|id| self.document().shape(id))
-                .is_some_and(|shape| matches!(shape.kind, Kind::Spotlight { .. }))
+            || crate::marks::all(self.document(), &self.picked, |kind| {
+                matches!(kind, Kind::Spotlight { .. })
+            })
+    }
+
+    /// Whether a press adds to the picked marks instead of picking anew.
+    fn extending(&self) -> bool {
+        self.modifiers.shift() || self.modifiers.command()
     }
 
     fn pointer(&mut self, pointer: Pointer, scale: f32) -> Task<Message> {
@@ -1003,18 +1026,18 @@ impl Editor {
                 if let Some(id) = words {
                     return self.edit_text(id);
                 }
+                let extend = self.extending();
                 match kirie_annotate::tools::press(
                     self.tool,
                     at,
                     self.document(),
                     self.paint,
                     reach,
-                    self.picked,
+                    &self.picked,
+                    extend,
                 ) {
                     Press::Draft(draft) => {
-                        if let Draft::Moving { ids, .. } = &draft {
-                            self.picked = ids.first().copied();
-                        }
+                        crate::marks::pressed(&draft, &mut self.picked);
                         self.draft = Some(draft);
                     }
                     Press::Done(op) => {
@@ -1024,7 +1047,8 @@ impl Editor {
                         self.typing = Some(Typing::new(at));
                         return iced::widget::operation::focus(view::TEXT_INPUT);
                     }
-                    Press::Nothing => self.picked = None,
+                    Press::Toggle(id) => crate::marks::toggle(&mut self.picked, id),
+                    Press::Nothing => self.picked.clear(),
                 }
             }
             Pointer::Moved(at) => {
@@ -1033,10 +1057,14 @@ impl Editor {
                 }
             }
             Pointer::Released(at) => {
-                if let Some(draft) = self.draft.take()
-                    && let Some(op) = draft.drag(at, self.modifiers.shift()).finish(self.paint)
-                {
-                    self.history.apply(op);
+                if let Some(draft) = self.draft.take() {
+                    let draft = draft.drag(at, self.modifiers.shift());
+                    let document = self.history.current();
+                    if let Some(op) =
+                        crate::marks::release(draft, document, &mut self.picked, self.paint)
+                    {
+                        self.history.apply(op);
+                    }
                 }
             }
         }
@@ -1107,7 +1135,7 @@ impl Editor {
             return Task::none();
         };
         self.typing = Some(typing);
-        self.picked = Some(id);
+        self.picked = vec![id];
         self.draft = None;
         iced::widget::operation::focus(view::TEXT_INPUT)
     }
@@ -1452,6 +1480,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("c") if command => Some(Message::Copy),
         keyboard::Key::Character("v") if command => Some(Message::Paste),
         keyboard::Key::Character("w") if command => Some(Message::Discard),
+        keyboard::Key::Character("a") if command => Some(Message::SelectAll),
         keyboard::Key::Character("o") if command => Some(Message::Open),
         keyboard::Key::Character("s") if command && modifiers.shift() => Some(Message::SaveAs),
         keyboard::Key::Character("s") if command && modifiers.alt() => Some(Message::SaveProject),
