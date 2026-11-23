@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.2.0](https://github.com/samuelba/kirie/compare/v0.1.1...v0.2.0) (2026-11-23)
+
+
+### Features
+
+* bring picked marks to the front or send them to the back ([ea81909](https://github.com/samuelba/kirie/commit/ea81909f58ddc0936817470087121b2a1f43aa3c))
+* **capture:** take a region, the topmost window or every screen without the overlay, to a file, stdout or the clipboard ([22d5879](https://github.com/samuelba/kirie/commit/22d5879c48e5538af5c193e61981166dfb100611))
+* **capture:** take a region, the topmost window or every screen without the overlay, to a file, stdout or the clipboard ([ff31471](https://github.com/samuelba/kirie/commit/ff31471437c4058b0dcfb62ff8534721a5ba4b26))
+* **capture:** wait before a screenshot with --delay, or from the tray ([1611fcd](https://github.com/samuelba/kirie/commit/1611fcdafb6a9c17e637bf3a8f6234cb31174937))
+* copy, cut, paste and duplicate marks ([a343db1](https://github.com/samuelba/kirie/commit/a343db16ad9f001378479f802dd4c433f5df513d))
+* **editor:** add a button that discards the image ([e91b74e](https://github.com/samuelba/kirie/commit/e91b74e5f890cad9182ca013d7cb7ff441bea1fb))
+* **editor:** add an about card, opened from Kirie's name in the header ([a568d17](https://github.com/samuelba/kirie/commit/a568d1703c72826b5c84df821b596a89fd22b3b6))
+* **editor:** close the editor with Ctrl+Q ([bf67dfb](https://github.com/samuelba/kirie/commit/bf67dfbdc814b8aa0c5a17b0255642af4b310648))
+* **editor:** paste a picture over the image as a mark ([2391d34](https://github.com/samuelba/kirie/commit/2391d34606183132bd523fa4731e3e6c3f2d3d77))
+* open a saved screenshot or show it in Files from the notification ([bd00045](https://github.com/samuelba/kirie/commit/bd0004553e687fec935592dff9cbfb5c14703647))
+* **overlay:** flash the screens as a screenshot is taken ([ac35b13](https://github.com/samuelba/kirie/commit/ac35b139a9baee8e97966b64fe778966447cde18))
+* **overlay:** magnify the pixels around the pointer while picking a region ([ccbd6e1](https://github.com/samuelba/kirie/commit/ccbd6e1ceff71fd98bafa3500a74bbad905be9a8))
+* **overlay:** tell when only one of several screens can be shown ([9a1e1e4](https://github.com/samuelba/kirie/commit/9a1e1e493767c5c2b9f0edb1fcbfea610b30e559))
+* **packaging:** register .kirie projects as a file type that Kirie opens ([c64af33](https://github.com/samuelba/kirie/commit/c64af3388656fae36869dc6172171a943fbae023))
+* pick several marks with a box or Shift+click, and move, restyle or delete them together ([b019170](https://github.com/samuelba/kirie/commit/b019170d154169fcf65e0e04e57014f81d43fab2))
+* pick translucent colors with an alpha strip in the color picker ([74fdc23](https://github.com/samuelba/kirie/commit/74fdc23fecfab078d9f6c9131a178c1aaa77685c))
+* save and copy in one go ([030b64e](https://github.com/samuelba/kirie/commit/030b64e5e87bb28c2b6b8f7cee20c9a4e3e28824))
+* save as, in a folder and format of your choice, from the editor and the overlay ([c9bf18e](https://github.com/samuelba/kirie/commit/c9bf18e1c1ee354df14e5656c4c9942a69d56d8e))
+* settings for the save folder, the file name and copying on save ([6b4166e](https://github.com/samuelba/kirie/commit/6b4166e1ea60317ca6267f91e2d7f8a46b0cda29))
+* show a tray icon, with a menu that opens Kirie or takes a screenshot ([75a1960](https://github.com/samuelba/kirie/commit/75a1960745cad7601c2ea17449e620434667326b))
+* take a color from the screenshot with the color picker's pipette ([988a514](https://github.com/samuelba/kirie/commit/988a5144d5e7db9a530b1ce4e1420418a442fc64))
+
+
+### Bug Fixes
+
+* bring the editor to the front when the tray or a launcher opens it ([88a56ab](https://github.com/samuelba/kirie/commit/88a56ab805d51e028cc3caca35a21582e1f37596))
+* **editor:** drop the hard shadow that showed as a grey bar under the image ([4599ec0](https://github.com/samuelba/kirie/commit/4599ec0feac3e3b3a3a8d7db00d1010e935b12a5))
+* **editor:** make the zoom list wide enough for "Fit 100%" ([2f107af](https://github.com/samuelba/kirie/commit/2f107afa22915b91708ff8308a8ad2ca961a95ad))
+* **editor:** open images in place, and keep old data devices instead of releasing them ([18750fc](https://github.com/samuelba/kirie/commit/18750fc4109817f9293ceacb78a9dd101be1b2e5))
+* **editor:** take drops on GNOME, and paste through the window's own data device ([75f8bb1](https://github.com/samuelba/kirie/commit/75f8bb1b2bb45f1435471a087a5b554f230d841a))
+* guard pasted marks and image marks against hostile input, and keep copied marks in Kirie ([ce38f2e](https://github.com/samuelba/kirie/commit/ce38f2ecdac8c77c0d3674f33b5a0a6b2a567191))
+* wait for the clipboard service to say it holds the clipboard, and tighten Esc, restacking keys and pastes ([9df1c91](https://github.com/samuelba/kirie/commit/9df1c91432c4edca99a4608c7447b3648c395422))
+
+
+### Performance Improvements
+
+* **capture:** encode GNOME Shell screenshots in parallel strips ([28c9105](https://github.com/samuelba/kirie/commit/28c91052abb3346e13c3229125417d21982d6eec))
+
 ## [0.1.1](https://github.com/samuelba/kirie/compare/v0.1.0...v0.1.1) (2026-11-22)
 
 
