@@ -164,8 +164,10 @@ pub enum Message {
     SaveAs,
     SaveTo(PathBuf, crate::save::Format),
     Done(Result<String, String>),
-    /// The image left the editor, saved or copied, as this document had it.
-    Exported(String, Box<Document>),
+    /// The image left the editor, saved (to the file) or copied, as this document had it.
+    Exported(String, Option<PathBuf>, Box<Document>),
+    /// Shows a saved file in the file manager.
+    ShowInFiles(PathBuf),
     CloseRequested,
     Close(Answer),
     /// Puts the image away, asking first about unsaved changes.
@@ -217,6 +219,8 @@ struct Toast {
     id: u64,
     text: String,
     error: bool,
+    /// The file just saved, to show in the file manager.
+    file: Option<PathBuf>,
 }
 
 pub struct Editor {
@@ -511,8 +515,9 @@ impl Editor {
             }
             Message::Escape if self.closing == Closing::Asking => self.closing = Closing::No,
             Message::Escape | Message::About(false) if self.about => self.about = false,
-            Message::About(open) => self.about = open,
-            Message::OpenLink(link) => crate::launch::open(link),
+            Message::About(_) | Message::OpenLink(_) | Message::ShowInFiles(_) => {
+                return self.outside(message);
+            }
             Message::Escape | Message::CropCancel if self.cropping.is_some() => {
                 self.cropping = None;
                 self.viewport = Viewport::fitted();
@@ -622,13 +627,13 @@ impl Editor {
                 }
                 self.toast(result)
             }
-            Message::Exported(text, kept) => {
+            Message::Exported(text, file, kept) => {
                 self.kept = *kept;
                 if self.closing == Closing::Saving {
                     let then = self.carry_on();
-                    return then.chain(self.toast(Ok(text)));
+                    return then.chain(self.toast_file(text, file));
                 }
-                self.toast(Ok(text))
+                self.toast_file(text, file)
             }
             Message::CloseRequested => self.close_requested(),
             Message::Discard => self.discard(),
@@ -1010,6 +1015,20 @@ impl Editor {
         Task::none()
     }
 
+    /// The about card, and links and files handed to the desktop.
+    fn outside(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::About(open) => self.about = open,
+            Message::OpenLink(link) => crate::launch::open(link),
+            Message::ShowInFiles(path) => {
+                return Task::future(async move { crate::launch::show_in_files(&path).await })
+                    .discard();
+            }
+            _ => {}
+        }
+        Task::none()
+    }
+
     /// Typing in the text box.
     fn typed(&mut self, message: Message) -> Task<Message> {
         match message {
@@ -1086,11 +1105,11 @@ impl Editor {
             return Task::none();
         };
         let kept = Box::new(self.document().clone());
-        let exported = move |done: Result<String, String>| match done {
-            Ok(text) => Message::Exported(text, kept),
+        let exported = move |done: Result<(String, Option<PathBuf>), String>| match done {
+            Ok((text, file)) => Message::Exported(text, file, kept),
             Err(error) => Message::Done(Err(error)),
         };
-        let saved = |path: std::path::PathBuf| format!("Saved {}", crate::save::pretty(&path));
+        let saved = |path: PathBuf| (format!("Saved {}", crate::save::pretty(&path)), Some(path));
         let project = || Project {
             image: image.clone(),
             document: self.document().clone(),
@@ -1122,7 +1141,7 @@ impl Editor {
         };
         match export {
             Export::Copy => Task::perform(crate::clipboard::copy(picture), move |copied| {
-                exported(copied.map(|()| "Copied to the clipboard".to_owned()))
+                exported(copied.map(|()| ("Copied to the clipboard".to_owned(), None)))
             }),
             Export::Save | Export::Project | Export::To(..) => {
                 Task::perform(crate::save::save(picture), move |done| {
@@ -1133,14 +1152,29 @@ impl Editor {
     }
 
     fn toast(&mut self, result: Result<String, String>) -> Task<Message> {
+        match result {
+            Ok(text) => self.show_toast(text, false, None),
+            Err(text) => self.show_toast(text, true, None),
+        }
+    }
+
+    /// Tells that the image was saved to `file`, or copied without one.
+    fn toast_file(&mut self, text: String, file: Option<PathBuf>) -> Task<Message> {
+        self.show_toast(text, false, file)
+    }
+
+    fn show_toast(&mut self, text: String, error: bool, file: Option<PathBuf>) -> Task<Message> {
         self.toasts += 1;
         let id = self.toasts;
-        let (text, error) = match result {
-            Ok(text) => (text, false),
-            Err(text) => (text, true),
-        };
-        self.toast = Some(Toast { id, text, error });
-        Task::perform(tokio::time::sleep(Duration::from_secs(4)), move |()| {
+        // A toast with a button stays a little longer, to reach the button.
+        let shown = Duration::from_secs(if file.is_some() { 8 } else { 4 });
+        self.toast = Some(Toast {
+            id,
+            text,
+            error,
+            file,
+        });
+        Task::perform(tokio::time::sleep(shown), move |()| {
             Message::ToastExpired(id)
         })
     }

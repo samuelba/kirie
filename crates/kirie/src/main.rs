@@ -271,7 +271,7 @@ fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
 /// Tells where the overlay's picture was saved.
 fn saved(path: &std::path::Path) -> anyhow::Result<()> {
     println!("{}", path.display());
-    block_on(notify::show("Screenshot saved", &save::pretty(path)))?;
+    block_on(notify::saved(path))?;
     Ok(())
 }
 

@@ -252,11 +252,20 @@ impl Editor {
             } else {
                 palette.text
             };
-            floating_bits = floating_bits.push(
-                container(text(toast.text.clone()).size(13).color(color))
-                    .padding([space::S, space::L])
-                    .style(floating(palette)),
-            );
+            let mut content = row![text(toast.text.clone()).size(13).color(color)]
+                .spacing(space::M)
+                .align_y(Alignment::Center);
+            let mut padding = Padding::from([space::S, space::L]);
+            if let Some(file) = &toast.file {
+                content = content.push(secondary_button(
+                    "Show in Files",
+                    palette,
+                    Message::ShowInFiles(file.clone()),
+                ));
+                padding = Padding::from(space::S).left(space::L);
+            }
+            floating_bits =
+                floating_bits.push(container(content).padding(padding).style(floating(palette)));
         }
         layers = layers.push(
             container(floating_bits)

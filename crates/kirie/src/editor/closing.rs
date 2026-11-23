@@ -219,6 +219,7 @@ mod tests {
         assert!(editor.unsaved());
         let _ = editor.update(Message::Exported(
             "Saved".into(),
+            None,
             Box::new(editor.document().clone()),
         ));
         assert!(!editor.unsaved());
@@ -316,7 +317,7 @@ mod tests {
         let _ = editor.update(Message::Discard);
         editor.closing = Closing::Saving;
         let saved = Box::new(editor.document().clone());
-        let _ = editor.update(Message::Exported("Saved".into(), saved));
+        let _ = editor.update(Message::Exported("Saved".into(), None, saved));
         assert!(editor.image.is_none());
         assert_eq!(editor.closing, Closing::No);
     }
