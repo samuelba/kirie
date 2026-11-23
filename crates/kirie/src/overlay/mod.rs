@@ -168,7 +168,11 @@ impl TryInto<LayerShellCustomActionWithId> for Message {
 pub enum Outcome {
     #[default]
     Canceled,
-    Saved(PathBuf),
+    /// The picture was saved here, and put on the clipboard too if `copied`.
+    Saved {
+        path: PathBuf,
+        copied: bool,
+    },
     /// The picture and its marks, to save where the user picks once the overlay is gone.
     SaveAs(Box<kirie_annotate::project::Project>),
     Copied,
@@ -1055,8 +1059,8 @@ impl Overlay {
             Err(error) => return self.close(Outcome::Failed(error)),
         };
         match action {
-            Action::Save => Task::perform(crate::save::save(picture), |saved| {
-                Message::Finished(saved.map(Outcome::Saved))
+            Action::Save => Task::perform(crate::save::save_and_copy(picture), |saved| {
+                Message::Finished(saved.map(|(path, copied)| Outcome::Saved { path, copied }))
             }),
             Action::Copy => Task::perform(crate::clipboard::copy(picture), |copied| {
                 Message::Finished(copied.map(|()| Outcome::Copied))
@@ -1212,6 +1216,9 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
     }
     match key.as_ref() {
         keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
+        keyboard::Key::Named(Named::Enter) if modifiers.shift() || command => {
+            Some(Message::Finish(Action::Save))
+        }
         keyboard::Key::Named(Named::Enter) => Some(Message::Accept),
         keyboard::Key::Named(Named::Delete | Named::Backspace) => Some(Message::Delete),
         keyboard::Key::Named(Named::ArrowLeft) => Some(Message::Nudge(Vector::new(-step, 0.0))),

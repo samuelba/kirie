@@ -63,7 +63,7 @@ the selection.
 | Key | Does |
 |---|---|
 | Enter or Ctrl+C | Copy the picture and close |
-| Ctrl+S | Save it to `~/Pictures/Screenshots` |
+| Ctrl+S, Shift+Enter or Ctrl+Enter | Save it to `~/Pictures/Screenshots`, copy it too, and close |
 | Ctrl+Shift+S | Save it where you choose, as PNG, JPEG, WebP or a `.kirie` project |
 | Ctrl+E | Open it in the editor, with its marks still editable |
 | Ctrl+A | Select every screen |

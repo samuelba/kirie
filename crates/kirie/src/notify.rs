@@ -47,6 +47,14 @@ trait Notifications {
     fn notification_closed(&self, id: u32, reason: u32) -> zbus::Result<()>;
 }
 
+fn summary(copied: bool) -> &'static str {
+    if copied {
+        "Screenshot saved and copied"
+    } else {
+        "Screenshot saved"
+    }
+}
+
 fn hints() -> HashMap<&'static str, Variant<'static>> {
     HashMap::from([
         ("desktop-entry", Variant::from(crate::APP_ID)),
@@ -69,11 +77,11 @@ pub async fn show(summary: &str, body: &str) {
     }
 }
 
-/// Tells that the picture was saved to `path`, with buttons that open it or show it in the file
-/// manager, and waits until one is pressed or the notification goes away. Failures are logged,
-/// never shown.
-pub async fn saved(path: &Path) {
-    let summary = "Screenshot saved";
+/// Tells that the picture was saved to `path`, and copied if `copied`, with buttons that open it
+/// or show it in the file manager, and waits until one is pressed or the notification goes away.
+/// Failures are logged, never shown.
+pub async fn saved(path: &Path, copied: bool) {
+    let summary = summary(copied);
     let body = crate::save::pretty(path);
     let shown = async {
         let connection = zbus::Connection::session().await?;
@@ -120,5 +128,16 @@ pub async fn saved(path: &Path) {
         Ok(Some(action)) if action == OPEN || action == DEFAULT => crate::launch::open(path),
         Ok(_) => {}
         Err(error) => tracing::debug!(%error, "cannot show a notification"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_copied_screenshot_says_so() {
+        assert_eq!(summary(true), "Screenshot saved and copied");
+        assert_eq!(summary(false), "Screenshot saved");
     }
 }

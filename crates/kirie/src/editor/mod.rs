@@ -1335,8 +1335,15 @@ impl Editor {
                 exported(copied.map(|()| ("Copied to the clipboard".to_owned(), None)))
             }),
             Export::Save | Export::Project | Export::To(..) => {
-                Task::perform(crate::save::save(picture), move |done| {
-                    exported(done.map(saved))
+                Task::perform(crate::save::save_and_copy(picture), move |done| {
+                    exported(done.map(|(path, copied)| {
+                        let text = if copied {
+                            format!("Saved {} and copied", crate::save::pretty(&path))
+                        } else {
+                            format!("Saved {}", crate::save::pretty(&path))
+                        };
+                        (text, Some(path))
+                    }))
                 })
             }
         }
@@ -1629,6 +1636,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
     }
     match key.as_ref() {
         keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
+        keyboard::Key::Named(Named::Enter) if modifiers.shift() || command => Some(Message::Save),
         keyboard::Key::Named(Named::Delete | Named::Backspace) => Some(Message::Delete),
         keyboard::Key::Character("z") if command && modifiers.shift() => Some(Message::Redo),
         keyboard::Key::Character("z") if command => Some(Message::Undo),

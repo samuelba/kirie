@@ -273,7 +273,7 @@ impl Overlay {
             ),
             icon_button(
                 Icon::Save,
-                "Save to Pictures (Ctrl+S)",
+                "Save to Pictures and copy (Ctrl+S or Shift+Enter)",
                 palette,
                 false,
                 Some(Message::Finish(Action::Save)),

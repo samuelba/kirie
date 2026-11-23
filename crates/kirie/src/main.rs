@@ -284,7 +284,7 @@ fn take_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
         block_on(ipc::resume())?;
     }
     match outcome.map_err(anyhow::Error::msg)? {
-        overlay::Outcome::Saved(path) => saved(&path),
+        overlay::Outcome::Saved { path, copied } => saved(&path, copied),
         overlay::Outcome::SaveAs(project) => {
             let name = format!("{}.png", save::stem(&jiff::Zoned::now()));
             let folder = save::screenshots_dir();
@@ -297,7 +297,7 @@ fn take_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
             };
             let path =
                 block_on(save::save_as(*project, path, format))?.map_err(anyhow::Error::msg)?;
-            saved(&path)
+            saved(&path, false)
         }
         overlay::Outcome::Copied => {
             block_on(notify::show(
@@ -320,9 +320,9 @@ fn take_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
 }
 
 /// Tells where the overlay's picture was saved.
-fn saved(path: &std::path::Path) -> anyhow::Result<()> {
+fn saved(path: &std::path::Path, copied: bool) -> anyhow::Result<()> {
     println!("{}", path.display());
-    block_on(notify::saved(path))?;
+    block_on(notify::saved(path, copied))?;
     Ok(())
 }
 

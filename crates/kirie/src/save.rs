@@ -215,6 +215,17 @@ pub async fn save(image: RgbaImage) -> Result<PathBuf, String> {
     .map_err(|error| error.to_string())?
 }
 
+/// Writes `image` into the screenshots folder and puts it on the clipboard too: the file, and
+/// whether the copy worked. Only the save must work.
+pub async fn save_and_copy(image: RgbaImage) -> Result<(PathBuf, bool), String> {
+    let path = save(image.clone()).await?;
+    let copied = crate::clipboard::copy(image)
+        .await
+        .inspect_err(|error| tracing::warn!(%error, "saved, but not copied"))
+        .is_ok();
+    Ok((path, copied))
+}
+
 /// Writes `project` to `path`, a file the user chose, as `format`: the finished picture, or the
 /// project itself.
 pub async fn save_as(project: Project, path: PathBuf, format: Format) -> Result<PathBuf, String> {
