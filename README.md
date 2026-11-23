@@ -84,7 +84,8 @@ in the status bar (Ctrl+0 fits the image, Ctrl+1 shows it at actual size); pan w
 wheel or the middle button. Press C, or the crop button under the tools, to keep only part of the image: drag the
 frame and press Enter. **Frame** puts room around the picture, filled with a color or left
 transparent, with a soft shadow under the picture if you like, and can take in marks drawn
-beyond the picture's edges. **Save project** (Ctrl+Shift+S) keeps a `.kirie` file whose marks you can change later.
+beyond the picture's edges. **Save project** (Ctrl+Shift+S) keeps a `.kirie` file whose marks you can change later. The installer
+registers the `.kirie` file type, so a double click opens a project in Kirie.
 
 Saved and copied images hold only the finished picture. Redact covers every pixel it touches
 with solid color. Blur and pixelate scramble each block a little, so guesses of what was there

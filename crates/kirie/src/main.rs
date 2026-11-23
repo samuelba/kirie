@@ -311,6 +311,27 @@ mod tests {
     }
 
     #[test]
+    fn the_desktop_entry_opens_the_project_file_type() {
+        let mime = include_str!("../../../packaging/dev.samuelba.Kirie.mime.xml");
+        let desktop = include_str!("../../../packaging/dev.samuelba.Kirie.desktop");
+        let kind = mime
+            .split("<mime-type type=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap();
+        let opened = desktop
+            .lines()
+            .find_map(|line| line.strip_prefix("MimeType="))
+            .unwrap();
+        assert!(opened.split(';').any(|listed| listed == kind));
+        let glob = format!(
+            "<glob pattern=\"*.{}\"/>",
+            kirie_annotate::project::EXTENSION
+        );
+        assert!(mime.contains(&glob));
+    }
+
+    #[test]
     fn an_editor_the_overlay_opens_is_not_trusted_by_the_extension() {
         let command = editor_command(
             std::path::Path::new("kirie"),
