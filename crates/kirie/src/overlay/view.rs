@@ -61,6 +61,7 @@ impl Overlay {
                         self.palette,
                         Message::TextEdit,
                         Message::TextDone,
+                        None,
                     ))
                     .position(at),
                 );

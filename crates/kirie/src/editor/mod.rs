@@ -147,6 +147,10 @@ pub enum Message {
     ToggleScheme,
     TextEdit(iced::widget::text_editor::Action),
     TextDone,
+    /// Pastes the clipboard's text into the text being typed.
+    PasteText,
+    /// The window lost the keyboard.
+    Unfocused,
     Undo,
     Redo,
     Delete,
@@ -251,6 +255,8 @@ pub struct Editor {
     scheme_chosen: bool,
     typesetter: RefCell<Typesetter>,
     patches: RefCell<HashMap<crate::paint::PatchKey, image::Handle>>,
+    /// The window's data device, for drops and the clipboard, once it is ready.
+    device: Option<crate::drops::Device>,
 }
 
 impl std::fmt::Debug for Editor {
@@ -299,6 +305,7 @@ impl Editor {
             scheme_chosen: false,
             typesetter: RefCell::new(Typesetter::new()),
             patches: RefCell::new(HashMap::new()),
+            device: None,
         };
         if let Some(loaded) = loaded {
             editor.open(loaded);
@@ -489,12 +496,9 @@ impl Editor {
             | Message::Frame(_) => return self.restyle(message),
             Message::SystemScheme(scheme) => self.follow(Some(scheme)),
             Message::ToggleScheme => self.follow(None),
-            Message::TextEdit(action) => {
-                if let Some(typing) = &mut self.typing {
-                    typing.content.perform(action);
-                }
+            Message::TextEdit(_) | Message::TextDone | Message::PasteText => {
+                return self.typed(message);
             }
-            Message::TextDone => self.commit_text(),
             Message::Undo => self.travel(true),
             Message::Redo => self.travel(false),
             Message::Delete => {
@@ -526,6 +530,7 @@ impl Editor {
             | Message::Paste
             | Message::Save
             | Message::SaveProject
+            | Message::Unfocused
             | Message::Dropped(_) => return self.files(message),
             Message::Done(Ok(text)) if text.is_empty() => {}
             Message::Done(_)
@@ -731,11 +736,22 @@ impl Editor {
                 Ok(None) => Message::Done(Ok(String::new())),
                 Err(error) => Message::Done(Err(error)),
             }),
-            Message::Paste => Task::perform(crate::clipboard::paste(), |pasted| {
+            Message::Paste => Task::perform(paste(self.device.clone()), |pasted| {
                 Message::Opened(pasted.map(|image| Loaded::image(image, None)))
             }),
             Message::Save => self.export(Export::Save),
             Message::SaveProject => self.export(Export::Project),
+            // Made anew before anything can be dragged from another window onto this one.
+            Message::Unfocused => {
+                if let Some(device) = &self.device {
+                    device.renew();
+                }
+                Task::none()
+            }
+            Message::Dropped(crate::drops::Dropped::Ready(device)) => {
+                self.device = Some(device);
+                Task::none()
+            }
             Message::Dropped(crate::drops::Dropped::Files(paths)) => {
                 paths.into_iter().next().map_or_else(Task::none, |path| {
                     Task::perform(load_async(path), Message::Opened)
@@ -973,6 +989,40 @@ impl Editor {
         Task::none()
     }
 
+    /// Typing in the text box.
+    fn typed(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::TextEdit(action) => {
+                if let Some(typing) = &mut self.typing {
+                    typing.content.perform(action);
+                }
+            }
+            Message::TextDone => self.commit_text(),
+            Message::PasteText => return self.paste_text(),
+            _ => {}
+        }
+        Task::none()
+    }
+
+    /// Pastes text from the clipboard, read through the window's data device, else through
+    /// iced's clipboard.
+    fn paste_text(&self) -> Task<Message> {
+        let paste = |text: String| {
+            Message::TextEdit(iced::widget::text_editor::Action::Edit(
+                iced::widget::text_editor::Edit::Paste(std::sync::Arc::new(text)),
+            ))
+        };
+        let nothing = || Message::Done(Ok(String::new()));
+        Task::perform(
+            crate::drops::clipboard(self.device.clone(), &crate::drops::TEXT),
+            |bytes| bytes.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+        )
+        .then(move |text| match text {
+            Some(text) => Task::done(paste(text)),
+            None => iced::clipboard::read().map(move |text| text.map_or_else(nothing, paste)),
+        })
+    }
+
     fn commit_text(&mut self) {
         if let Some(op) = self
             .typing
@@ -1066,6 +1116,7 @@ impl Editor {
         };
         Subscription::batch([
             keys,
+            event::listen_with(focus),
             Subscription::run(crate::ipc::requests).map(Message::Ipc),
             Subscription::run(crate::appearance::changes).map(Message::SystemScheme),
             window::close_requests().map(|_| Message::CloseRequested),
@@ -1077,6 +1128,17 @@ impl Editor {
             Scheme::Dark => iced::Theme::Dark,
             Scheme::Light => iced::Theme::Light,
         }
+    }
+}
+
+/// The image on the clipboard, read through the window's data device, else through the
+/// clipboard protocol of wlroots compositors.
+async fn paste(device: Option<crate::drops::Device>) -> Result<RgbaImage, String> {
+    match crate::drops::clipboard(device, &[crate::drops::PNG]).await {
+        Some(png) => ::image::load_from_memory_with_format(&png, ::image::ImageFormat::Png)
+            .map(|image| image.to_rgba8())
+            .map_err(|error| format!("the clipboard image cannot be read: {error}")),
+        None => crate::clipboard::paste().await,
     }
 }
 
@@ -1194,6 +1256,12 @@ fn typing_key(event: Event, _: event::Status, _: window::Id) -> Option<Message> 
 fn quit_key(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<Message> {
     (modifiers.command() && key.as_ref() == keyboard::Key::Character("q"))
         .then_some(Message::CloseRequested)
+}
+
+/// The window losing the keyboard, when the data device is made anew to take drops.
+#[allow(clippy::needless_pass_by_value)]
+fn focus(event: Event, _: event::Status, _: window::Id) -> Option<Message> {
+    matches!(event, Event::Window(window::Event::Unfocused)).then_some(Message::Unfocused)
 }
 
 /// The crop that keeps `rect` of an image of `size`, in whole pixels: none for all of it.

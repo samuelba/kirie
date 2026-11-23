@@ -222,6 +222,7 @@ impl Editor {
                             palette,
                             Message::TextEdit,
                             Message::TextDone,
+                            Some(Message::PasteText),
                         ),
                         column![
                             text("Enter to place").size(12).color(palette.muted),
