@@ -440,6 +440,12 @@ fn draw_outline(
     });
     frame.stroke(
         &outline,
+        Stroke::default()
+            .with_color(Color::BLACK.scale_alpha(0.7))
+            .with_width(1.0),
+    );
+    frame.stroke(
+        &outline,
         Stroke {
             line_dash: canvas::LineDash {
                 segments: &[6.0, 4.0],
