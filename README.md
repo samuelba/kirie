@@ -78,7 +78,8 @@ Kirie keeps the style, color, weight, text look, shadow, spotlight brightness an
 used for the next screenshot, in `~/.local/state/kirie/drawing.ron`.
 
 `kirie` opens the editor. Paste an image with Ctrl+V, open one with `kirie edit FILE`, or take a
-screenshot from its header; Ctrl+Q closes it. Zoom with Ctrl+scroll, Ctrl+plus and Ctrl+minus, or the zoom control
+screenshot from its header. The bin in the header (Ctrl+W) discards the image; Ctrl+Q closes
+the editor. Both ask first when there are unsaved changes. Zoom with Ctrl+scroll, Ctrl+plus and Ctrl+minus, or the zoom control
 in the status bar (Ctrl+0 fits the image, Ctrl+1 shows it at actual size); pan with the scroll
 wheel or the middle button. Press C, or the crop button under the tools, to keep only part of the image: drag the
 frame and press Enter. **Frame** puts room around the picture, filled with a color or left

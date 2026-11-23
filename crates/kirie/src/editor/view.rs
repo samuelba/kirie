@@ -100,6 +100,13 @@ impl Editor {
             actions = actions
                 .push(divider(palette))
                 .push(icon_button(
+                    Icon::Delete,
+                    "Discard the image (Ctrl+W)",
+                    palette,
+                    false,
+                    Some(Message::Discard),
+                ))
+                .push(icon_button(
                     Icon::Project,
                     "Save editable project, with the original under the marks (Ctrl+Shift+S)",
                     palette,

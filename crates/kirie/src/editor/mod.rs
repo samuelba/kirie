@@ -22,7 +22,7 @@ use kirie_annotate::{
 };
 use kirie_ui::{Palette, Scheme};
 
-use self::closing::{Answer, Closing};
+use self::closing::{Answer, Closing, Then};
 use self::viewport::{Viewport, Zoom};
 use crate::controls;
 use crate::drawing::Drawing;
@@ -160,6 +160,8 @@ pub enum Message {
     Exported(String, Box<Document>),
     CloseRequested,
     Close(Answer),
+    /// Puts the image away, asking first about unsaved changes.
+    Discard,
     Opened(Result<Loaded, String>),
     Dropped(crate::drops::Dropped),
     ToastExpired(u64),
@@ -217,8 +219,8 @@ pub struct Editor {
     /// The document as last opened, saved or copied, to tell unsaved changes.
     kept: Document,
     closing: Closing,
-    /// An image to open once the question about unsaved changes is answered.
-    then_open: Option<Box<Loaded>>,
+    /// What to do once the question about unsaved changes is answered.
+    then: Then,
     viewport: Viewport,
     cropping: Option<Cropping>,
     /// The canvas's size, for the zoom level when the image is fitted.
@@ -270,7 +272,7 @@ impl Editor {
             history: History::new(blank.clone()),
             kept: blank,
             closing: Closing::No,
-            then_open: None,
+            then: Then::Exit,
             viewport: Viewport::fitted(),
             cropping: None,
             canvas: Size::ZERO,
@@ -338,7 +340,26 @@ impl Editor {
         self.typing = None;
         self.sliding = false;
         self.closing = Closing::No;
-        self.then_open = None;
+        self.then = Then::Exit;
+        self.patches.borrow_mut().clear();
+    }
+
+    /// Puts the image away: the editor shows its empty page again.
+    fn clear(&mut self) {
+        let blank = Drawing::load().styled(Document::new(1, 1, 1.0));
+        self.kept = blank.clone();
+        self.history = History::new(blank);
+        self.image = None;
+        self.path = None;
+        self.viewport = Viewport::fitted();
+        self.cropping = None;
+        self.hover = None;
+        self.draft = None;
+        self.picked = None;
+        self.typing = None;
+        self.sliding = false;
+        self.closing = Closing::No;
+        self.then = Then::Exit;
         self.patches.borrow_mut().clear();
     }
 
@@ -500,6 +521,7 @@ impl Editor {
             Message::Done(_)
             | Message::Exported(..)
             | Message::CloseRequested
+            | Message::Discard
             | Message::Close(_) => return self.finish(message),
             Message::Opened(Ok(loaded)) => return self.replace(loaded),
             Message::Ipc(_)
@@ -576,22 +598,20 @@ impl Editor {
             Message::Done(result) => {
                 if result.is_err() {
                     self.closing = Closing::No;
-                    self.then_open = None;
+                    self.then = Then::Exit;
                 }
                 self.toast(result)
             }
             Message::Exported(text, kept) => {
                 self.kept = *kept;
                 if self.closing == Closing::Saving {
-                    self.closing = Closing::No;
-                    let Some(next) = self.then_open.take() else {
-                        return iced::exit();
-                    };
-                    self.open(*next);
+                    let then = self.carry_on();
+                    return then.chain(self.toast(Ok(text)));
                 }
                 self.toast(Ok(text))
             }
             Message::CloseRequested => self.close_requested(),
+            Message::Discard => self.discard(),
             Message::Close(answer) => self.answer(answer),
             _ => Task::none(),
         }
@@ -1225,6 +1245,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("y") if command => Some(Message::Redo),
         keyboard::Key::Character("c") if command => Some(Message::Copy),
         keyboard::Key::Character("v") if command => Some(Message::Paste),
+        keyboard::Key::Character("w") if command => Some(Message::Discard),
         keyboard::Key::Character("o") if command => Some(Message::Open),
         keyboard::Key::Character("s") if command && modifiers.shift() => Some(Message::SaveProject),
         keyboard::Key::Character("s") if command => Some(Message::Save),
