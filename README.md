@@ -88,10 +88,12 @@ To catch an open menu, a tooltip or a hover state, wait before the screenshot:
 For scripts, `kirie capture` takes a screenshot without the overlay: `all` for every screen,
 `--region X,Y,W,H` for a region (slurp's `X,Y WxH` works too, so `--region "$(slurp)"` does), or
 `--window` for the topmost window where Kirie can see the windows. `-o FILE` writes it to a
-file, `-o -` writes a PNG to stdout, and without `-o` it goes to the clipboard:
+file, `-o -` writes a PNG to stdout, `--edit` opens it in the editor, and otherwise it goes to
+the clipboard:
 
 ```sh
 kirie capture --region "$(slurp)" -o - | swappy -f -
+kirie capture --region "$(slurp)" --edit
 kirie capture all -o ~/all-screens.png
 ```
 

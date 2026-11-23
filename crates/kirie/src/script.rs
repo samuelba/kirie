@@ -1,5 +1,6 @@
 //! Screenshots without the overlay, for scripts: every screen, a region given on the command
-//! line, or the topmost window, written to a file, to stdout or to the clipboard.
+//! line, or the topmost window, written to a file, to stdout or to the clipboard, or opened in
+//! the editor.
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -23,12 +24,14 @@ pub enum Target {
     File(PathBuf),
     Stdout,
     Clipboard,
+    Editor,
 }
 
 impl Target {
-    /// `-` for stdout, a path for a file, nothing for the clipboard.
-    pub fn of(output: Option<PathBuf>) -> Self {
+    /// The editor when `edit`, else `-` for stdout, a path for a file, nothing for the clipboard.
+    pub fn of(output: Option<PathBuf>, edit: bool) -> Self {
         match output {
+            _ if edit => Self::Editor,
             Some(path) if path.as_os_str() == "-" => Self::Stdout,
             Some(path) => Self::File(path),
             None => Self::Clipboard,
@@ -99,6 +102,14 @@ pub fn capture(area: Area, target: &Target, cursor: bool) -> anyhow::Result<()> 
     let image = geometry::crop(&frames, part).context("nothing captured")?;
     let (width, height) = image.dimensions();
     match target {
+        Target::Editor => {
+            let unit = f64::from(width) / f64::from(part.width.max(1));
+            let document = crate::drawing::Drawing::load()
+                .styled(kirie_annotate::Document::new(width, height, unit));
+            let project = kirie_annotate::project::Project { image, document };
+            let path = crate::save::save_handoff(&project).map_err(anyhow::Error::msg)?;
+            crate::open_handoff(&path)?;
+        }
         Target::File(path) => {
             image
                 .save(path)
@@ -146,11 +157,12 @@ mod tests {
 
     #[test]
     fn a_dash_is_stdout_and_nothing_is_the_clipboard() {
-        assert_eq!(Target::of(Some("-".into())), Target::Stdout);
+        assert_eq!(Target::of(Some("-".into()), false), Target::Stdout);
         assert_eq!(
-            Target::of(Some("a.png".into())),
+            Target::of(Some("a.png".into()), false),
             Target::File("a.png".into())
         );
-        assert_eq!(Target::of(None), Target::Clipboard);
+        assert_eq!(Target::of(None, false), Target::Clipboard);
+        assert_eq!(Target::of(None, true), Target::Editor);
     }
 }
