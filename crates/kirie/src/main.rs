@@ -18,6 +18,7 @@ mod paint;
 mod picker;
 mod region;
 mod save;
+mod script;
 mod selection;
 mod settings;
 mod shortcuts;
@@ -31,7 +32,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
-use kirie_capture::{Cursor, geometry};
+use kirie_capture::Cursor;
 
 pub const APP_ID: &str = "dev.samuelba.Kirie";
 /// The longest wait before a screenshot, in seconds.
@@ -54,14 +55,22 @@ enum Command {
     Capture {
         #[arg(value_enum, default_value_t = Mode::Region)]
         mode: Mode,
-        /// Write the screenshot to this file instead of showing the overlay.
+        /// Write the screenshot to this file, or to stdout for -, instead of the clipboard.
+        /// Needs `all`, --region or --window.
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Take this region without the overlay, in desktop coordinates: `X,Y,W,H`, or `X,Y WxH`
+        /// as slurp prints it.
+        #[arg(long, value_name = "X,Y,W,H", value_parser = script::parse_region, conflicts_with = "window", allow_hyphen_values = true)]
+        region: Option<kirie_capture::geometry::Rect>,
+        /// Take the topmost window without the overlay, where Kirie can see the windows.
+        #[arg(long)]
+        window: bool,
         /// Draw the mouse pointer into the screenshot.
         #[arg(long)]
         cursor: bool,
         /// Enter opens the selection in the editor instead of copying it.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["output", "region", "window"])]
         edit: bool,
         /// Wait this many seconds before taking the screenshot, to open a menu or hover first.
         #[arg(long, value_name = "SECONDS", default_value_t = 0, value_parser = clap::value_parser!(u64).range(0..=MAX_DELAY))]
@@ -129,22 +138,29 @@ enum Mode {
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        // stdout may carry a picture, with `capture -o -`.
+        .with_writer(std::io::stderr)
         .init();
     match Cli::parse().command {
         Some(Command::Capture {
-            mode: Mode::All,
-            output: Some(path),
-            cursor,
-            delay,
-            ..
-        }) => capture_to_file(&path, cursor, delay),
-        Some(Command::Capture {
-            mode: Mode::Region,
-            output: None,
+            mode,
+            output,
+            region,
+            window,
             cursor,
             edit,
             delay,
-        }) => capture_region(cursor, edit, delay),
+        }) => match area(mode, region, window) {
+            Some(_) if edit => anyhow::bail!("--edit needs the overlay: leave out `all`"),
+            Some(area) => {
+                wait(delay);
+                script::capture(area, &script::Target::of(output), cursor)
+            }
+            None if output.is_some() => {
+                anyhow::bail!("-o needs `all`, --region or --window: the overlay keeps no file")
+            }
+            None => capture_region(cursor, edit, delay),
+        },
         Some(Command::Debug(Debug::Globals)) => print_globals(),
         Some(Command::ServeClipboard { kind }) => clipboard::serve(&kind),
         Some(Command::Tray) => tray::run(),
@@ -156,48 +172,21 @@ fn main() -> anyhow::Result<()> {
         Some(Command::GnomeExtension(GnomeExtension::Uninstall)) => extension::uninstall(),
         None => edit(None),
         Some(Command::Edit { path }) => edit(path.as_deref()),
-        Some(Command::Capture { .. }) => {
-            anyhow::bail!("this capture mode is not implemented yet")
-        }
     }
 }
 
-fn capture_to_file(path: &std::path::Path, cursor: bool, delay: u64) -> anyhow::Result<()> {
-    // A Kirie the GNOME Shell extension started may read the screens without asking; it only
-    // ever shows them in the overlay, never writes them where its arguments say.
-    anyhow::ensure!(
-        !kirie_capture::shell::launched(),
-        "capturing to a file is not available from the GNOME Shell extension"
-    );
-    wait(delay);
-    let cursor = if cursor {
-        Cursor::Shown
-    } else {
-        Cursor::Hidden
-    };
-    let (protocol, frames) = block_on(kirie_capture::capture(cursor))??;
-    for frame in &frames {
-        tracing::info!(
-            output = frame.output.name,
-            logical = ?frame.output.logical,
-            pixels = ?frame.image.dimensions(),
-            scale = frame.scale(),
-            "captured"
-        );
+/// The part of the screens a capture takes without the overlay, if it is one of those.
+fn area(
+    mode: Mode,
+    region: Option<kirie_capture::geometry::Rect>,
+    window: bool,
+) -> Option<script::Area> {
+    match (region, window, mode) {
+        (Some(region), _, _) => Some(script::Area::Region(region)),
+        (None, true, _) => Some(script::Area::Window),
+        (None, false, Mode::All) => Some(script::Area::All),
+        (None, false, Mode::Region) => None,
     }
-    let area = geometry::bounds(&frames).context("no screens")?;
-    let image = geometry::crop(&frames, area).context("nothing captured")?;
-    image
-        .save(path)
-        .with_context(|| format!("cannot write {}", path.display()))?;
-    eprintln!(
-        "Saved {}×{} from {} screen(s) via {protocol:?} to {}",
-        image.width(),
-        image.height(),
-        frames.len(),
-        path.display()
-    );
-    Ok(())
 }
 
 /// Opens `path` (or an empty editor) in the running editor, or in a new one.
@@ -444,6 +433,45 @@ mod tests {
         let marks = kind(&["kirie", clipboard::SERVE, "--kind", marks::MIME]);
         assert!(clipboard::KINDS.contains(&marks.as_str()));
         assert!(clipboard::serve("text/html").is_err());
+    }
+
+    #[test]
+    fn scripts_say_which_part_to_take() {
+        let parsed = |args: &[&str]| match Cli::try_parse_from(args).map(|cli| cli.command) {
+            Ok(Some(Command::Capture {
+                mode,
+                region,
+                window,
+                ..
+            })) => Ok(area(mode, region, window)),
+            Ok(other) => panic!("{other:?}"),
+            Err(error) => Err(error.kind()),
+        };
+        assert_eq!(parsed(&["kirie", "capture"]), Ok(None));
+        assert_eq!(
+            parsed(&["kirie", "capture", "all", "-o", "-"]),
+            Ok(Some(script::Area::All))
+        );
+        assert_eq!(
+            parsed(&["kirie", "capture", "--region", "1,2 30x40"]),
+            Ok(Some(script::Area::Region(
+                kirie_capture::geometry::Rect::new(1, 2, 30, 40)
+            )))
+        );
+        assert_eq!(
+            parsed(&["kirie", "capture", "--window", "-o", "w.png"]),
+            Ok(Some(script::Area::Window))
+        );
+        assert_eq!(
+            parsed(&["kirie", "capture", "--region", "-1920,0 1920x1080"]),
+            Ok(Some(script::Area::Region(
+                kirie_capture::geometry::Rect::new(-1920, 0, 1920, 1080)
+            ))),
+            "screens left of the first one have negative coordinates"
+        );
+        assert!(parsed(&["kirie", "capture", "--region", "1,2,3"]).is_err());
+        assert!(parsed(&["kirie", "capture", "--region", "1,2,3,4", "--window"]).is_err());
+        assert!(parsed(&["kirie", "capture", "--window", "--edit"]).is_err());
     }
 
     #[test]

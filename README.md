@@ -85,6 +85,16 @@ a mark of its own, to move and resize: its corners keep its proportions, unless 
 To catch an open menu, a tooltip or a hover state, wait before the screenshot:
 `kirie capture --delay 5` takes it after five seconds (up to 60).
 
+For scripts, `kirie capture` takes a screenshot without the overlay: `all` for every screen,
+`--region X,Y,W,H` for a region (slurp's `X,Y WxH` works too, so `--region "$(slurp)"` does), or
+`--window` for the topmost window where Kirie can see the windows. `-o FILE` writes it to a
+file, `-o -` writes a PNG to stdout, and without `-o` it goes to the clipboard:
+
+```sh
+kirie capture --region "$(slurp)" -o - | swappy -f -
+kirie capture all -o ~/all-screens.png
+```
+
 Kirie puts an icon in the tray once you open it or take a screenshot, on KDE Plasma, COSMIC and
 GNOME with the AppIndicator extension (Ubuntu has it). Its menu opens Kirie, takes a screenshot
 now or in 3 or 10 seconds, shows what Kirie is, and quits the icon.
