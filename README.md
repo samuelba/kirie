@@ -91,6 +91,10 @@ now or in 3 or 10 seconds, shows what Kirie is, and quits the icon.
 Taking the same region again and again? Press the pin in the toolbar: the next screenshot starts
 with that region selected, so Enter takes it at once. Moving or resizing the selection unpins it.
 
+Right-click a color, or press +, to open the color picker. Its pipette takes a color from the
+screenshot: a loupe follows the pointer with the color under it, and a click takes it (Esc
+puts the pipette down).
+
 Kirie keeps the style, color, weight, text look, shadow, spotlight brightness and frame you last
 used for the next screenshot, in `~/.local/state/kirie/drawing.ron`.
 

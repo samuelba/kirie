@@ -7,6 +7,7 @@ use iced::{Color, Point, Rectangle, Renderer, Size, Theme, Vector};
 use kirie_annotate::{Draft, Shape, Tool};
 
 use super::{Editor, MARK_REACH, Message, Pointer, pixel};
+use crate::loupe::{self, Lens};
 use crate::paint::{ImageSource, Marks, Painter, Part, color_of, draw_marquee, draw_picked};
 use crate::selection::Handle;
 
@@ -132,7 +133,7 @@ impl canvas::Program<Message> for Board<'_> {
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
-        _cursor: mouse::Cursor,
+        cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let editor = self.editor;
         let mut frame = Frame::new(renderer, bounds.size());
@@ -159,6 +160,27 @@ impl canvas::Program<Message> for Board<'_> {
             self.draw_chrome(&mut frame, &picked, transform, bounds.size());
         } else if let Some(crop) = editor.crop() {
             draw_crop(&mut frame, crop, transform, bounds.size(), editor);
+        }
+        if editor.sampling()
+            && let Some(local) = cursor.position_in(bounds)
+        {
+            let at = editor
+                .viewport
+                .image_point(local, self.content(), bounds.size());
+            let (x, y) = pixel(at);
+            let lens = Lens::sample(image, x, y);
+            let label = match lens.center() {
+                Some(color) => format!("{x}, {y}   {}", loupe::hex(color)),
+                None => format!("{x}, {y}"),
+            };
+            loupe::draw(
+                &mut frame,
+                &lens,
+                &label,
+                local,
+                bounds.size(),
+                editor.palette,
+            );
         }
         vec![frame.into_geometry()]
     }
@@ -217,6 +239,9 @@ impl Board<'_> {
             .editor
             .viewport
             .image_point(local, self.content(), bounds.size());
+        if self.editor.sampling() {
+            return Interaction::Crosshair;
+        }
         if let Some(cropping) = &self.editor.cropping {
             let reach = super::HANDLE_REACH / scale(self.editor, bounds.size());
             return crate::selection::interaction(

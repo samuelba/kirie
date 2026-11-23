@@ -790,6 +790,10 @@ impl Overlay {
         if self.busy {
             return Task::none();
         }
+        if self.sampling() {
+            self.change_style(Message::Picker(picker::Event::Eyedropper));
+            return Task::none();
+        }
         if self.picker.take().is_some()
             || self.typing.take().is_some()
             || self.draft.take().is_some()
@@ -808,6 +812,12 @@ impl Overlay {
             Pointer::Pressed(at) | Pointer::Moved(at) | Pointer::Released(at) => at,
         };
         self.pointer = Some(at);
+        if self.sampling() {
+            if let Pointer::Pressed(at) = pointer {
+                self.sample(at);
+            }
+            return Task::none();
+        }
         // A gesture stays with what its press started, whatever happens on the way.
         if let Pointer::Pressed(at) = pointer {
             let inside = self.selection.hit(at, HANDLE_REACH) == Some(selection::Hit::Inside)
@@ -827,6 +837,35 @@ impl Overlay {
             self.drawing = None;
         }
         task
+    }
+
+    /// Whether the eyedropper waits for a click on the screens.
+    fn sampling(&self) -> bool {
+        self.picker.as_ref().is_some_and(Picker::sampling)
+    }
+
+    /// Hands the picker the frozen screens' color at `at`.
+    fn sample(&mut self, at: Point) {
+        let Some(capture) = self
+            .captures
+            .iter()
+            .find(|capture| area(capture.output.logical).contains(at))
+        else {
+            return;
+        };
+        let logical = capture.output.logical;
+        let scale = capture.scale();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let pixel = |at: f32, from: i32| ((f64::from(at) - f64::from(from)) * scale).floor() as u32;
+        let Some(&::image::Rgba([r, g, b, _])) = capture
+            .image
+            .get_pixel_checked(pixel(at.x, logical.x), pixel(at.y, logical.y))
+        else {
+            return;
+        };
+        self.change_style(Message::Picker(picker::Event::Sampled(
+            kirie_annotate::Rgba::rgb(r, g, b),
+        )));
     }
 
     /// The topmost window under `at`.

@@ -130,7 +130,7 @@ impl canvas::Program<Message> for Surface<'_> {
         let Some(at) = cursor.position().map(|at| self.to_desktop(at)) else {
             return Interaction::default();
         };
-        if self.overlay.selection.dragging() {
+        if self.overlay.selection.dragging() || self.overlay.sampling() {
             return Interaction::Crosshair;
         }
         match self.overlay.tool {
@@ -225,12 +225,14 @@ impl Surface<'_> {
         }
     }
 
-    /// Whether the loupe shows: while a region is picked, not while marks are drawn.
+    /// Whether the loupe shows: while a region is picked, not while marks are drawn, and while
+    /// the eyedropper waits for a click.
     fn magnifying(&self) -> bool {
         let overlay = self.overlay;
-        overlay.tool.is_none()
-            && overlay.toolbar_drag.is_none()
-            && (overlay.selection.rect().is_none() || overlay.selection.dragging())
+        overlay.sampling()
+            || overlay.tool.is_none()
+                && overlay.toolbar_drag.is_none()
+                && (overlay.selection.rect().is_none() || overlay.selection.dragging())
     }
 
     /// The frozen pixels around the pointer at `at`, magnified, with its place and color.

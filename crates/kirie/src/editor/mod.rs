@@ -561,14 +561,7 @@ impl Editor {
             Message::Crop | Message::CropDone | Message::CropReset | Message::CropCancel => {
                 self.crop_message(&message);
             }
-            Message::Escape => {
-                if self.picker.take().is_none()
-                    && self.typing.take().is_none()
-                    && self.draft.take().is_none()
-                {
-                    self.picked.clear();
-                }
-            }
+            Message::Escape => return self.escape(),
             Message::Copy
             | Message::Open
             | Message::Paste
@@ -596,6 +589,21 @@ impl Editor {
                     self.toast = None;
                 }
             }
+        }
+        Task::none()
+    }
+
+    /// Esc puts down what is open, one thing at a time: the eyedropper, the color picker, the
+    /// text being typed, the mark being drawn, then the picked marks.
+    fn escape(&mut self) -> Task<Message> {
+        if self.sampling() {
+            return self.edit_color(picker::Event::Eyedropper);
+        }
+        if self.picker.take().is_none()
+            && self.typing.take().is_none()
+            && self.draft.take().is_none()
+        {
+            self.picked.clear();
         }
         Task::none()
     }
@@ -1089,6 +1097,12 @@ impl Editor {
         if let Pointer::Moved(at) = pointer {
             self.hover = Some(at);
         }
+        if self.sampling() {
+            return match pointer {
+                Pointer::Pressed(at) => self.sample(at),
+                _ => Task::none(),
+            };
+        }
         if self.cropping.is_some() {
             self.crop_pointer(pointer, scale);
             return Task::none();
@@ -1153,6 +1167,26 @@ impl Editor {
             }
         }
         Task::none()
+    }
+
+    /// Whether the eyedropper waits for a click on the image.
+    fn sampling(&self) -> bool {
+        self.picker.as_ref().is_some_and(Picker::sampling)
+    }
+
+    /// Hands the picker the image's color at `at`, if `at` is on the image.
+    fn sample(&mut self, at: kurbo::Point) -> Task<Message> {
+        let (column, row) = pixel(at);
+        let color = self.image.as_ref().and_then(|(image, _)| {
+            let found =
+                image.get_pixel_checked(u32::try_from(column).ok()?, u32::try_from(row).ok()?)?;
+            let [red, green, blue, _] = found.0;
+            Some(Rgba::rgb(red, green, blue))
+        });
+        match color {
+            Some(color) => self.edit_color(picker::Event::Sampled(color)),
+            None => Task::none(),
+        }
     }
 
     /// The about card, and links and files handed to the desktop.

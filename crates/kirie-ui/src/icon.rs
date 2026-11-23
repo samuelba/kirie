@@ -64,6 +64,7 @@ icons! {
     Crop => "crop",
     Expand => "expand",
     Pin => "pin",
+    Pipette => "pipette",
 }
 
 impl Icon {

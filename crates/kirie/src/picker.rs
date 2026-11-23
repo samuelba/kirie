@@ -6,7 +6,8 @@ use iced::widget::canvas::{self, Action, Frame, Geometry, Path, Stroke, gradient
 use iced::widget::{column, container, row, text, text_input};
 use iced::{Alignment, Background, Border, Color, Element, Length, Point, Rectangle, Renderer};
 use kirie_annotate::{Rgba, StyleId};
-use kirie_ui::widget::pill;
+use kirie_ui::icon::Icon;
+use kirie_ui::widget::{icon_button, pill};
 use kirie_ui::{Palette, radius, space};
 
 use crate::paint::color_of;
@@ -72,9 +73,16 @@ impl Hsv {
 
 #[derive(Debug, Clone)]
 pub enum Event {
-    Shade { saturation: f32, value: f32 },
+    Shade {
+        saturation: f32,
+        value: f32,
+    },
     Hue(f32),
     Hex(String),
+    /// Starts taking a color from the picture with the next click.
+    Eyedropper,
+    /// The color under the click, taken from the picture.
+    Sampled(Rgba),
     Apply,
     Remove,
     ResetDefaults,
@@ -97,6 +105,8 @@ pub struct Picker {
     hsv: Hsv,
     alpha: u8,
     hex: String,
+    /// The eyedropper waits for a click on the picture.
+    sampling: bool,
 }
 
 impl Picker {
@@ -113,7 +123,13 @@ impl Picker {
             hsv: Hsv::from_rgba(color),
             alpha: color.a,
             hex: color.to_hex(),
+            sampling: false,
         }
+    }
+
+    /// Whether the eyedropper waits for a click on the picture, to take its color.
+    pub fn sampling(&self) -> bool {
+        self.sampling
     }
 
     pub fn target(&self) -> Target {
@@ -166,6 +182,15 @@ pub fn update(picker: &mut Option<Picker>, swatches: &mut Swatches, event: Event
                 open.alpha = color.a;
             }
             open.hex = hex;
+            return Outcome::Editing;
+        }
+        Event::Sampled(color) => {
+            open.set(Hsv::from_rgba(color));
+            open.sampling = false;
+            return Outcome::Editing;
+        }
+        Event::Eyedropper => {
+            open.sampling = !open.sampling;
             return Outcome::Editing;
         }
         Event::Cancel => {
@@ -266,9 +291,19 @@ pub fn view(picker: &Picker, palette: Palette) -> Element<'_, Event> {
         })
         .width(WIDTH)
         .height(HUE),
-        row![preview, hex]
-            .spacing(space::S)
-            .align_y(Alignment::Center),
+        row![
+            preview,
+            hex,
+            icon_button(
+                Icon::Pipette,
+                "Take a color from the picture",
+                palette,
+                picker.sampling,
+                Some(Event::Eyedropper),
+            )
+        ]
+        .spacing(space::S)
+        .align_y(Alignment::Center),
         buttons,
     ]
     .spacing(space::S)
@@ -539,6 +574,32 @@ mod tests {
         assert_eq!(picker.as_ref().unwrap().color().a, 0x80);
         update(&mut picker, &mut swatches, Event::Hex("#00ff00".into()));
         assert_eq!(picker.as_ref().unwrap().color(), Rgba::rgb(0, 255, 0));
+    }
+
+    #[test]
+    fn a_sampled_color_keeps_the_pickers_alpha() {
+        let mut swatches = Swatches::default();
+        swatches.add(StyleId::Clean, Rgba::rgb(1, 2, 3).with_alpha(0x40));
+        let mut picker = Some(Picker::new(
+            Target::Change(Slot::Custom(0)),
+            StyleId::Clean,
+            &swatches,
+            PALETTE[0],
+        ));
+        assert_eq!(
+            update(&mut picker, &mut swatches, Event::Eyedropper),
+            Outcome::Editing
+        );
+        assert!(picker.as_ref().unwrap().sampling());
+        let sampled = Event::Sampled(Rgba::rgb(0x14, 0xb8, 0xa6));
+        assert_eq!(
+            update(&mut picker, &mut swatches, sampled),
+            Outcome::Editing
+        );
+        let open = picker.as_ref().unwrap();
+        assert_eq!(open.color(), Rgba::rgb(0x14, 0xb8, 0xa6).with_alpha(0x40));
+        assert_eq!(open.hex, "#14b8a640");
+        assert!(!open.sampling(), "one click takes one color");
     }
 
     #[test]
