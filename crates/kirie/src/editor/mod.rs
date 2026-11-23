@@ -1150,8 +1150,17 @@ fn typing_key(event: Event, _: event::Status, _: window::Id) -> Option<Message> 
             key: keyboard::Key::Named(keyboard::key::Named::Escape),
             ..
         }) => Some(Message::Escape),
+        Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+            quit_key(&key, modifiers)
+        }
         _ => None,
     }
+}
+
+/// Ctrl+Q closes the editor as its window's close button does, asking about unsaved changes.
+fn quit_key(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<Message> {
+    (modifiers.command() && key.as_ref() == keyboard::Key::Character("q"))
+        .then_some(Message::CloseRequested)
 }
 
 /// The crop that keeps `rect` of an image of `size`, in whole pixels: none for all of it.
@@ -1201,6 +1210,9 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
     let Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event else {
         return None;
     };
+    if let Some(quit) = quit_key(&key, modifiers) {
+        return Some(quit);
+    }
     if status == event::Status::Captured {
         return None;
     }
@@ -1248,6 +1260,43 @@ pub fn run(loaded: Option<Loaded>) -> iced::Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ctrl_q_closes_the_editor_even_while_typing() {
+        let press = |key: &str, modifiers| {
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Character(key.into()),
+                modified_key: keyboard::Key::Character(key.into()),
+                physical_key: keyboard::key::Physical::Unidentified(
+                    keyboard::key::NativeCode::Unidentified,
+                ),
+                location: keyboard::Location::Standard,
+                modifiers,
+                text: None,
+                repeat: false,
+            })
+        };
+        let id = window::Id::unique();
+        let ctrl_q = || press("q", keyboard::Modifiers::CTRL);
+        for listen in [key, typing_key, crop_key] {
+            assert!(matches!(
+                listen(ctrl_q(), event::Status::Ignored, id),
+                Some(Message::CloseRequested)
+            ));
+        }
+        assert!(matches!(
+            key(ctrl_q(), event::Status::Captured, id),
+            Some(Message::CloseRequested)
+        ));
+        assert!(
+            typing_key(
+                press("q", keyboard::Modifiers::empty()),
+                event::Status::Ignored,
+                id
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn crops_keep_whole_pixels_and_all_of_the_image_is_no_crop() {
