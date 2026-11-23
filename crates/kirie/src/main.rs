@@ -1,3 +1,4 @@
+mod activation;
 mod appearance;
 mod clipboard;
 mod controls;
@@ -188,7 +189,8 @@ fn edit(path: Option<&std::path::Path>) -> anyhow::Result<()> {
         .transpose()
         .context("cannot find the file")?;
     block_on(tray::ensure())?;
-    if block_on(ipc::hand_over(path.as_deref()))? {
+    let token = activation::from_env();
+    if block_on(ipc::hand_over(path.as_deref(), token.as_deref()))? {
         return Ok(());
     }
     let loaded = path
@@ -196,15 +198,16 @@ fn edit(path: Option<&std::path::Path>) -> anyhow::Result<()> {
         .map(editor::load)
         .transpose()
         .map_err(anyhow::Error::msg)?;
-    editor::run(loaded, false).map_err(anyhow::Error::from)
+    editor::run(loaded, false, token).map_err(anyhow::Error::from)
 }
 
 /// Shows the about card in the running editor, or in a new one.
 fn about() -> anyhow::Result<()> {
-    if block_on(ipc::about())? {
+    let token = activation::from_env();
+    if block_on(ipc::about(token.as_deref()))? {
         return Ok(());
     }
-    editor::run(None, true).map_err(anyhow::Error::from)
+    editor::run(None, true, token).map_err(anyhow::Error::from)
 }
 
 /// Runs a future to completion before any UI event loop exists.
@@ -283,7 +286,7 @@ fn take_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
         }
         overlay::Outcome::Canceled => Ok(()),
         overlay::Outcome::Edit(path) => {
-            if !block_on(ipc::hand_over(Some(&path)))? {
+            if !block_on(ipc::hand_over(Some(&path), None))? {
                 editor_command(&std::env::current_exe()?, &path)
                     .spawn()
                     .context("cannot open the editor")?;

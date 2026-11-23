@@ -6,6 +6,7 @@
 mod item;
 mod menu;
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iced::futures::StreamExt;
@@ -18,6 +19,17 @@ pub const BUS_NAME: &str = "dev.samuelba.Kirie.Tray";
 const WATCHER: &str = "org.kde.StatusNotifierWatcher";
 /// Time for the menu to close before a screenshot is taken.
 const MENU_CLOSES: Duration = Duration::from_millis(300);
+/// Time for the panel's activation token to arrive: it is sent just before the click, on its
+/// own call.
+const TOKEN_ARRIVES: Duration = Duration::from_millis(30);
+
+/// The activation token the panel gave for the click being handled.
+pub type Token = Arc<Mutex<Option<String>>>;
+
+/// The token, which may be used once.
+fn take(token: &Token) -> Option<String> {
+    token.lock().ok().and_then(|mut slot| slot.take())
+}
 
 /// What the tray icon asks Kirie to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,8 +56,9 @@ pub fn run() -> anyhow::Result<()> {
 
 async fn serve() -> anyhow::Result<()> {
     let (sender, mut received) = mpsc::unbounded();
+    let token = Token::default();
     let connection = zbus::connection::Builder::session()
-        .serve_at(item::PATH, item::Item::new(sender.clone()))
+        .serve_at(item::PATH, item::Item::new(sender.clone(), token.clone()))
         .serve_at(menu::PATH, menu::Menu::new(sender))
         .build()
         .await?;
@@ -69,7 +82,7 @@ async fn serve() -> anyhow::Result<()> {
             command = received.next() => {
                 match command {
                     None | Some(Command::Quit) => return Ok(()),
-                    Some(command) => obey(command).await,
+                    Some(command) => obey(command, &token).await,
                 }
             }
             changed = watchers.next() => {
@@ -82,20 +95,23 @@ async fn serve() -> anyhow::Result<()> {
     }
 }
 
-async fn obey(command: Command) {
+async fn obey(command: Command, token: &Token) {
+    tokio::time::sleep(TOKEN_ARRIVES).await;
+    let token = take(token);
     match command {
-        Command::Open => start(&[]),
+        Command::Open => start(&[], token),
         Command::Capture => {
             tokio::time::sleep(MENU_CLOSES).await;
-            start(&["capture"]);
+            start(&["capture"], token);
         }
-        Command::About => start(&["about"]),
+        Command::About => start(&["about"], token),
         Command::Quit => {}
     }
 }
 
-/// Runs Kirie with `args` in the background.
-fn start(args: &[&str]) {
+/// Runs Kirie with `args` in the background, with the activation `token` that lets its window
+/// come to the front.
+fn start(args: &[&str], token: Option<String>) {
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(error) => {
@@ -107,7 +123,11 @@ fn start(args: &[&str]) {
     // Only a Kirie the GNOME Shell extension starts itself is trusted by it.
     command
         .args(args)
-        .env_remove(kirie_capture::shell::LAUNCHED_ENV);
+        .env_remove(kirie_capture::shell::LAUNCHED_ENV)
+        .env_remove(crate::activation::ENV);
+    if let Some(token) = token {
+        command.env(crate::activation::ENV, token);
+    }
     crate::launch::spawn(command);
 }
 
@@ -139,7 +159,7 @@ pub async fn ensure() {
     }
     .await;
     match shown {
-        Ok(false) => start(&["tray"]),
+        Ok(false) => start(&["tray"], None),
         Ok(true) => {}
         Err(error) => tracing::debug!(%error, "cannot tell whether the tray icon is shown"),
     }

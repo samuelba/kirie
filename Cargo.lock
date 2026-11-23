@@ -1987,6 +1987,7 @@ dependencies = [
  "ureq",
  "wayland-backend",
  "wayland-client",
+ "wayland-protocols",
  "winit-common",
  "winit-core",
  "wl-clipboard-rs",

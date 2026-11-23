@@ -276,7 +276,13 @@ impl std::fmt::Debug for Editor {
 }
 
 impl Editor {
+    #[cfg(test)]
     pub fn boot(loaded: Option<Loaded>) -> (Self, Task<Message>) {
+        Self::boot_with(loaded, None)
+    }
+
+    /// Like [`Self::boot`], bringing the window to the front with an activation `token`.
+    fn boot_with(loaded: Option<Loaded>, token: Option<String>) -> (Self, Task<Message>) {
         let swatches = Swatches::load();
         let drawing = Drawing::load();
         let blank = drawing.styled(Document::new(1, 1, 1.0));
@@ -317,7 +323,13 @@ impl Editor {
         if let Some(loaded) = loaded {
             editor.open(loaded);
         }
-        (editor, opened.then(take_drops))
+        let opened = opened.then(move |id| {
+            let raised = token
+                .clone()
+                .map_or_else(Task::none, |token| activate(id, token).discard());
+            Task::batch([raised, take_drops(id)])
+        });
+        (editor, opened)
     }
 
     fn open(&mut self, mut loaded: Loaded) {
@@ -592,21 +604,21 @@ impl Editor {
     /// Taking a screenshot from the editor, and bringing its window to the front.
     fn windowing(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Ipc(crate::ipc::Request::Open(path)) => self
-                .raise()
+            Message::Ipc(crate::ipc::Request::Open(path, token)) => self
+                .raise(token)
                 .chain(Task::perform(load_async(path), Message::Opened)),
-            Message::Ipc(crate::ipc::Request::Present) => self.raise(),
-            Message::Ipc(crate::ipc::Request::About) => {
+            Message::Ipc(crate::ipc::Request::Present(token)) => self.raise(token),
+            Message::Ipc(crate::ipc::Request::About(token)) => {
                 self.about = true;
-                self.raise()
+                self.raise(token)
             }
-            Message::Ipc(crate::ipc::Request::Resume) if self.window.is_none() => self.raise(),
+            Message::Ipc(crate::ipc::Request::Resume) if self.window.is_none() => self.raise(None),
             Message::Capture => self
                 .window
                 .map_or_else(Task::none, |id| placement(id).map(Message::Hide)),
             Message::Remap(id, placement) if self.window == Some(id) => {
                 self.placement = placement;
-                self.reopen(Some(id))
+                self.reopen(Some(id), None)
             }
             Message::Hide(placement) => {
                 let Some(id) = self.window.take() else {
@@ -615,7 +627,7 @@ impl Editor {
                 self.placement = placement;
                 window::close(id).chain(Task::perform(capture(), Message::CaptureEnded))
             }
-            Message::CaptureEnded(Err(error)) => self.raise().chain(self.toast(Err(error))),
+            Message::CaptureEnded(Err(error)) => self.raise(None).chain(self.toast(Err(error))),
             // The overlay asks for the window back when it is done, through `Resume` or `Open`.
             _ => Task::none(),
         }
@@ -746,7 +758,7 @@ impl Editor {
         match message {
             Message::Copy => self.export(Export::Copy),
             Message::Open => Task::perform(crate::dialog::open_image(), |picked| match picked {
-                Ok(Some(path)) => Message::Ipc(crate::ipc::Request::Open(path)),
+                Ok(Some(path)) => Message::Ipc(crate::ipc::Request::Open(path, None)),
                 Ok(None) => Message::Done(Ok(String::new())),
                 Err(error) => Message::Done(Err(error)),
             }),
@@ -1239,22 +1251,40 @@ fn take_drops(id: window::Id) -> Task<Message> {
 }
 
 impl Editor {
-    /// Brings the window to the front. On Wayland a window cannot raise itself, but
-    /// compositors put a newly mapped one in front, so the window is opened anew.
-    fn raise(&mut self) -> Task<Message> {
-        match self.window {
-            Some(id) => placement(id).map(move |placement| Message::Remap(id, placement)),
-            None => self.reopen(None),
+    /// Brings the window to the front. On Wayland a window cannot raise itself: it takes an
+    /// activation `token` from whatever the user clicked. Without one, the window is opened
+    /// anew, which most compositors put in front.
+    fn raise(&mut self, token: Option<String>) -> Task<Message> {
+        let remap = |id| placement(id).map(move |placement| Message::Remap(id, placement));
+        match (self.window, token) {
+            (Some(id), Some(token)) => {
+                activate(id, token).then(move |done| if done { Task::none() } else { remap(id) })
+            }
+            (Some(id), None) => remap(id),
+            (None, token) => self.reopen(None, token),
         }
     }
 
-    /// Opens the window as it was placed, closing `old` first.
-    fn reopen(&mut self, old: Option<window::Id>) -> Task<Message> {
+    /// Opens the window as it was placed, closing `old` first, and brings it to the front with
+    /// `token` if given.
+    fn reopen(&mut self, old: Option<window::Id>, token: Option<String>) -> Task<Message> {
         let closed = old.map_or_else(Task::none, window::close);
         let (id, opened) = window::open(settings(self.placement));
         self.window = Some(id);
-        closed.chain(opened.discard())
+        let opened = match token {
+            Some(token) => opened.then(move |id| activate(id, token.clone())).discard(),
+            None => opened.discard(),
+        };
+        closed.chain(opened)
     }
+}
+
+/// Brings window `id` to the front with an activation `token`; true when the compositor was
+/// asked.
+fn activate(id: window::Id, token: String) -> Task<bool> {
+    window::run(id, move |window| {
+        crate::activation::activate(window, &token)
+    })
 }
 
 /// The size and state of window `id`.
@@ -1428,13 +1458,16 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
     }
 }
 
-/// Opens the editor window, with `loaded` in it if given, and the about card if `about`.
-pub fn run(loaded: Option<Loaded>, about: bool) -> iced::Result {
+/// Opens the editor window, with `loaded` in it if given, and the about card if `about`; the
+/// activation `token` brings it to the front.
+pub fn run(loaded: Option<Loaded>, about: bool, token: Option<String>) -> iced::Result {
     let loaded = std::sync::Mutex::new(loaded);
     iced::daemon(
         move || {
-            let (mut editor, task) =
-                Editor::boot(loaded.lock().ok().and_then(|mut loaded| loaded.take()));
+            let (mut editor, task) = Editor::boot_with(
+                loaded.lock().ok().and_then(|mut loaded| loaded.take()),
+                token.clone(),
+            );
             editor.about = about;
             (editor, task)
         },

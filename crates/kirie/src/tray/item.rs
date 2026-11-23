@@ -6,7 +6,7 @@ use iced::futures::channel::mpsc::UnboundedSender;
 use zbus::ObjectPath;
 use zbus::interface;
 
-use super::Command;
+use super::{Command, Token};
 
 pub const PATH: &str = "/StatusNotifierItem";
 
@@ -18,11 +18,12 @@ type Pixmap = (i32, i32, Vec<u8>);
 #[derive(Debug)]
 pub struct Item {
     commands: UnboundedSender<Command>,
+    token: Token,
 }
 
 impl Item {
-    pub fn new(commands: UnboundedSender<Command>) -> Self {
-        Self { commands }
+    pub fn new(commands: UnboundedSender<Command>, token: Token) -> Self {
+        Self { commands, token }
     }
 }
 
@@ -41,6 +42,14 @@ impl Item {
     fn context_menu(&self, _x: i32, _y: i32) {}
 
     fn scroll(&self, _delta: i32, _orientation: &str) {}
+
+    /// The panel's activation token for the click that follows, which lets the window it opens
+    /// come to the front.
+    fn provide_xdg_activation_token(&self, token: String) {
+        if let Ok(mut slot) = self.token.lock() {
+            *slot = Some(token);
+        }
+    }
 
     #[zbus(property)]
     fn category(&self) -> &'static str {
@@ -117,10 +126,20 @@ mod tests {
     #[test]
     fn a_click_opens_kirie_and_a_middle_click_takes_a_screenshot() {
         let (commands, mut received) = mpsc::unbounded();
-        let item = Item::new(commands);
+        let item = Item::new(commands, Token::default());
         item.activate(0, 0);
         item.secondary_activate(0, 0);
         assert_eq!(received.try_recv().expect("queued"), Command::Open);
         assert_eq!(received.try_recv().expect("queued"), Command::Capture);
+    }
+
+    #[test]
+    fn the_panel_s_token_is_kept_for_the_next_click() {
+        let (commands, _received) = mpsc::unbounded();
+        let token = Token::default();
+        let item = Item::new(commands, token.clone());
+        item.provide_xdg_activation_token("abc".into());
+        assert_eq!(super::super::take(&token).as_deref(), Some("abc"));
+        assert_eq!(super::super::take(&token), None, "a token is used once");
     }
 }
