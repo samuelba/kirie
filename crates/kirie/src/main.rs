@@ -19,6 +19,7 @@ mod selection;
 mod shortcuts;
 mod store;
 mod swatches;
+mod tray;
 mod typing;
 mod update;
 
@@ -74,6 +75,12 @@ enum Command {
     /// Offers a PNG from stdin on the clipboard until something else is copied.
     #[command(name = "serve-clipboard", hide = true)]
     ServeClipboard,
+    /// Shows Kirie's tray icon until Quit is picked from its menu.
+    #[command(hide = true)]
+    Tray,
+    /// Opens the editor with the about card.
+    #[command(hide = true)]
+    About,
 }
 
 #[derive(Debug, Subcommand)]
@@ -123,6 +130,8 @@ fn main() -> anyhow::Result<()> {
         }) => capture_region(cursor, edit),
         Some(Command::Debug(Debug::Globals)) => print_globals(),
         Some(Command::ServeClipboard) => clipboard::serve(),
+        Some(Command::Tray) => tray::run(),
+        Some(Command::About) => about(),
         Some(Command::Shortcuts(Shortcuts::Install)) => shortcuts::install(),
         Some(Command::SelfUpdate) => update::run(),
         Some(Command::GnomeExtension(GnomeExtension::Install)) => extension::install(),
@@ -178,6 +187,7 @@ fn edit(path: Option<&std::path::Path>) -> anyhow::Result<()> {
         .map(std::path::absolute)
         .transpose()
         .context("cannot find the file")?;
+    block_on(tray::ensure())?;
     if block_on(ipc::hand_over(path.as_deref()))? {
         return Ok(());
     }
@@ -186,7 +196,15 @@ fn edit(path: Option<&std::path::Path>) -> anyhow::Result<()> {
         .map(editor::load)
         .transpose()
         .map_err(anyhow::Error::msg)?;
-    editor::run(loaded).map_err(anyhow::Error::from)
+    editor::run(loaded, false).map_err(anyhow::Error::from)
+}
+
+/// Shows the about card in the running editor, or in a new one.
+fn about() -> anyhow::Result<()> {
+    if block_on(ipc::about())? {
+        return Ok(());
+    }
+    editor::run(None, true).map_err(anyhow::Error::from)
 }
 
 /// Runs a future to completion before any UI event loop exists.
@@ -197,7 +215,15 @@ fn block_on<T>(future: impl Future<Output = T>) -> anyhow::Result<T> {
         .block_on(future))
 }
 
+/// Takes a screenshot with the overlay, and starts the tray icon beside it if none is shown.
 fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
+    let tray = std::thread::spawn(|| block_on(tray::ensure()));
+    let taken = take_region(cursor, edit);
+    let _ = tray.join();
+    taken
+}
+
+fn take_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
     // With Kirie's GNOME Shell extension, the extension starts a trusted Kirie for the capture.
     if !kirie_capture::shell::launched() && block_on(kirie_capture::shell::capture(edit, cursor))? {
         return Ok(());

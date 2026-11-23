@@ -72,6 +72,10 @@ Then mark it up with the toolbar under the selection.
 
 Hold **Shift** while drawing to snap lines to 45° and boxes to squares.
 
+Kirie puts an icon in the tray once you open it or take a screenshot, on KDE Plasma, COSMIC and
+GNOME with the AppIndicator extension (Ubuntu has it). Its menu opens Kirie, takes a screenshot,
+shows what Kirie is, and quits the icon.
+
 Taking the same region again and again? Press the pin in the toolbar: the next screenshot starts
 with that region selected, so Enter takes it at once. Moving or resizing the selection unpins it.
 

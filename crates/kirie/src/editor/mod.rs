@@ -596,6 +596,10 @@ impl Editor {
                 .raise()
                 .chain(Task::perform(load_async(path), Message::Opened)),
             Message::Ipc(crate::ipc::Request::Present) => self.raise(),
+            Message::Ipc(crate::ipc::Request::About) => {
+                self.about = true;
+                self.raise()
+            }
             Message::Ipc(crate::ipc::Request::Resume) if self.window.is_none() => self.raise(),
             Message::Capture => self
                 .window
@@ -1424,11 +1428,16 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
     }
 }
 
-/// Opens the editor window, with `loaded` in it if given.
-pub fn run(loaded: Option<Loaded>) -> iced::Result {
+/// Opens the editor window, with `loaded` in it if given, and the about card if `about`.
+pub fn run(loaded: Option<Loaded>, about: bool) -> iced::Result {
     let loaded = std::sync::Mutex::new(loaded);
     iced::daemon(
-        move || Editor::boot(loaded.lock().ok().and_then(|mut loaded| loaded.take())),
+        move || {
+            let (mut editor, task) =
+                Editor::boot(loaded.lock().ok().and_then(|mut loaded| loaded.take()));
+            editor.about = about;
+            (editor, task)
+        },
         Editor::update,
         Editor::view,
     )

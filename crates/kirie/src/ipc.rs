@@ -15,6 +15,8 @@ pub const OBJECT_PATH: &str = "/dev/samuelba/Kirie";
 pub enum Request {
     Open(PathBuf),
     Present,
+    /// Brings the editor window to the front with the about card open.
+    About,
     /// A capture the editor hid for has ended without handing it anything.
     Resume,
 }
@@ -48,6 +50,11 @@ impl Service {
         self.send(Request::Present)
     }
 
+    /// Brings the editor window to the front with the about card open.
+    fn about(&self) -> fdo::Result<()> {
+        self.send(Request::About)
+    }
+
     /// Shows the editor window again if it hid for a capture.
     fn resume(&self) -> fdo::Result<()> {
         self.send(Request::Resume)
@@ -62,6 +69,7 @@ impl Service {
 trait Kirie {
     fn open(&self, path: &str) -> zbus::Result<()>;
     fn present(&self) -> zbus::Result<()>;
+    fn about(&self) -> zbus::Result<()>;
     fn resume(&self) -> zbus::Result<()>;
 }
 
@@ -84,6 +92,23 @@ pub async fn hand_over(path: Option<&Path>) -> bool {
     attempt
         .await
         .inspect_err(|error| tracing::debug!(%error, "no editor to hand over to"))
+        .unwrap_or(false)
+}
+
+/// Opens the about card in a running editor. True when one did.
+pub async fn about() -> bool {
+    let attempt = async {
+        let connection = zbus::Connection::session().await?;
+        let dbus = fdo::DBusProxy::new(&connection).await?;
+        if !dbus.name_has_owner(BUS_NAME.try_into()?).await? {
+            return Ok::<_, zbus::Error>(false);
+        }
+        KirieProxy::new(&connection).await?.about().await?;
+        Ok(true)
+    };
+    attempt
+        .await
+        .inspect_err(|error| tracing::debug!(%error, "no editor to show the about card"))
         .unwrap_or(false)
 }
 
@@ -135,12 +160,14 @@ mod tests {
         assert!(service.open("relative.png").is_err());
         assert!(service.open("/abs/shot.png").is_ok());
         assert!(service.present().is_ok());
+        assert!(service.about().is_ok());
         assert!(service.resume().is_ok());
         assert_eq!(
             receiver.try_recv().ok(),
             Some(Request::Open(PathBuf::from("/abs/shot.png")))
         );
         assert_eq!(receiver.try_recv().ok(), Some(Request::Present));
+        assert_eq!(receiver.try_recv().ok(), Some(Request::About));
         assert_eq!(receiver.try_recv().ok(), Some(Request::Resume));
     }
 }

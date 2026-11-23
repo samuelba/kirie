@@ -36,12 +36,17 @@ pub async fn show_in_files(path: &Path) {
     }
 }
 
-/// Starts `command` without waiting for it, and reaps it once it ends.
-fn spawn(mut command: Command) {
+/// Starts `command` without waiting for it, and reaps it once it ends. It gets no pipes of
+/// Kirie's, which a reader would wait on, and a process group of its own, so that Ctrl+C in the
+/// terminal Kirie runs in leaves it be.
+pub fn spawn(mut command: Command) {
+    use std::os::unix::process::CommandExt as _;
+
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::null())
+        .process_group(0);
     match command.spawn() {
         Ok(mut child) => {
             std::thread::spawn(move || child.wait());
