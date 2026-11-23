@@ -57,7 +57,7 @@ impl Overlay {
                 .document()
                 .bounds(&typing.preview(self.document(), self.paint));
             #[allow(clippy::cast_possible_truncation)]
-            let desktop = Point::new(typing.at.x as f32, (words.y1 + 8.0) as f32);
+            let desktop = Point::new(words.x0 as f32, (words.y1 + 8.0) as f32);
             if screen.area.contains(desktop) {
                 let at = Point::new(desktop.x - screen.area.x, desktop.y - screen.area.y);
                 layers = layers.push(

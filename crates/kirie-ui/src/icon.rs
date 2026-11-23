@@ -30,6 +30,7 @@ icons! {
     Pen => "pencil",
     Highlighter => "highlighter",
     Text => "type",
+    Bubble => "message-square",
     Counter => "hash",
     Blur => "blur",
     Pixelate => "pixelate",

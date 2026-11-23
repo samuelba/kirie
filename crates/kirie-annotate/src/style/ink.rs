@@ -112,6 +112,7 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
             rule: FillRule::NonZero,
         }],
         Kind::Text { .. }
+        | Kind::Bubble { .. }
         | Kind::Blur { .. }
         | Kind::Pixelate { .. }
         | Kind::Spotlight { .. }
@@ -218,6 +219,15 @@ fn resample(points: &[Point], step: f64) -> Vec<Point> {
         out.push(*last);
     }
     out
+}
+
+/// A speech bubble: its outline filled flat with ink.
+pub(super) fn bubble(outline: BezPath, context: &Context) -> Vec<Primitive> {
+    vec![Primitive::Fill {
+        path: outline,
+        color: context.color(),
+        rule: FillRule::NonZero,
+    }]
 }
 
 #[cfg(test)]

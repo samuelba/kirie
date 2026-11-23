@@ -257,6 +257,12 @@ pub enum Kind {
         at: Point,
         text: String,
     },
+    /// Words in a filled box whose tail points at `tail`; the words are centered on `center`.
+    Bubble {
+        center: Point,
+        tail: Point,
+        text: String,
+    },
     /// A numbered badge for step-by-step instructions.
     Counter {
         at: Point,
@@ -334,6 +340,7 @@ impl Kind {
             | Kind::Image { rect, .. } => rect.abs(),
             Kind::Pen { points } | Kind::Highlighter { points } => points_bounds(points),
             Kind::Text { at, .. } => Rect::from_origin_size(*at, (0.0, 0.0)),
+            Kind::Bubble { center, tail, .. } => Rect::from_points(*center, *tail),
             Kind::Counter { at, .. } => Rect::from_center_size(*at, (28.0, 28.0)),
         }
     }
@@ -365,6 +372,11 @@ impl Kind {
             Kind::Highlighter { points: p } => Kind::Highlighter { points: points(p) },
             Kind::Text { at, text } => Kind::Text {
                 at: *at + by,
+                text: text.clone(),
+            },
+            Kind::Bubble { center, tail, text } => Kind::Bubble {
+                center: *center + by,
+                tail: *tail + by,
                 text: text.clone(),
             },
             Kind::Counter { at, number } => Kind::Counter {
@@ -404,6 +416,11 @@ impl Kind {
             Kind::Highlighter { points: p } => Kind::Highlighter { points: points(p) },
             Kind::Text { at, text } => Kind::Text {
                 at: point(at),
+                text: text.clone(),
+            },
+            Kind::Bubble { center, tail, text } => Kind::Bubble {
+                center: point(center),
+                tail: point(tail),
                 text: text.clone(),
             },
             Kind::Counter { at, number } => Kind::Counter {
@@ -469,7 +486,7 @@ fn points_bounds(points: &[Point]) -> Rect {
         })
 }
 
-fn segment_distance(point: Point, a: Point, b: Point) -> f64 {
+pub(crate) fn segment_distance(point: Point, a: Point, b: Point) -> f64 {
     let ab = b - a;
     let length = ab.hypot2();
     if length == 0.0 {
@@ -479,7 +496,7 @@ fn segment_distance(point: Point, a: Point, b: Point) -> f64 {
     point.distance(a + ab * t)
 }
 
-fn rect_distance(rect: Rect, point: Point) -> f64 {
+pub(crate) fn rect_distance(rect: Rect, point: Point) -> f64 {
     let dx = (rect.x0 - point.x).max(point.x - rect.x1).max(0.0);
     let dy = (rect.y0 - point.y).max(point.y - rect.y1).max(0.0);
     dx.hypot(dy)
@@ -616,6 +633,11 @@ mod tests {
                 text: "x".into(),
             },
             Kind::Counter { at: o, number: 3 },
+            Kind::Bubble {
+                center: o,
+                tail: one,
+                text: "x".into(),
+            },
             Kind::Blur { rect: unit() },
             Kind::Pixelate { rect: unit() },
             Kind::Redact { rect: unit() },
@@ -662,6 +684,11 @@ mod tests {
             },
             Kind::Spotlight {
                 rect: Rect::new(5.0, 0.0, 10.0, 5.0),
+            },
+            Kind::Bubble {
+                center: Point::new(5.0, 0.0),
+                tail: Point::new(10.0, 5.0),
+                text: "a".into(),
             },
         ];
         for kind in kinds {

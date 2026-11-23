@@ -203,11 +203,12 @@ impl Document {
     /// How far `point` is from `shape`, 0 when on or inside it.
     pub fn distance(&self, shape: &Shape, point: Point) -> f64 {
         match shape.kind {
-            Kind::Text { .. } => {
-                let area = self.bounds(shape);
-                let dx = (area.x0 - point.x).max(point.x - area.x1).max(0.0);
-                let dy = (area.y0 - point.y).max(point.y - area.y1).max(0.0);
-                dx.hypot(dy)
+            Kind::Text { .. } => crate::shape::rect_distance(self.bounds(shape), point),
+            Kind::Bubble { tail, .. } => {
+                let body =
+                    crate::style::bubble_body(shape, self.style, self.unit).unwrap_or_default();
+                let along_tail = crate::shape::segment_distance(point, body.center(), tail);
+                crate::shape::rect_distance(body, point).min(along_tail)
             }
             _ => shape.distance(point),
         }
@@ -726,6 +727,23 @@ mod tests {
             .apply(line(12.0));
         assert_eq!(doc.hit(Point::new(11.0, 5.0), 2.0), Some(ShapeId(2)));
         assert_eq!(doc.hit(Point::new(50.0, 5.0), 2.0), None);
+    }
+
+    #[test]
+    fn bubbles_are_hit_on_their_box_and_along_their_tail() {
+        let doc = Document::new(400, 300, 1.0).apply(Op::Add {
+            kind: Kind::Bubble {
+                center: Point::new(100.0, 50.0),
+                tail: Point::new(300.0, 250.0),
+                text: "Look".into(),
+            },
+            paint: Paint::default(),
+        });
+        let bubble = doc.shape(ShapeId(1)).unwrap();
+        assert!((doc.bounds(bubble).max_y() - 250.0).abs() < 1e-9);
+        assert_eq!(doc.hit(Point::new(100.0, 50.0), 2.0), Some(ShapeId(1)));
+        assert_eq!(doc.hit(Point::new(250.0, 200.0), 2.0), Some(ShapeId(1)));
+        assert_eq!(doc.hit(Point::new(300.0, 50.0), 2.0), None);
     }
 
     #[test]

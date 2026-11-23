@@ -62,6 +62,7 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
             rule: FillRule::NonZero,
         }],
         Kind::Text { .. }
+        | Kind::Bubble { .. }
         | Kind::Blur { .. }
         | Kind::Pixelate { .. }
         | Kind::Spotlight { .. }
@@ -177,6 +178,23 @@ fn counter(at: Point, number: u32, context: &Context) -> Vec<Primitive> {
                 centered: true,
             },
         ])
+        .collect()
+}
+
+/// A speech bubble: the filled outline over its shadow.
+pub(super) fn bubble(outline: BezPath, context: &Context) -> Vec<Primitive> {
+    let shadow = context.shadow.then(|| Primitive::Fill {
+        path: translated(&outline, Vec2::new(0.0, 1.5 * context.unit)),
+        color: SHADOW,
+        rule: FillRule::NonZero,
+    });
+    shadow
+        .into_iter()
+        .chain([Primitive::Fill {
+            path: outline,
+            color: context.color(),
+            rule: FillRule::NonZero,
+        }])
         .collect()
 }
 

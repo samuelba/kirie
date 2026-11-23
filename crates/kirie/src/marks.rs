@@ -201,7 +201,7 @@ fn sane(shape: Shape) -> Option<Shape> {
         .iter()
         .all(|value| value.is_finite() && value.abs() <= FARTHEST);
     let bounded = match &shape.kind {
-        Kind::Text { text, .. } => text.chars().count() <= LONGEST,
+        Kind::Text { text, .. } | Kind::Bubble { text, .. } => text.chars().count() <= LONGEST,
         Kind::Pen { points } | Kind::Highlighter { points } => points.len() <= LONGEST,
         Kind::Image { .. } => bounds.width() > 0.0 && bounds.height() > 0.0,
         _ => true,

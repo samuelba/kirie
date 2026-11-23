@@ -1,5 +1,6 @@
 //! Annotation styles: the same marks drawn crisp and clean, sketched by hand, or brushed in ink.
 
+mod bubble;
 mod clean;
 mod ink;
 mod sketch;
@@ -130,12 +131,25 @@ impl Stage {
 /// The area `shape` covers in `style` on an image of `unit`, before stroke width; text is
 /// measured in its face and size.
 pub fn bounds(shape: &Shape, style: StyleId, unit: f64) -> Rect {
-    let Kind::Text { at, text } = &shape.kind else {
-        return shape.kind.bounds();
+    match &shape.kind {
+        Kind::Text { at, text } => {
+            let font = text_font(shape, style);
+            let size = crate::text::measure(text, font, text_size(shape, font, unit));
+            Rect::from_origin_size(*at, size)
+        }
+        Kind::Bubble { tail, .. } => bubble_body(shape, style, unit)
+            .unwrap_or_default()
+            .union_pt(*tail),
+        kind => kind.bounds(),
+    }
+}
+
+/// The box of a speech bubble around its words, without its tail.
+pub fn bubble_body(shape: &Shape, style: StyleId, unit: f64) -> Option<Rect> {
+    let Kind::Bubble { center, text, .. } = &shape.kind else {
+        return None;
     };
-    let font = text_font(shape, style);
-    let size = crate::text::measure(text, font, text_size(shape, font, unit));
-    Rect::from_origin_size(*at, size)
+    Some(bubble::layout(shape, *center, text, style, unit).body)
 }
 
 fn text_font(shape: &Shape, style: StyleId) -> Font {
@@ -250,6 +264,14 @@ fn unturned(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Vec<Prim
                 &context,
             )]
         }
+        Kind::Bubble { center, tail, text } => bubble::primitives(
+            shape,
+            *center,
+            *tail,
+            text,
+            shape.style.unwrap_or(style),
+            &context,
+        ),
         Kind::Redact { rect } => {
             let style = shape.style.unwrap_or(style);
             let cover = Primitive::Cover {
@@ -499,6 +521,11 @@ mod tests {
                 text: "Hi".into(),
             },
             Kind::Counter { at: a, number: 2 },
+            Kind::Bubble {
+                center: Point::new(50.0, 20.0),
+                tail: b,
+                text: "Hi\nthere".into(),
+            },
             Kind::Blur { rect },
             Kind::Pixelate { rect },
             Kind::Redact { rect },
