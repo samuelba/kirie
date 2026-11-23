@@ -9,6 +9,7 @@ use kirie_ui::{radius, space};
 use kirie_annotate::{Shape, Tool};
 
 use super::{HANDLE_REACH, MARK_REACH, Message, Overlay, Pointer, to_kurbo};
+use crate::loupe::{self, Lens};
 use crate::paint::{Captures, Marks, Painter, Part, draw_marquee, draw_picked};
 use crate::selection::Handle;
 
@@ -108,6 +109,11 @@ impl canvas::Program<Message> for Surface<'_> {
         } else if let Some(at) = cursor.position_in(bounds) {
             draw_crosshair(&mut frame, at, bounds.size());
             self.draw_window_under(&mut frame, self.to_desktop(at));
+        }
+        if let Some(at) = cursor.position_in(bounds)
+            && self.magnifying()
+        {
+            self.draw_loupe(&mut frame, at, bounds.size());
         }
         vec![frame.into_geometry()]
     }
@@ -217,6 +223,42 @@ impl Surface<'_> {
         {
             draw_marquee(frame, rect, transform, accent);
         }
+    }
+
+    /// Whether the loupe shows: while a region is picked, not while marks are drawn.
+    fn magnifying(&self) -> bool {
+        let overlay = self.overlay;
+        overlay.tool.is_none()
+            && overlay.toolbar_drag.is_none()
+            && (overlay.selection.rect().is_none() || overlay.selection.dragging())
+    }
+
+    /// The frozen pixels around the pointer at `at`, magnified, with its place and color.
+    fn draw_loupe(&self, frame: &mut Frame, at: Point, size: Size) {
+        let desktop = self.to_desktop(at);
+        let Some(capture) = self
+            .overlay
+            .captures
+            .iter()
+            .find(|capture| super::area(capture.output.logical).contains(desktop))
+        else {
+            return;
+        };
+        let logical = capture.output.logical;
+        let scale = capture.scale();
+        #[allow(clippy::cast_possible_truncation)]
+        let pixel = |at: f32, from: i32| ((f64::from(at) - f64::from(from)) * scale).floor() as i64;
+        let lens = Lens::sample(
+            &capture.image,
+            pixel(desktop.x, logical.x),
+            pixel(desktop.y, logical.y),
+        );
+        #[allow(clippy::cast_possible_truncation)]
+        let mut label = format!("{}, {}", desktop.x.floor() as i64, desktop.y.floor() as i64);
+        if let Some(color) = lens.center() {
+            label = format!("{label}   {}", loupe::hex(color));
+        }
+        loupe::draw(frame, &lens, &label, at, size, self.overlay.palette);
     }
 
     fn draw_selection(&self, frame: &mut Frame, rect: Rectangle) {

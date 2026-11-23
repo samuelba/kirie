@@ -10,6 +10,7 @@ mod editor;
 mod extension;
 mod ipc;
 mod launch;
+mod loupe;
 mod marks;
 mod notify;
 mod overlay;
