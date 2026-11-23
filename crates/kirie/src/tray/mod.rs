@@ -36,6 +36,8 @@ fn take(token: &Token) -> Option<String> {
 pub enum Command {
     Open,
     Capture,
+    /// A screenshot after this many seconds.
+    CaptureIn(u32),
     About,
     Quit,
 }
@@ -103,6 +105,10 @@ async fn obey(command: Command, token: &Token) {
         Command::Capture => {
             tokio::time::sleep(MENU_CLOSES).await;
             start(&["capture"], token);
+        }
+        Command::CaptureIn(seconds) => {
+            tokio::time::sleep(MENU_CLOSES).await;
+            start(&["capture", "--delay", &seconds.to_string()], token);
         }
         Command::About => start(&["about"], token),
         Command::Quit => {}

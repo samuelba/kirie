@@ -29,14 +29,18 @@ pub struct Layout {
 enum Entry {
     Open,
     Capture,
+    /// A screenshot after this many seconds.
+    Delayed(u32),
     Separator,
     About,
     Quit,
 }
 
-const ENTRIES: [Entry; 5] = [
+const ENTRIES: [Entry; 7] = [
     Entry::Open,
     Entry::Capture,
+    Entry::Delayed(3),
+    Entry::Delayed(10),
     Entry::Separator,
     Entry::About,
     Entry::Quit,
@@ -53,13 +57,14 @@ impl Entry {
         i32::try_from(index).unwrap_or(0) + 1
     }
 
-    fn label(self) -> Option<&'static str> {
+    fn label(self) -> Option<String> {
         match self {
-            Self::Open => Some("Open Kirie"),
-            Self::Capture => Some("Take a Screenshot"),
+            Self::Open => Some("Open Kirie".to_owned()),
+            Self::Capture => Some("Take a Screenshot".to_owned()),
+            Self::Delayed(seconds) => Some(format!("Take a Screenshot in {seconds} Seconds")),
             Self::Separator => None,
-            Self::About => Some("About Kirie"),
-            Self::Quit => Some("Quit"),
+            Self::About => Some("About Kirie".to_owned()),
+            Self::Quit => Some("Quit".to_owned()),
         }
     }
 
@@ -67,6 +72,7 @@ impl Entry {
         match self {
             Self::Open => Some(Command::Open),
             Self::Capture => Some(Command::Capture),
+            Self::Delayed(seconds) => Some(Command::CaptureIn(seconds)),
             Self::Separator => None,
             Self::About => Some(Command::About),
             Self::Quit => Some(Command::Quit),
@@ -263,14 +269,16 @@ mod tests {
             [
                 Some("Open Kirie".to_owned()),
                 Some("Take a Screenshot".to_owned()),
+                Some("Take a Screenshot in 3 Seconds".to_owned()),
+                Some("Take a Screenshot in 10 Seconds".to_owned()),
                 None,
                 Some("About Kirie".to_owned()),
                 Some("Quit".to_owned()),
             ]
         );
         let ids: Vec<i32> = children.iter().map(|child| child.id).collect();
-        assert_eq!(ids, [1, 2, 3, 4, 5]);
-        assert!(children[2].properties.contains_key("type"));
+        assert_eq!(ids, [1, 2, 3, 4, 5, 6, 7]);
+        assert!(children[4].properties.contains_key("type"));
     }
 
     #[test]
@@ -288,13 +296,15 @@ mod tests {
     fn clicks_map_to_commands() {
         assert_eq!(command_for(1, "clicked"), Some(Command::Open));
         assert_eq!(command_for(2, "clicked"), Some(Command::Capture));
-        assert_eq!(command_for(4, "clicked"), Some(Command::About));
-        assert_eq!(command_for(5, "clicked"), Some(Command::Quit));
+        assert_eq!(command_for(3, "clicked"), Some(Command::CaptureIn(3)));
+        assert_eq!(command_for(4, "clicked"), Some(Command::CaptureIn(10)));
+        assert_eq!(command_for(6, "clicked"), Some(Command::About));
+        assert_eq!(command_for(7, "clicked"), Some(Command::Quit));
     }
 
     #[test]
     fn other_events_and_entries_do_nothing() {
-        assert_eq!(command_for(3, "clicked"), None);
+        assert_eq!(command_for(5, "clicked"), None);
         assert_eq!(command_for(1, "hovered"), None);
         assert_eq!(command_for(ROOT, "clicked"), None);
         assert_eq!(command_for(9, "clicked"), None);

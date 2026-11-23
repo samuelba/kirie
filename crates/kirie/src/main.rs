@@ -31,6 +31,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use kirie_capture::{Cursor, geometry};
 
 pub const APP_ID: &str = "dev.samuelba.Kirie";
+/// The longest wait before a screenshot, in seconds.
+const MAX_DELAY: u64 = 60;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -58,6 +60,9 @@ enum Command {
         /// Enter opens the selection in the editor instead of copying it.
         #[arg(long)]
         edit: bool,
+        /// Wait this many seconds before taking the screenshot, to open a menu or hover first.
+        #[arg(long, value_name = "SECONDS", default_value_t = 0, value_parser = clap::value_parser!(u64).range(0..=MAX_DELAY))]
+        delay: u64,
     },
     /// Open the editor, with an image if one is given.
     Edit { path: Option<PathBuf> },
@@ -121,14 +126,16 @@ fn main() -> anyhow::Result<()> {
             mode: Mode::All,
             output: Some(path),
             cursor,
+            delay,
             ..
-        }) => capture_to_file(&path, cursor),
+        }) => capture_to_file(&path, cursor, delay),
         Some(Command::Capture {
             mode: Mode::Region,
             output: None,
             cursor,
             edit,
-        }) => capture_region(cursor, edit),
+            delay,
+        }) => capture_region(cursor, edit, delay),
         Some(Command::Debug(Debug::Globals)) => print_globals(),
         Some(Command::ServeClipboard) => clipboard::serve(),
         Some(Command::Tray) => tray::run(),
@@ -145,13 +152,14 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-fn capture_to_file(path: &std::path::Path, cursor: bool) -> anyhow::Result<()> {
+fn capture_to_file(path: &std::path::Path, cursor: bool, delay: u64) -> anyhow::Result<()> {
     // A Kirie the GNOME Shell extension started may read the screens without asking; it only
     // ever shows them in the overlay, never writes them where its arguments say.
     anyhow::ensure!(
         !kirie_capture::shell::launched(),
         "capturing to a file is not available from the GNOME Shell extension"
     );
+    wait(delay);
     let cursor = if cursor {
         Cursor::Shown
     } else {
@@ -219,11 +227,20 @@ fn block_on<T>(future: impl Future<Output = T>) -> anyhow::Result<T> {
 }
 
 /// Takes a screenshot with the overlay, and starts the tray icon beside it if none is shown.
-fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
+fn capture_region(cursor: bool, edit: bool, delay: u64) -> anyhow::Result<()> {
     let tray = std::thread::spawn(|| block_on(tray::ensure()));
+    wait(delay);
     let taken = take_region(cursor, edit);
     let _ = tray.join();
     taken
+}
+
+/// Waits `delay` seconds before a screenshot.
+fn wait(delay: u64) {
+    if delay > 0 {
+        tracing::info!(delay, "waiting before the screenshot");
+        std::thread::sleep(std::time::Duration::from_secs(delay));
+    }
 }
 
 fn take_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
@@ -389,6 +406,22 @@ mod tests {
             })
         );
         assert_eq!(command.get_args().collect::<Vec<_>>(), ["edit", "a.kirie"]);
+    }
+
+    #[test]
+    fn capture_waits_up_to_a_minute() {
+        let delay = |args: &[&str]| match Cli::try_parse_from(args).map(|cli| cli.command) {
+            Ok(Some(Command::Capture { delay, .. })) => Some(delay),
+            _ => None,
+        };
+        assert_eq!(delay(&["kirie", "capture"]), Some(0));
+        assert_eq!(delay(&["kirie", "capture", "--delay", "5"]), Some(5));
+        assert_eq!(
+            delay(&["kirie", "capture", "all", "--delay", "60"]),
+            Some(60)
+        );
+        assert_eq!(delay(&["kirie", "capture", "--delay", "61"]), None);
+        assert_eq!(delay(&["kirie", "capture", "--delay", "-1"]), None);
     }
 
     #[test]
