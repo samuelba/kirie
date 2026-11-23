@@ -25,6 +25,15 @@ impl Rgba {
         Self { a, ..self }
     }
 
+    /// This color at `alpha`, made as faint again as this color is, so a tint of a translucent
+    /// color stays translucent.
+    #[must_use]
+    pub const fn faded(self, alpha: u8) -> Self {
+        #[allow(clippy::cast_possible_truncation)]
+        let alpha = ((alpha as u16 * self.a as u16 + 127) / 255) as u8;
+        self.with_alpha(alpha)
+    }
+
     /// `#rrggbb` or `#rrggbbaa`.
     pub fn from_hex(hex: &str) -> Option<Self> {
         let hex = hex.strip_prefix('#')?;
@@ -491,6 +500,8 @@ mod tests {
         assert_eq!(shu.to_hex(), "#e4572e");
         let glass = Rgba::from_hex("#00000080").unwrap();
         assert_eq!(glass.a, 0x80);
+        assert_eq!(shu.faded(0x40).a, 0x40);
+        assert_eq!(glass.faded(0x40).a, 0x20);
         assert_eq!(glass.to_hex(), "#00000080");
         assert_eq!(Rgba::from_hex("e4572e"), None);
         assert_eq!(Rgba::from_hex("#e457"), None);

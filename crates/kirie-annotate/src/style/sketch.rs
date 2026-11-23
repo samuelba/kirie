@@ -180,7 +180,7 @@ fn hachure(rng: &mut Rng, outline: &[Point], context: &Context) -> Vec<Primitive
         return Vec::new();
     }
     let gap = (context.width() * 2.5).max(6.0 * context.unit);
-    let color = context.color().with_alpha(0x99);
+    let color = context.color().faded(0x99);
     let width = (context.width() * 0.4).max(context.unit);
     hachure_segments(outline, gap)
         .into_iter()

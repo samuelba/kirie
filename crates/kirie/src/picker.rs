@@ -15,7 +15,7 @@ use crate::swatches::{Slot, Swatches};
 
 pub const WIDTH: f32 = 216.0;
 /// The room the picker takes, for placing what holds it.
-pub const HEIGHT: f32 = 264.0;
+pub const HEIGHT: f32 = 286.0;
 const SHADE: f32 = 132.0;
 const HUE: f32 = 14.0;
 
@@ -78,6 +78,7 @@ pub enum Event {
         value: f32,
     },
     Hue(f32),
+    Alpha(u8),
     Hex(String),
     /// Starts taking a color from the picture with the next click.
     Eyedropper,
@@ -173,6 +174,11 @@ pub fn update(picker: &mut Option<Picker>, swatches: &mut Swatches, event: Event
         }
         Event::Hue(hue) => {
             open.set(Hsv { hue, ..open.hsv });
+            return Outcome::Editing;
+        }
+        Event::Alpha(alpha) => {
+            open.alpha = alpha;
+            open.set(open.hsv);
             return Outcome::Editing;
         }
         Event::Hex(hex) => {
@@ -291,6 +297,12 @@ pub fn view(picker: &Picker, palette: Palette) -> Element<'_, Event> {
         })
         .width(WIDTH)
         .height(HUE),
+        canvas::Canvas::new(Field {
+            hsv: picker.hsv,
+            area: Area::Alpha(picker.alpha),
+        })
+        .width(WIDTH)
+        .height(HUE),
         row![
             preview,
             hex,
@@ -315,6 +327,8 @@ pub fn view(picker: &Picker, palette: Palette) -> Element<'_, Event> {
 enum Area {
     Shade,
     Hue,
+    /// How opaque the color is, from clear on the left to solid on the right.
+    Alpha(u8),
 }
 
 struct Field {
@@ -332,6 +346,8 @@ impl Field {
                 value: 1.0 - y,
             },
             Area::Hue => Event::Hue(x * 360.0),
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            Area::Alpha(_) => Event::Alpha((x * 255.0).round() as u8),
         }
     }
 }
@@ -425,14 +441,17 @@ impl canvas::Program<Event> for Field {
                 );
                 frame.fill(&area, rainbow);
                 let x = (self.hsv.hue / 360.0 * size.width).clamp(3.0, size.width - 3.0);
-                ring(
-                    &mut frame,
-                    &Path::rounded_rectangle(
-                        Point::new(x - 3.0, 0.0),
-                        iced::Size::new(6.0, size.height),
-                        3.0.into(),
-                    ),
-                );
+                ring(&mut frame, &knob(x, size.height));
+            }
+            Area::Alpha(alpha) => {
+                checker(&mut frame, size);
+                let solid = color_of(self.hsv.to_rgba());
+                let fade = gradient::Linear::new(Point::ORIGIN, Point::new(size.width, 0.0))
+                    .add_stop(0.0, solid.scale_alpha(0.0))
+                    .add_stop(1.0, solid);
+                frame.fill(&area, fade);
+                let x = (f32::from(alpha) / 255.0 * size.width).clamp(3.0, size.width - 3.0);
+                ring(&mut frame, &knob(x, size.height));
             }
         }
         vec![frame.into_geometry()]
@@ -450,6 +469,41 @@ impl canvas::Program<Event> for Field {
             Interaction::default()
         }
     }
+}
+
+/// The handle on a strip, at `x`.
+fn knob(x: f32, height: f32) -> Path {
+    Path::rounded_rectangle(
+        Point::new(x - 3.0, 0.0),
+        iced::Size::new(6.0, height),
+        3.0.into(),
+    )
+}
+
+/// Light and dark squares, which show through what is translucent.
+fn checker(frame: &mut Frame, size: iced::Size) {
+    const CELL: f32 = 7.0;
+    frame.fill(
+        &Path::rounded_rectangle(Point::ORIGIN, size, radius::CONTROL.into()),
+        Color::from_rgb8(0xf2, 0xf2, 0xf2),
+    );
+    let dark = Path::new(|path| {
+        let mut x = 0.0;
+        let mut column = 0u32;
+        while x < size.width {
+            let mut y = if column.is_multiple_of(2) { 0.0 } else { CELL };
+            while y < size.height {
+                path.rectangle(
+                    Point::new(x, y),
+                    iced::Size::new(CELL.min(size.width - x), CELL.min(size.height - y)),
+                );
+                y += 2.0 * CELL;
+            }
+            x += CELL;
+            column += 1;
+        }
+    });
+    frame.fill(&dark, Color::from_rgb8(0xc8, 0xc8, 0xc8));
 }
 
 #[cfg(test)]
@@ -600,6 +654,36 @@ mod tests {
         assert_eq!(open.color(), Rgba::rgb(0x14, 0xb8, 0xa6).with_alpha(0x40));
         assert_eq!(open.hex, "#14b8a640");
         assert!(!open.sampling(), "one click takes one color");
+    }
+
+    #[test]
+    fn the_alpha_strip_makes_a_color_translucent() {
+        let mut swatches = Swatches::default();
+        let mut picker = Some(Picker::new(
+            Target::New,
+            StyleId::Clean,
+            &swatches,
+            PALETTE[3],
+        ));
+        update(&mut picker, &mut swatches, Event::Alpha(0x80));
+        assert_eq!(picker.as_ref().unwrap().hex, "#3b82f680");
+        update(&mut picker, &mut swatches, Event::Hue(0.0));
+        assert_eq!(picker.as_ref().unwrap().color().a, 0x80);
+        let field = Field {
+            hsv: picker.as_ref().unwrap().hsv,
+            area: Area::Alpha(0x80),
+        };
+        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(100.0, 10.0));
+        assert!(matches!(
+            field.pick(Point::new(25.0, 5.0), bounds),
+            Event::Alpha(64)
+        ));
+        assert_eq!(
+            update(&mut picker, &mut swatches, Event::Apply),
+            Outcome::Changed {
+                pick: Some(Rgba::rgb(0xf6, 0x3b, 0x3b).with_alpha(0x80))
+            }
+        );
     }
 
     #[test]
