@@ -39,6 +39,10 @@ pub enum Op {
         kind: Kind,
         paint: Paint,
     },
+    /// Copies of marks, each with an id of its own, on top of the rest.
+    Insert {
+        shapes: Vec<Shape>,
+    },
     Replace {
         id: ShapeId,
         kind: Kind,
@@ -311,6 +315,15 @@ impl Document {
                 }));
                 next.next_id += 1;
             }
+            Op::Insert { shapes } => {
+                for shape in shapes {
+                    next.shapes.push(Arc::new(Shape {
+                        id: ShapeId(next.next_id),
+                        ..shape
+                    }));
+                    next.next_id += 1;
+                }
+            }
             Op::Replace { id, kind } => next.map(&[id], |shape| Shape {
                 kind: kind.clone(),
                 ..shape.clone()
@@ -578,6 +591,27 @@ mod tests {
         });
         let order: Vec<_> = raised.shapes().map(|shape| shape.id.0).collect();
         assert_eq!(order, [3, 2, 1]);
+    }
+
+    #[test]
+    fn inserted_copies_get_new_ids_and_keep_the_rest() {
+        let doc = Document::new(100, 100, 1.0).apply(line(1.0));
+        let original = doc.shape(ShapeId(1)).unwrap().clone();
+        let turned = Shape {
+            rotation: 0.5,
+            style: Some(StyleId::Ink),
+            ..original.clone()
+        };
+        let copied = doc.apply(Op::Insert {
+            shapes: vec![turned.clone(), turned],
+        });
+        let ids: Vec<u64> = copied.shapes().map(|shape| shape.id.0).collect();
+        assert_eq!(ids, [1, 2, 3]);
+        let copy = copied.shape(ShapeId(3)).unwrap();
+        assert_eq!(copy.kind, original.kind);
+        assert!((copy.rotation - 0.5).abs() < f64::EPSILON);
+        assert_eq!(copy.style, Some(StyleId::Ink));
+        assert_eq!(copied.next_id(), ShapeId(4));
     }
 
     #[test]

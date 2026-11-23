@@ -79,9 +79,12 @@ enum Command {
     /// Information for bug reports.
     #[command(subcommand, hide = true)]
     Debug(Debug),
-    /// Offers a PNG from stdin on the clipboard until something else is copied.
+    /// Offers a PNG, or marks, from stdin on the clipboard until something else is copied.
     #[command(name = "serve-clipboard", hide = true)]
-    ServeClipboard,
+    ServeClipboard {
+        #[arg(long, default_value = clipboard::PNG)]
+        kind: String,
+    },
     /// Shows Kirie's tray icon until Quit is picked from its menu.
     #[command(hide = true)]
     Tray,
@@ -138,7 +141,7 @@ fn main() -> anyhow::Result<()> {
             delay,
         }) => capture_region(cursor, edit, delay),
         Some(Command::Debug(Debug::Globals)) => print_globals(),
-        Some(Command::ServeClipboard) => clipboard::serve(),
+        Some(Command::ServeClipboard { kind }) => clipboard::serve(&kind),
         Some(Command::Tray) => tray::run(),
         Some(Command::About) => about(),
         Some(Command::Shortcuts(Shortcuts::Install)) => shortcuts::install(),
@@ -423,6 +426,18 @@ mod tests {
         );
         assert_eq!(delay(&["kirie", "capture", "--delay", "61"]), None);
         assert_eq!(delay(&["kirie", "capture", "--delay", "-1"]), None);
+    }
+
+    #[test]
+    fn the_clipboard_service_offers_pictures_or_marks() {
+        let kind = |args: &[&str]| match Cli::parse_from(args).command {
+            Some(Command::ServeClipboard { kind }) => kind,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(kind(&["kirie", clipboard::SERVE]), clipboard::PNG);
+        let marks = kind(&["kirie", clipboard::SERVE, "--kind", marks::MIME]);
+        assert!(clipboard::KINDS.contains(&marks.as_str()));
+        assert!(clipboard::serve("text/html").is_err());
     }
 
     #[test]

@@ -74,7 +74,9 @@ Hold **Shift** while drawing to snap lines to 45° and boxes to squares.
 
 With the select tool, drag a box around marks to pick them all, or Shift+click a mark to add it
 or take it out. Picked marks move, change color and delete together; in the editor, Ctrl+A picks
-every mark.
+every mark. Ctrl+D duplicates the picked marks. In the editor, Ctrl+C and Ctrl+X copy or cut
+them (with nothing picked, Ctrl+C copies the picture), and Ctrl+V pastes them back where they
+were, or onto another image.
 
 To catch an open menu, a tooltip or a hover state, wait before the screenshot:
 `kirie capture --delay 5` takes it after five seconds (up to 60).

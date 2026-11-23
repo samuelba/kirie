@@ -84,6 +84,8 @@ pub enum Message {
     Undo,
     Redo,
     Delete,
+    /// Copies the picked marks a step aside.
+    Duplicate,
     Escape,
     Finish(Action),
     /// Enter: the action the overlay was opened for.
@@ -496,11 +498,8 @@ impl Overlay {
                 self.travel(false);
                 Task::none()
             }
-            Message::Delete => {
-                if !self.picked.is_empty() {
-                    let ids = std::mem::take(&mut self.picked);
-                    self.history.apply(Op::Remove { ids });
-                }
+            Message::Delete | Message::Duplicate => {
+                self.edit_marks(&message);
                 Task::none()
             }
             Message::Escape => self.escape(),
@@ -531,6 +530,23 @@ impl Overlay {
                 self.flash = self.flash.and_then(|flash| flash.at(now));
                 Task::none()
             }
+        }
+    }
+
+    /// Deleting and duplicating the picked marks.
+    fn edit_marks(&mut self, message: &Message) {
+        match message {
+            Message::Delete if !self.picked.is_empty() => {
+                let ids = std::mem::take(&mut self.picked);
+                self.history.apply(Op::Remove { ids });
+            }
+            Message::Duplicate => {
+                if let Some((op, ids)) = crate::marks::duplicate(self.document(), &self.picked) {
+                    self.history.apply(op);
+                    self.picked = ids;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1153,6 +1169,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("s") if command => Some(Message::Finish(Action::Save)),
         keyboard::Key::Character("c") if command => Some(Message::Finish(Action::Copy)),
         keyboard::Key::Character("e") if command => Some(Message::Finish(Action::Edit)),
+        keyboard::Key::Character("d") if command => Some(Message::Duplicate),
         keyboard::Key::Character(c) if !command => c
             .chars()
             .next()

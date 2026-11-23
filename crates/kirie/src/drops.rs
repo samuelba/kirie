@@ -142,14 +142,21 @@ impl Device {
 /// What is on the clipboard as the first of `kinds` it is offered as, read through `device`;
 /// `None` when the device does not see the clipboard or it holds none of them.
 pub async fn clipboard(device: Option<Device>, kinds: &'static [&'static str]) -> Option<Vec<u8>> {
+    clipboard_kind(device, kinds).await.map(|(_, bytes)| bytes)
+}
+
+/// Like [`clipboard`], with the kind it was read as.
+pub async fn clipboard_kind(
+    device: Option<Device>,
+    kinds: &'static [&'static str],
+) -> Option<(String, Vec<u8>)> {
     let device = device?;
     let read = tokio::task::spawn_blocking(move || device.read(kinds))
         .await
         .ok()??;
     read.inspect_err(|error| tracing::debug!(%error, "cannot read the clipboard"))
         .ok()
-        .map(|(_, bytes)| bytes)
-        .filter(|bytes| !bytes.is_empty())
+        .filter(|(_, bytes)| !bytes.is_empty())
 }
 
 /// The Wayland display of `window`, as an address so it can cross to another thread.

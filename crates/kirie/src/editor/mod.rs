@@ -156,6 +156,14 @@ pub enum Message {
     Delete,
     /// Picks every mark with the select tool.
     SelectAll,
+    /// Ctrl+C: copies the picked marks, else the picture.
+    CopyKey,
+    /// Copies the picked marks and deletes them.
+    Cut,
+    /// Copies the picked marks a step aside.
+    Duplicate,
+    /// What was on the clipboard when Ctrl+V was pressed.
+    Pasted(Result<Pasted, String>),
     Escape,
     Copy,
     Open,
@@ -190,6 +198,13 @@ pub enum Message {
     /// Window `id`, placed so, is to be opened anew to come to the front.
     Remap(window::Id, Placement),
     CaptureEnded(Result<(), String>),
+}
+
+/// What Ctrl+V found on the clipboard.
+#[derive(Debug, Clone)]
+pub enum Pasted {
+    Marks(Vec<Shape>),
+    Image(RgbaImage),
 }
 
 /// How big the window is, to open it again the same way.
@@ -526,7 +541,12 @@ impl Editor {
             }
             Message::Undo => self.travel(true),
             Message::Redo => self.travel(false),
-            Message::Delete | Message::SelectAll => return self.edit_marks(&message),
+            Message::Delete
+            | Message::SelectAll
+            | Message::CopyKey
+            | Message::Cut
+            | Message::Duplicate
+            | Message::Pasted(_) => return self.edit_marks(message),
             Message::Escape if self.closing == Closing::Asking => self.closing = Closing::No,
             Message::Escape | Message::About(false) if self.about => self.about = false,
             Message::About(_) | Message::OpenLink(_) | Message::ShowInFiles(_) => {
@@ -578,9 +598,38 @@ impl Editor {
         Task::none()
     }
 
-    /// Deleting and picking marks.
-    fn edit_marks(&mut self, message: &Message) -> Task<Message> {
+    /// Deleting, picking, copying and pasting marks.
+    fn edit_marks(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::CopyKey if self.picked.is_empty() => return self.export(Export::Copy),
+            Message::CopyKey => return self.copy_marks(),
+            Message::Cut if !self.picked.is_empty() => {
+                let copied = self.copy_marks();
+                let ids = std::mem::take(&mut self.picked);
+                self.history.apply(Op::Remove { ids });
+                return copied;
+            }
+            Message::Duplicate => {
+                if let Some((op, ids)) = crate::marks::duplicate(self.document(), &self.picked) {
+                    self.history.apply(op);
+                    self.picked = ids;
+                }
+            }
+            Message::Pasted(Ok(Pasted::Marks(_))) if self.image.is_none() => {
+                return self.toast(Err("Open an image to paste the marks on".to_owned()));
+            }
+            Message::Pasted(Ok(Pasted::Marks(clip))) => {
+                self.keep_crop();
+                let _ = self.update(Message::PickTool(Tool::Select));
+                if let Some((op, ids)) = crate::marks::paste(self.document(), &clip) {
+                    self.history.apply(op);
+                    self.picked = ids;
+                }
+            }
+            Message::Pasted(Ok(Pasted::Image(image))) => {
+                return self.update(Message::Opened(Ok(Loaded::image(image, None))));
+            }
+            Message::Pasted(Err(error)) => return self.toast(Err(error)),
             Message::Delete if !self.picked.is_empty() => {
                 let ids = std::mem::take(&mut self.picked);
                 self.history.apply(Op::Remove { ids });
@@ -604,6 +653,30 @@ impl Editor {
             _ => {}
         }
         Task::none()
+    }
+
+    /// Puts the picked marks on the clipboard, for Ctrl+V here or in another Kirie.
+    fn copy_marks(&self) -> Task<Message> {
+        let count = self.picked.len();
+        let Some(encoded) = crate::marks::encode(self.document(), &self.picked) else {
+            return Task::none();
+        };
+        let bytes = match encoded {
+            Ok(bytes) => bytes,
+            Err(error) => return Task::done(Message::Done(Err(error))),
+        };
+        Task::perform(
+            crate::clipboard::offer(bytes, crate::marks::MIME),
+            move |offered| {
+                Message::Done(offered.map(|()| {
+                    if count == 1 {
+                        "Copied the mark; Ctrl+V pastes it".to_owned()
+                    } else {
+                        format!("Copied {count} marks; Ctrl+V pastes them")
+                    }
+                }))
+            },
+        )
     }
 
     fn zoom(&mut self, message: &Message) {
@@ -797,9 +870,7 @@ impl Editor {
                     }
                 })
             }
-            Message::Paste => Task::perform(paste(self.device.clone()), |pasted| {
-                Message::Opened(pasted.map(|image| Loaded::image(image, None)))
-            }),
+            Message::Paste => Task::perform(paste(self.device.clone()), Message::Pasted),
             Message::Save => self.export(Export::Save),
             Message::SaveProject => self.export(Export::Project),
             Message::SaveAs if self.image.is_some() => {
@@ -1266,13 +1337,18 @@ impl Editor {
 
 /// The image on the clipboard, read through the window's data device, else through the
 /// clipboard protocol of wlroots compositors.
-async fn paste(device: Option<crate::drops::Device>) -> Result<RgbaImage, String> {
-    match crate::drops::clipboard(device, &[crate::drops::PNG]).await {
-        Some(png) => ::image::load_from_memory_with_format(&png, ::image::ImageFormat::Png)
-            .map(|image| image.to_rgba8())
-            .map_err(|error| format!("the clipboard image cannot be read: {error}")),
-        None => crate::clipboard::paste().await,
+async fn paste(device: Option<crate::drops::Device>) -> Result<Pasted, String> {
+    const KINDS: &[&str] = &[crate::marks::MIME, crate::drops::PNG];
+    let (kind, bytes) = match crate::drops::clipboard_kind(device, KINDS).await {
+        Some(found) => found,
+        None => crate::clipboard::paste(KINDS).await?,
+    };
+    if kind == crate::marks::MIME {
+        return crate::marks::decode(&bytes).map(Pasted::Marks);
     }
+    ::image::load_from_memory_with_format(&bytes, ::image::ImageFormat::Png)
+        .map(|image| Pasted::Image(image.to_rgba8()))
+        .map_err(|error| format!("the clipboard image cannot be read: {error}"))
 }
 
 async fn load_async(path: PathBuf) -> Result<Loaded, String> {
@@ -1477,7 +1553,9 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("z") if command && modifiers.shift() => Some(Message::Redo),
         keyboard::Key::Character("z") if command => Some(Message::Undo),
         keyboard::Key::Character("y") if command => Some(Message::Redo),
-        keyboard::Key::Character("c") if command => Some(Message::Copy),
+        keyboard::Key::Character("c") if command => Some(Message::CopyKey),
+        keyboard::Key::Character("x") if command => Some(Message::Cut),
+        keyboard::Key::Character("d") if command => Some(Message::Duplicate),
         keyboard::Key::Character("v") if command => Some(Message::Paste),
         keyboard::Key::Character("w") if command => Some(Message::Discard),
         keyboard::Key::Character("a") if command => Some(Message::SelectAll),
