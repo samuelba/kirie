@@ -5,11 +5,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub const UUID: &str = "kirie@samuelba.dev";
+/// The extension's metadata, which names the release and so changes with every one.
+pub const METADATA: &str = "metadata.json";
 const SCHEMA_ID: &str = "org.gnome.shell.extensions.kirie";
 
 const FILES: [(&str, &str); 4] = [
     (
-        "metadata.json",
+        METADATA,
         include_str!("../../../gnome-extension/metadata.json"),
     ),
     (
@@ -25,10 +27,14 @@ const FILES: [(&str, &str); 4] = [
     ),
 ];
 
+/// Where the extension is installed for this user, as `install.sh` puts it too.
+pub fn dir() -> Option<PathBuf> {
+    directories::BaseDirs::new()
+        .map(|dirs| dirs.data_dir().join("gnome-shell/extensions").join(UUID))
+}
+
 fn target() -> anyhow::Result<PathBuf> {
-    let dirs = directories::BaseDirs::new()
-        .ok_or_else(|| anyhow::anyhow!("cannot find the data folder (HOME is not set)"))?;
-    Ok(dirs.data_dir().join("gnome-shell/extensions").join(UUID))
+    dir().ok_or_else(|| anyhow::anyhow!("cannot find the data folder (HOME is not set)"))
 }
 
 pub fn install() -> anyhow::Result<()> {
@@ -76,7 +82,7 @@ fn write_files(target: &Path) -> std::io::Result<()> {
 /// GNOME Shell does not see the user's shell PATH (e.g. ~/.local/bin), so the extension is told
 /// exactly which binary to start.
 fn point_extension_at_this_binary(schemas: &Path) {
-    let Ok(binary) = std::env::current_exe() else {
+    let Ok(binary) = crate::launch::exe() else {
         return;
     };
     let value = format!("[{}]", quote(&binary));

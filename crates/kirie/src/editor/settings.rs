@@ -1,5 +1,5 @@
-//! The settings card: where screenshots are saved, how they are named, and whether saving
-//! copies them too. Every change is kept at once.
+//! The settings card: where screenshots are saved, how they are named, whether saving copies
+//! them too, and whether Kirie looks for new releases. Every change is kept at once.
 
 use std::path::PathBuf;
 
@@ -24,6 +24,7 @@ pub enum Event {
     /// Saves into `~/Pictures/Screenshots` again.
     ResetFolder,
     ToggleCopy,
+    ToggleUpdates,
 }
 
 /// The card while it is open.
@@ -81,13 +82,17 @@ impl Editor {
             Event::Folder(Err(error)) => return self.toast(Err(error)),
             Event::ResetFolder => form.kept.folder = None,
             Event::ToggleCopy => form.kept.copy_on_save = !form.kept.copy_on_save,
+            Event::ToggleUpdates => form.kept.check_updates = !form.kept.check_updates,
         }
         if form.kept == before {
             return Task::none();
         }
-        match form.kept.save() {
-            Ok(()) => Task::none(),
-            Err(error) => self.toast(Err(error)),
+        let saved = form.kept.save();
+        let check_updates = form.kept.check_updates;
+        let checked = self.set_release_checks(check_updates);
+        match saved {
+            Ok(()) => checked,
+            Err(error) => Task::batch([checked, self.toast(Err(error))]),
         }
     }
 
@@ -132,23 +137,28 @@ impl Editor {
                 .color(palette.muted),
             Err(error) => text(error).size(12).color(palette.danger),
         };
-        let copy = row![
-            icon_button(
-                Icon::Copy,
-                "Copy when saving",
-                palette,
-                form.kept.copy_on_save,
-                Some(event(Event::ToggleCopy)),
+        let copy = toggle(
+            palette,
+            Icon::Copy,
+            "Copy when saving",
+            form.kept.copy_on_save,
+            (
+                "Saving puts the picture on the clipboard too",
+                "Saving only saves",
             ),
-            text(if form.kept.copy_on_save {
-                "Saving puts the picture on the clipboard too"
-            } else {
-                "Saving only saves"
-            })
-            .size(14),
-        ]
-        .spacing(space::S)
-        .align_y(Alignment::Center);
+            event(Event::ToggleCopy),
+        );
+        let updates = toggle(
+            palette,
+            Icon::Done,
+            "Check for updates",
+            form.kept.check_updates,
+            (
+                "Asks GitHub for the latest release when Kirie starts and once a day",
+                "Only when you check in About Kirie",
+            ),
+            event(Event::ToggleUpdates),
+        );
         let card = container(
             column![
                 text("Settings").size(20),
@@ -169,7 +179,8 @@ impl Editor {
                     .spacing(space::XS)
                     .into(),
                 ),
-                section(palette, "When saving", copy.into()),
+                section(palette, "When saving", copy),
+                section(palette, "Updates", updates),
                 row![
                     Space::new().width(Length::Fill),
                     primary_button(Icon::Done, "Done", palette, event(Event::Close)),
@@ -187,6 +198,24 @@ impl Editor {
             }
         })))
     }
+}
+
+/// A switch and what it means, on or off.
+fn toggle<'a>(
+    palette: Palette,
+    icon: Icon,
+    label: &'static str,
+    on: bool,
+    (when_on, when_off): (&'static str, &'static str),
+    message: Message,
+) -> Element<'a, Message> {
+    row![
+        icon_button(icon, label, palette, on, Some(message)),
+        text(if on { when_on } else { when_off }).size(14),
+    ]
+    .spacing(space::S)
+    .align_y(Alignment::Center)
+    .into()
 }
 
 fn section<'a>(
@@ -218,6 +247,9 @@ mod tests {
         assert!(form.example().is_err());
         let _ = editor.update(Message::Settings(Event::ToggleCopy));
         assert!(!editor.settings.as_ref().unwrap().kept.copy_on_save);
+        let _ = editor.update(Message::Settings(Event::ToggleUpdates));
+        assert!(!editor.settings.as_ref().unwrap().kept.check_updates);
+        assert!(!editor.updates.check(), "the editor stops looking at once");
         let picked = Event::Folder(Ok(Some("/shots".into())));
         let _ = editor.update(Message::Settings(picked));
         assert_eq!(

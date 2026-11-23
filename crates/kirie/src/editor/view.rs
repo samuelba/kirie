@@ -301,6 +301,9 @@ impl Editor {
                 .align_y(Alignment::End)
                 .padding(space::XL),
         );
+        if let Some(card) = self.release_card() {
+            layers = layers.push(card);
+        }
         container(layers)
             .width(Length::Fill)
             .height(Length::Fill)

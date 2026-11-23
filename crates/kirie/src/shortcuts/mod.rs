@@ -40,7 +40,7 @@ fn desktop(current: &str) -> Desktop {
 }
 
 pub fn install() -> anyhow::Result<()> {
-    let exe = std::env::current_exe()?;
+    let exe = crate::launch::exe()?;
     let command = format!("{} capture", exe.display());
     let keys = Accelerator::parse(DEFAULT_KEYS).map_err(anyhow::Error::msg)?;
     match desktop(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default()) {
@@ -72,11 +72,7 @@ pub fn install() -> anyhow::Result<()> {
 
 /// The extension brings its own shortcut; without it, a GNOME custom shortcut runs Kirie.
 fn gnome(command: &str, keys: Accelerator) -> anyhow::Result<()> {
-    let extension = directories::BaseDirs::new().map(|dirs| {
-        dirs.data_dir()
-            .join("gnome-shell/extensions")
-            .join(crate::extension::UUID)
-    });
+    let extension = crate::extension::dir();
     if extension.is_some_and(|dir| dir.exists()) {
         println!("Kirie's GNOME Shell extension already takes screenshots on {keys}.");
         return Ok(());

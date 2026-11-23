@@ -1,8 +1,30 @@
-//! Handing files and links to the desktop: the default app for a file or a link, and the file
-//! manager with a file selected.
+//! Starting things: Kirie itself again, from the binary on disk, and files and links in the
+//! desktop's apps, with the file manager showing a file selected.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+
+/// What Linux appends to the running binary's path once an update replaced the file.
+const REPLACED: &str = " (deleted)";
+
+/// The binary Kirie runs from, to start Kirie again. After an update this is the new binary,
+/// at the path the old one had.
+pub fn exe() -> std::io::Result<PathBuf> {
+    std::env::current_exe().map(|path| without_replaced(&path))
+}
+
+/// The path of the running binary once an update replaced it on disk, where the new one is.
+pub fn replaced_binary() -> Option<PathBuf> {
+    let running = std::env::current_exe().ok()?;
+    let path = without_replaced(&running);
+    (path != running).then_some(path)
+}
+
+fn without_replaced(path: &Path) -> PathBuf {
+    path.to_str()
+        .and_then(|path| path.strip_suffix(REPLACED))
+        .map_or_else(|| path.to_owned(), PathBuf::from)
+}
 
 /// Opens `target`, a link or a file, in the app the desktop picks for it.
 pub fn open(target: impl AsRef<std::ffi::OsStr>) {
@@ -74,6 +96,18 @@ pub fn file_uri(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_replaced_binary_is_started_from_its_path() {
+        assert_eq!(
+            without_replaced(Path::new("/home/me/.local/bin/kirie (deleted)")),
+            Path::new("/home/me/.local/bin/kirie")
+        );
+        assert_eq!(
+            without_replaced(Path::new("/usr/bin/kirie")),
+            Path::new("/usr/bin/kirie")
+        );
+    }
 
     #[test]
     fn file_uris_escape_what_is_not_plain() {

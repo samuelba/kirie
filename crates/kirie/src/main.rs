@@ -17,6 +17,7 @@ mod overlay;
 mod paint;
 mod picker;
 mod region;
+mod release;
 mod save;
 mod script;
 mod selection;
@@ -309,7 +310,7 @@ fn take_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
 /// Opens a project from the hand-off folder in the running editor, or in a new one.
 fn open_handoff(path: &std::path::Path) -> anyhow::Result<()> {
     if !block_on(ipc::hand_over(Some(path), None))? {
-        editor_command(&std::env::current_exe()?, path)
+        editor_command(&launch::exe()?, path)
             .spawn()
             .context("cannot open the editor")?;
     }

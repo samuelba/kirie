@@ -1,5 +1,5 @@
-//! What the user set for saving: the folder screenshots go to, how they are named, and whether
-//! saving copies them too. Kept in `~/.config/kirie/settings.ron`.
+//! What the user set: the folder screenshots go to, how they are named, whether saving copies
+//! them too, and whether Kirie looks for new releases. Kept in `~/.config/kirie/settings.ron`.
 
 use std::path::{Path, PathBuf};
 
@@ -20,6 +20,8 @@ pub struct Settings {
     pub name: String,
     /// Saving puts the picture on the clipboard too.
     pub copy_on_save: bool,
+    /// Kirie asks GitHub for the latest release when it starts and once a day.
+    pub check_updates: bool,
 }
 
 impl Default for Settings {
@@ -28,6 +30,7 @@ impl Default for Settings {
             folder: None,
             name: DEFAULT_NAME.to_owned(),
             copy_on_save: true,
+            check_updates: true,
         }
     }
 }
@@ -145,6 +148,7 @@ mod tests {
         };
         assert_eq!(settings.stem(&noon()), "Kirie_2026-11-22_12-00-05");
         assert!(Settings::default().copy_on_save);
+        assert!(Settings::default().check_updates);
         assert!(Settings::default().folder().ends_with("Screenshots"));
         let elsewhere = Settings {
             folder: Some(PathBuf::from("/shots")),
@@ -159,6 +163,7 @@ mod tests {
             folder: Some(PathBuf::from("/shots")),
             name: "x".to_owned(),
             copy_on_save: false,
+            check_updates: false,
         };
         let text = ron::to_string(&settings).unwrap();
         assert_eq!(ron::from_str::<Settings>(&text).unwrap(), settings);

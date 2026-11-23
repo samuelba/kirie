@@ -11,7 +11,6 @@ use super::{Editor, Message};
 
 pub const WEBSITE: &str = "https://samuelba.dev/kirie";
 pub const SOURCE: &str = env!("CARGO_PKG_REPOSITORY");
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 impl Editor {
     /// The about card, over everything else, while it is open.
@@ -20,6 +19,14 @@ impl Editor {
             return None;
         }
         let palette = self.palette;
+        let (status, action) = self.release_status();
+        let mut updates = column![].spacing(space::S).align_x(Alignment::Center);
+        if let Some(status) = status {
+            updates = updates.push(text(status).size(13).color(palette.muted));
+        }
+        if let Some((label, event)) = action {
+            updates = updates.push(secondary_button(label, palette, Message::Release(event)));
+        }
         let links = row![
             secondary_button("Website", palette, Message::OpenLink(WEBSITE)),
             secondary_button("Source code", palette, Message::OpenLink(SOURCE)),
@@ -32,9 +39,10 @@ impl Editor {
             column![
                 svg(svg::Handle::from_memory(APP_ICON)).width(72).height(72),
                 text("Kirie").size(22),
-                text(format!("Version {VERSION}"))
+                text(format!("Version {}", crate::release::CURRENT_VERSION))
                     .size(13)
                     .color(palette.muted),
+                updates,
                 text("Kirie (切り絵, Japanese paper-cut art) is a screenshot and annotation tool for Wayland. Cut a piece out of your screen, mark it up right there or later in the editor, and copy or save it.").size(14),
                 text("MIT License · © Samuel Bachmann")
                     .size(12)
