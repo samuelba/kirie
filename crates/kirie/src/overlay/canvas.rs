@@ -225,12 +225,13 @@ impl Surface<'_> {
         }
     }
 
-    /// Whether the loupe shows: while a region is picked, not while marks are drawn, and while
-    /// the eyedropper waits for a click.
+    /// Whether the loupe shows: while a region is picked unless it was turned off, not while
+    /// marks are drawn, and while the eyedropper waits for a click.
     fn magnifying(&self) -> bool {
         let overlay = self.overlay;
         overlay.sampling()
-            || overlay.tool.is_none()
+            || overlay.magnifier
+                && overlay.tool.is_none()
                 && overlay.toolbar_drag.is_none()
                 && (overlay.selection.rect().is_none() || overlay.selection.dragging())
     }

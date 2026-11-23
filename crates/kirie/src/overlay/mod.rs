@@ -98,6 +98,8 @@ pub enum Message {
     Nudge(Vector),
     /// Keeps the selection for the next screenshot, or forgets it.
     ToggleRemember,
+    /// Shows or hides the magnifier while a region is picked, for this and later screenshots.
+    ToggleMagnifier,
     Finished(Result<Outcome, String>),
     Resized(window::Id, Size),
     /// The pointer over the toolbar's grip, in the grip's coordinates.
@@ -221,6 +223,8 @@ pub struct Overlay {
     host: Host,
     /// The flash as the overlay opens, while it fades.
     flash: Option<Flash>,
+    /// The magnifier shows while a region is picked.
+    magnifier: bool,
     typesetter: RefCell<Typesetter>,
     patches: RefCell<HashMap<crate::paint::PatchKey, image::Handle>>,
     pictures: RefCell<HashMap<u64, image::Handle>>,
@@ -364,6 +368,7 @@ impl Overlay {
             primary,
             host,
             flash: Some(Flash::new()),
+            magnifier: crate::settings::Settings::load().magnifier,
             typesetter: RefCell::new(Typesetter::new()),
             patches: RefCell::new(HashMap::new()),
             pictures: RefCell::new(HashMap::new()),
@@ -530,6 +535,7 @@ impl Overlay {
                 self.toggle_remember();
                 Task::none()
             }
+            Message::ToggleMagnifier => self.toggle_magnifier(),
             Message::Finish(action) => self.finish(action),
             Message::Accept => self.finish(self.primary),
             Message::Finished(Ok(outcome)) => self.close(outcome),
@@ -606,6 +612,19 @@ impl Overlay {
             crate::region::remember(region);
             self.remembered = Some(region);
         }
+    }
+
+    /// Keeps the choice for later screenshots, on top of whatever else was set meanwhile.
+    fn toggle_magnifier(&mut self) -> Task<Message> {
+        self.magnifier = !self.magnifier;
+        let settings = crate::settings::Settings {
+            magnifier: self.magnifier,
+            ..crate::settings::Settings::load()
+        };
+        if let Err(error) = settings.save() {
+            tracing::warn!(%error, "magnifier choice not kept");
+        }
+        Task::none()
     }
 
     /// Forgets the remembered region once the selection is changed.
@@ -1236,6 +1255,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("c") if command => Some(Message::Finish(Action::Copy)),
         keyboard::Key::Character("e") if command => Some(Message::Finish(Action::Edit)),
         keyboard::Key::Character("d") if command => Some(Message::Duplicate),
+        keyboard::Key::Character("m" | "M") if !command => Some(Message::ToggleMagnifier),
         keyboard::Key::Character(c) if !command => c
             .chars()
             .next()

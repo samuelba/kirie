@@ -97,11 +97,17 @@ impl Overlay {
     /// What a click and a drag do, at the foot of each screen until something is selected.
     /// Where windows cover a whole screen, a click takes a window, so a button takes the screen.
     fn hint(&self, screen: usize) -> Element<'_, Message> {
-        let words = if self.windows.is_empty() {
-            "Drag to cut a region  ·  Click to take the screen  ·  Esc to cancel"
+        let click = if self.windows.is_empty() {
+            "Click to take the screen"
         } else {
-            "Drag to cut a region  ·  Click to take a window  ·  Esc to cancel"
+            "Click to take a window"
         };
+        let magnifier = if self.magnifier {
+            "M to hide the magnifier"
+        } else {
+            "M to show the magnifier"
+        };
+        let words = format!("Drag to cut a region  ·  {click}  ·  {magnifier}  ·  Esc to cancel");
         let mut content = row![text(words).size(13)]
             .spacing(space::M)
             .align_y(iced::Alignment::Center);
