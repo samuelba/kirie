@@ -415,9 +415,10 @@ impl Editor {
                 palette,
                 Some(Message::ZoomOut)
             ),
-            small_pick_list(levels, shown, palette, |choice| Message::ZoomTo(
-                choice.zoom()
-            )),
+            // A fitted image is never enlarged, so "Fit 100%" is the longest label it shows.
+            small_pick_list(levels, shown, "Fit 100%", palette, |choice| {
+                Message::ZoomTo(choice.zoom())
+            }),
             small_icon_button(
                 Icon::ZoomIn,
                 "Zoom in (Ctrl++)",
