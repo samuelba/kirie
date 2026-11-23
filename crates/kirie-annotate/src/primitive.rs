@@ -113,6 +113,11 @@ pub enum Primitive {
         rect: Rect,
         effect: Effect,
     },
+    /// A picture stretched over `rect`.
+    Image {
+        rect: Rect,
+        pixels: crate::pixels::Pixels,
+    },
     /// An opaque fill with hard edges over every pixel the path reaches: what must stay hidden,
     /// with no soft edge or corner letting any of it through.
     Cover {

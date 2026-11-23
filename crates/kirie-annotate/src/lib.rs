@@ -4,6 +4,7 @@
 pub mod document;
 pub mod edit;
 pub mod effects;
+pub mod pixels;
 pub mod primitive;
 pub mod project;
 pub mod render;
@@ -13,6 +14,7 @@ pub mod text;
 pub mod tools;
 
 pub use document::{Document, Frame, History, Op};
+pub use pixels::Pixels;
 pub use primitive::{Align, Effect, FillRule, Font, Primitive};
 pub use shape::{
     HIGHLIGHT, Kind, PALETTE, Paint, Rgba, Shape, ShapeId, SpotShape, TextLook, Weight,

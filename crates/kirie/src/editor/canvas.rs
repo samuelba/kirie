@@ -7,7 +7,7 @@ use iced::{Color, Point, Rectangle, Renderer, Size, Theme, Vector};
 use kirie_annotate::{Draft, Shape, Tool};
 
 use super::{Editor, MARK_REACH, Message, Pointer, pixel};
-use crate::paint::{ImageSource, Marks, Painter, color_of, draw_marquee, draw_picked};
+use crate::paint::{ImageSource, Marks, Painter, Part, color_of, draw_marquee, draw_picked};
 use crate::selection::Handle;
 
 /// The radius of a crop handle, in screen pixels.
@@ -16,8 +16,10 @@ const CROP_HANDLE: f32 = 5.0;
 const WHEEL_STEPS: f32 = 6.0;
 const LINE: f32 = 40.0;
 
+/// The marks over the image, on canvases stacked one above the other, each doing its [`Part`].
 pub(super) struct Board<'a> {
     pub editor: &'a Editor,
+    pub part: Part,
 }
 
 #[derive(Debug, Default)]
@@ -52,6 +54,9 @@ impl canvas::Program<Message> for Board<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<Action<Message>> {
+        if self.part != Part::Input {
+            return None;
+        }
         let local = cursor.position_in(bounds);
         if let Some(at) = cursor.position_from(bounds.position()) {
             state.last = Some(at);
@@ -135,26 +140,25 @@ impl canvas::Program<Message> for Board<'_> {
             return vec![frame.into_geometry()];
         };
         let transform = editor.viewport.transform(self.content(), bounds.size());
-        if let Some(crop) = editor.crop() {
-            self.draw_marks(&mut frame, image, transform);
+        let layer = match self.part {
+            Part::Input => return vec![frame.into_geometry()],
+            Part::Marks(layer) => Some(layer),
+            Part::Chrome => None,
+        };
+        if editor.crop().is_none() || layer.is_some() {
+            let kept = to_rectangle(transform.transform_rect_bbox(editor.shown_canvas()));
+            let clip = editor
+                .crop()
+                .map_or(kept, |_| Rectangle::with_size(bounds.size()));
+            let picked = frame.with_clip(clip, |frame| {
+                self.draw_marks(frame, image, transform, layer)
+            });
+            if layer.is_some() {
+                return vec![frame.into_geometry()];
+            }
+            self.draw_chrome(&mut frame, &picked, transform, bounds.size());
+        } else if let Some(crop) = editor.crop() {
             draw_crop(&mut frame, crop, transform, bounds.size(), editor);
-            return vec![frame.into_geometry()];
-        }
-        let kept = to_rectangle(transform.transform_rect_bbox(editor.shown_canvas()));
-        let picked = frame.with_clip(kept, |frame| self.draw_marks(frame, image, transform));
-        let pixel = 1.0 / f64::from(editor.viewport.scale(self.content(), bounds.size()));
-        let accent = editor.palette.accent;
-        draw_picked(
-            &mut frame,
-            &picked,
-            &editor.picked,
-            editor.document(),
-            transform,
-            pixel,
-            accent,
-        );
-        if let Some(rect) = editor.draft.as_ref().and_then(Draft::marquee) {
-            draw_marquee(&mut frame, rect, transform, accent);
         }
         vec![frame.into_geometry()]
     }
@@ -165,6 +169,41 @@ impl canvas::Program<Message> for Board<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Interaction {
+        if self.part == Part::Input {
+            self.interaction(state, bounds, cursor)
+        } else {
+            Interaction::default()
+        }
+    }
+}
+
+impl Board<'_> {
+    /// The outlines of the picked marks, `picked` as they are shown, and a marquee.
+    fn draw_chrome(
+        &self,
+        frame: &mut Frame,
+        picked: &[Shape],
+        transform: kurbo::Affine,
+        size: Size,
+    ) {
+        let editor = self.editor;
+        let pixel = 1.0 / f64::from(editor.viewport.scale(self.content(), size));
+        let accent = editor.palette.accent;
+        draw_picked(
+            frame,
+            picked,
+            &editor.picked,
+            editor.document(),
+            transform,
+            pixel,
+            accent,
+        );
+        if let Some(rect) = editor.draft.as_ref().and_then(Draft::marquee) {
+            draw_marquee(frame, rect, transform, accent);
+        }
+    }
+
+    fn interaction(&self, state: &State, bounds: Rectangle, cursor: mouse::Cursor) -> Interaction {
         if state.panning.is_some() {
             return Interaction::Grabbing;
         }
@@ -202,12 +241,14 @@ impl canvas::Program<Message> for Board<'_> {
 }
 
 impl Board<'_> {
-    /// Draws the marks and the one in progress; returns the picked marks as shown.
+    /// Draws the marks of `layer` (none for `None`) and the one in progress; returns the picked
+    /// marks as shown.
     fn draw_marks(
         &self,
         frame: &mut Frame,
         image: &::image::RgbaImage,
         transform: kurbo::Affine,
+        layer: Option<usize>,
     ) -> Vec<Shape> {
         let editor = self.editor;
         let document = editor.document();
@@ -216,6 +257,7 @@ impl Board<'_> {
             source: &source,
             typesetter: &editor.typesetter,
             patches: &editor.patches,
+            pictures: &editor.pictures,
         };
         let preview = editor
             .draft
@@ -242,6 +284,7 @@ impl Board<'_> {
                 preview,
                 picked: &editor.picked,
                 visible: document.visible(),
+                layer: Some(layer.unwrap_or(usize::MAX)),
             },
             transform,
         )

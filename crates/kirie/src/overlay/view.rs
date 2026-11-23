@@ -10,6 +10,7 @@ use kirie_ui::widget::{divider, floating, icon_button, primary_button, secondary
 
 use super::{Action, Message, Overlay, canvas};
 use crate::controls;
+use crate::paint::Part;
 use crate::picker::{self, Picker};
 
 pub const TEXT_INPUT: &str = "kirie-text";
@@ -31,20 +32,25 @@ impl Overlay {
             return Space::new().into();
         };
         let screen = &self.screens[index];
-        let mut layers = stack![
+        let picture = stack![
             image(screen.handle.clone())
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .content_fit(iced::ContentFit::Fill)
-                .filter_method(image::FilterMethod::Linear),
-            iced::widget::canvas(canvas::Surface {
-                overlay: self,
-                area: screen.area,
-                scale: screen.scale,
-            })
-            .width(Length::Fill)
-            .height(Length::Fill),
+                .filter_method(image::FilterMethod::Linear)
         ];
+        let mut layers = Part::all(self.document()).fold(picture, |layers, part| {
+            layers.push(
+                iced::widget::canvas(canvas::Surface {
+                    overlay: self,
+                    area: screen.area,
+                    scale: screen.scale,
+                    part,
+                })
+                .width(Length::Fill)
+                .height(Length::Fill),
+            )
+        });
         if let Some(typing) = &self.typing {
             // Under the words, so the box never hides what is typed.
             let words = self

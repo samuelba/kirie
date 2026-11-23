@@ -280,6 +280,7 @@ pub struct Editor {
     scheme_chosen: bool,
     typesetter: RefCell<Typesetter>,
     patches: RefCell<HashMap<crate::paint::PatchKey, image::Handle>>,
+    pictures: RefCell<HashMap<u64, image::Handle>>,
     /// The window's data device, for drops and the clipboard, once it is ready.
     device: Option<crate::drops::Device>,
     /// The window the data device was last made anew for.
@@ -338,6 +339,7 @@ impl Editor {
             scheme_chosen: false,
             typesetter: RefCell::new(Typesetter::new()),
             patches: RefCell::new(HashMap::new()),
+            pictures: RefCell::new(HashMap::new()),
             device: None,
             renewed_for: None,
         };
@@ -626,8 +628,19 @@ impl Editor {
                     self.picked = ids;
                 }
             }
-            Message::Pasted(Ok(Pasted::Image(image))) => {
+            Message::Pasted(Ok(Pasted::Image(image))) if self.image.is_none() => {
                 return self.update(Message::Opened(Ok(Loaded::image(image, None))));
+            }
+            Message::Pasted(Ok(Pasted::Image(image))) => {
+                self.keep_crop();
+                match crate::marks::place_image(self.document(), image) {
+                    Ok((op, id)) => {
+                        let _ = self.update(Message::PickTool(Tool::Select));
+                        self.history.apply(op);
+                        self.picked = vec![id];
+                    }
+                    Err(error) => return self.toast(Err(error)),
+                }
             }
             Message::Pasted(Err(error)) => return self.toast(Err(error)),
             Message::Delete if !self.picked.is_empty() => {

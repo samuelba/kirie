@@ -9,7 +9,7 @@ use kirie_ui::{radius, space};
 use kirie_annotate::{Shape, Tool};
 
 use super::{HANDLE_REACH, MARK_REACH, Message, Overlay, Pointer, to_kurbo};
-use crate::paint::{Captures, Marks, Painter, draw_marquee, draw_picked};
+use crate::paint::{Captures, Marks, Painter, Part, draw_marquee, draw_picked};
 use crate::selection::Handle;
 
 const HANDLE_RADIUS: f32 = 4.5;
@@ -21,6 +21,7 @@ pub(super) struct Surface<'a> {
     pub area: Rectangle,
     /// Physical pixels per logical pixel on this screen.
     pub scale: f64,
+    pub part: Part,
 }
 
 impl Surface<'_> {
@@ -47,6 +48,9 @@ impl canvas::Program<Message> for Surface<'_> {
         _bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<Action<Message>> {
+        if self.part != Part::Input {
+            return None;
+        }
         // While a button is held the compositor keeps sending the pointer here, even beyond the
         // screen's edge, so a drag can cross onto the next screen.
         let at = self.to_desktop(cursor.position()?);
@@ -71,7 +75,14 @@ impl canvas::Program<Message> for Surface<'_> {
     ) -> Vec<Geometry> {
         let palette = self.overlay.palette;
         let mut frame = Frame::new(renderer, bounds.size());
-        self.draw_marks(&mut frame);
+        match self.part {
+            Part::Input => return vec![frame.into_geometry()],
+            Part::Marks(layer) => {
+                self.draw_marks(&mut frame, Some(layer));
+                return vec![frame.into_geometry()];
+            }
+            Part::Chrome => self.draw_marks(&mut frame, None),
+        }
         let selection = self
             .overlay
             .selection
@@ -107,6 +118,9 @@ impl canvas::Program<Message> for Surface<'_> {
         _bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Interaction {
+        if self.part != Part::Input {
+            return Interaction::default();
+        }
         let Some(at) = cursor.position().map(|at| self.to_desktop(at)) else {
             return Interaction::default();
         };
@@ -132,8 +146,9 @@ impl canvas::Program<Message> for Surface<'_> {
 }
 
 impl Surface<'_> {
-    /// The marks, and the one being drawn, under the scrim so it dims those outside.
-    fn draw_marks(&self, frame: &mut Frame) {
+    /// The marks of `layer`, and the one being drawn, under the scrim so it dims those
+    /// outside; with no layer, the picked marks' outlines and a marquee instead.
+    fn draw_marks(&self, frame: &mut Frame, layer: Option<usize>) {
         let overlay = self.overlay;
         let document = overlay.document();
         let visible = overlay.selection.rect().map_or(kurbo::Rect::ZERO, |rect| {
@@ -149,6 +164,7 @@ impl Surface<'_> {
             source: &source,
             typesetter: &overlay.typesetter,
             patches: &overlay.patches,
+            pictures: &overlay.pictures,
         };
         let transform =
             kurbo::Affine::translate((-f64::from(self.area.x), -f64::from(self.area.y)));
@@ -177,9 +193,13 @@ impl Surface<'_> {
                 preview,
                 picked: &overlay.picked,
                 visible,
+                layer: Some(layer.unwrap_or(usize::MAX)),
             },
             transform,
         );
+        if layer.is_some() {
+            return;
+        }
         let accent = overlay.palette.accent;
         draw_picked(
             frame,

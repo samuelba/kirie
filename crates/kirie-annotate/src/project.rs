@@ -12,8 +12,11 @@ use crate::document::Document;
 
 pub const EXTENSION: &str = "kirie";
 const FORMAT: &str = "kirie";
-/// 2: weights are widths, and text has a look of its own.
-const VERSION: u32 = 2;
+/// The newest format this Kirie reads. 2: weights are widths, and text has a look of its own.
+/// 3: image marks, whose pixels are in `document.ron`.
+const VERSION: u32 = 3;
+/// What a project without image marks is written as, so an older Kirie still opens it.
+const PLAIN: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Project {
@@ -61,7 +64,15 @@ pub fn save(project: &Project, writer: impl Write + Seek) -> Result<(), ProjectE
         ron::ser::to_string_pretty(
             &Manifest {
                 format: FORMAT.into(),
-                version: VERSION,
+                version: if project
+                    .document
+                    .shapes()
+                    .any(|shape| matches!(shape.kind, crate::shape::Kind::Image { .. }))
+                {
+                    VERSION
+                } else {
+                    PLAIN
+                },
             },
             pretty.clone(),
         )?
@@ -172,6 +183,40 @@ mod tests {
         let project = sample();
         let loaded = load(Cursor::new(bytes(&project))).unwrap();
         assert_eq!(loaded, project);
+    }
+
+    fn version(bytes: Vec<u8>) -> u32 {
+        let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let manifest: Manifest =
+            ron::from_str(&read_text(&mut zip, "manifest.ron").unwrap()).unwrap();
+        manifest.version
+    }
+
+    #[test]
+    fn image_marks_round_trip_in_a_newer_format() {
+        let project = sample();
+        assert_eq!(
+            version(bytes(&project)),
+            PLAIN,
+            "older Kirie still opens it"
+        );
+        let pasted = Project {
+            document: project.document.apply(Op::Add {
+                kind: Kind::Image {
+                    rect: Rect::new(2.0, 1.0, 6.0, 3.0),
+                    pixels: crate::pixels::Pixels::new(RgbaImage::from_pixel(
+                        2,
+                        1,
+                        image::Rgba([1, 2, 3, 128]),
+                    )),
+                },
+                paint: Paint::default(),
+            }),
+            ..project
+        };
+        let written = bytes(&pasted);
+        assert_eq!(version(written.clone()), VERSION);
+        assert_eq!(load(Cursor::new(written)).unwrap(), pasted);
     }
 
     #[test]

@@ -202,6 +202,35 @@ pub fn duplicate(document: &Document, picked: &[ShapeId]) -> Option<(Op, Vec<Sha
     (!marks.is_empty()).then(|| insert(document, &marks, Vec2::new(STEP, STEP) * document.unit))
 }
 
+/// The edit that puts `image` over the picture as a mark, and its id: in the middle of what is
+/// kept, shrunk to fit four fifths of it.
+pub fn place_image(document: &Document, image: image::RgbaImage) -> Result<(Op, ShapeId), String> {
+    let most = kirie_annotate::pixels::MAX_SIDE;
+    if image.width() == 0 || image.height() == 0 {
+        return Err("the pasted image is empty".to_owned());
+    }
+    if image.width() > most || image.height() > most {
+        return Err(format!(
+            "images over {most} pixels wide or tall cannot be pasted"
+        ));
+    }
+    let visible = document.visible();
+    let (width, height) = (f64::from(image.width()), f64::from(image.height()));
+    let shrink = (0.8 * visible.width() / width)
+        .min(0.8 * visible.height() / height)
+        .min(1.0);
+    let size = kurbo::Size::new(width * shrink, height * shrink);
+    let rect = kurbo::Rect::from_center_size(visible.center(), size);
+    let op = Op::Add {
+        kind: Kind::Image {
+            rect,
+            pixels: kirie_annotate::Pixels::new(image),
+        },
+        paint: Paint::default(),
+    };
+    Ok((op, document.next_id()))
+}
+
 fn insert(document: &Document, marks: &[Shape], by: Vec2) -> (Op, Vec<ShapeId>) {
     let first = document.next_id().0;
     let ids = (first..).take(marks.len()).map(ShapeId).collect();
@@ -301,6 +330,26 @@ mod tests {
         let pasted = small.apply(op);
         let bounds = pasted.shapes().next().unwrap().kind.bounds();
         assert_eq!(bounds.center(), Point::new(50.0, 50.0));
+    }
+
+    #[test]
+    fn pasted_images_sit_in_the_middle_and_fit() {
+        let document = Document::new(200, 100, 1.0);
+        let (op, id) = place_image(&document, image::RgbaImage::new(20, 10)).unwrap();
+        let placed = document.apply(op);
+        assert_eq!(id, ShapeId(1));
+        assert_eq!(
+            placed.shape(id).unwrap().kind.bounds(),
+            Rect::new(90.0, 45.0, 110.0, 55.0)
+        );
+        let (op, id) = place_image(&document, image::RgbaImage::new(400, 100)).unwrap();
+        let shrunk = document.apply(op).shape(id).unwrap().kind.bounds();
+        assert_eq!(
+            shrunk,
+            Rect::new(20.0, 30.0, 180.0, 70.0),
+            "four fifths of the width"
+        );
+        assert!(place_image(&document, image::RgbaImage::new(0, 4)).is_err());
     }
 
     #[test]

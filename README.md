@@ -76,7 +76,8 @@ With the select tool, drag a box around marks to pick them all, or Shift+click a
 or take it out. Picked marks move, change color and delete together; in the editor, Ctrl+A picks
 every mark. Ctrl+D duplicates the picked marks. In the editor, Ctrl+C and Ctrl+X copy or cut
 them (with nothing picked, Ctrl+C copies the picture), and Ctrl+V pastes them back where they
-were, or onto another image.
+were, or onto another image. With an image open, Ctrl+V puts a copied picture on top of it as
+a mark of its own, to move and resize: its corners keep its proportions, unless you hold Shift.
 
 To catch an open menu, a tooltip or a hover state, wait before the screenshot:
 `kirie capture --delay 5` takes it after five seconds (up to 60).
@@ -91,7 +92,7 @@ with that region selected, so Enter takes it at once. Moving or resizing the sel
 Kirie keeps the style, color, weight, text look, shadow, spotlight brightness and frame you last
 used for the next screenshot, in `~/.local/state/kirie/drawing.ron`.
 
-`kirie` opens the editor. Paste an image with Ctrl+V, open one with `kirie edit FILE`, or take a
+`kirie` opens the editor. Paste an image into the empty editor with Ctrl+V, open one with `kirie edit FILE`, or take a
 screenshot from its header. The bin in the header (Ctrl+W) discards the image; Ctrl+Q closes
 the editor. Both ask first when there are unsaved changes. Zoom with Ctrl+scroll, Ctrl+plus and Ctrl+minus, or the zoom control
 in the status bar (Ctrl+0 fits the image, Ctrl+1 shows it at actual size); pan with the scroll

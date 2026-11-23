@@ -176,7 +176,7 @@ pub fn reach(primitive: &Primitive) -> Option<Rect> {
             let halo = if halo.is_some() { size * 0.08 } else { 0.0 };
             Some(Rect::from_origin_size(origin, measured).inflate(halo, halo))
         }
-        Primitive::Effect { rect, .. } => Some(rect.abs()),
+        Primitive::Effect { rect, .. } | Primitive::Image { rect, .. } => Some(rect.abs()),
     }
 }
 
@@ -236,6 +236,10 @@ fn unturned(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Vec<Prim
             )]
         }
         Kind::Spotlight { .. } => Vec::new(),
+        Kind::Image { rect, pixels } => vec![Primitive::Image {
+            rect: rect.abs(),
+            pixels: pixels.clone(),
+        }],
         Kind::Text { at, text } => {
             let font = text_font(shape, style);
             vec![text_mark(

@@ -111,9 +111,11 @@ pub(super) fn primitives(kind: &Kind, context: &Context) -> Vec<Primitive> {
             color: REDACT,
             rule: FillRule::NonZero,
         }],
-        Kind::Text { .. } | Kind::Blur { .. } | Kind::Pixelate { .. } | Kind::Spotlight { .. } => {
-            Vec::new()
-        }
+        Kind::Text { .. }
+        | Kind::Blur { .. }
+        | Kind::Pixelate { .. }
+        | Kind::Spotlight { .. }
+        | Kind::Image { .. } => Vec::new(),
     }
 }
 

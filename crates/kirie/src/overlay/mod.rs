@@ -217,6 +217,7 @@ pub struct Overlay {
     flash: Option<Flash>,
     typesetter: RefCell<Typesetter>,
     patches: RefCell<HashMap<crate::paint::PatchKey, image::Handle>>,
+    pictures: RefCell<HashMap<u64, image::Handle>>,
     outcome: Arc<Mutex<Outcome>>,
 }
 
@@ -248,6 +249,22 @@ fn whole(area: Rectangle) -> geometry::Rect {
     )
 }
 
+/// The frozen screens, ready to show.
+fn screens(frames: &[Frame]) -> Vec<Screen> {
+    frames
+        .iter()
+        .map(|frame| Screen {
+            handle: image::Handle::from_rgba(
+                frame.image.width(),
+                frame.image.height(),
+                frame.image.as_raw().clone(),
+            ),
+            area: area(frame.output.logical),
+            scale: frame.scale(),
+        })
+        .collect()
+}
+
 fn to_kurbo(point: Point) -> kurbo::Point {
     kurbo::Point::new(f64::from(point.x), f64::from(point.y))
 }
@@ -260,18 +277,7 @@ impl Overlay {
         host: Host,
         outcome: Arc<Mutex<Outcome>>,
     ) -> (Self, Task<Message>) {
-        let screens: Vec<Screen> = frames
-            .iter()
-            .map(|frame| Screen {
-                handle: image::Handle::from_rgba(
-                    frame.image.width(),
-                    frame.image.height(),
-                    frame.image.as_raw().clone(),
-                ),
-                area: area(frame.output.logical),
-                scale: frame.scale(),
-            })
-            .collect();
+        let screens = screens(&frames);
         let desktop = screens
             .iter()
             .map(|screen| screen.area)
@@ -354,6 +360,7 @@ impl Overlay {
             flash: Some(Flash::new()),
             typesetter: RefCell::new(Typesetter::new()),
             patches: RefCell::new(HashMap::new()),
+            pictures: RefCell::new(HashMap::new()),
             outcome,
         };
         let overlay = if std::env::var_os("KIRIE_OVERLAY_DEMO").is_some() {

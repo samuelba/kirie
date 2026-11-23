@@ -33,7 +33,8 @@ pub fn grips(shape: &Shape, pixel: f64) -> Vec<(Grip, Point)> {
         | Kind::Redact { rect }
         | Kind::Blur { rect }
         | Kind::Pixelate { rect }
-        | Kind::Spotlight { rect } => {
+        | Kind::Spotlight { rect }
+        | Kind::Image { rect, .. } => {
             let rect = rect.abs();
             let mut grips: Vec<(Grip, Point)> = corners(rect)
                 .into_iter()
@@ -146,7 +147,13 @@ pub fn drag(origin: &Shape, grip: Grip, to: Point, constrain: bool) -> Shape {
             };
             // Resize in the mark's own frame, then put it back so the far side stays put.
             let turn = origin.turn();
-            let local = resize(rect, grip, turn.inverse() * to, constrain);
+            // A picture keeps its proportions from its corners, unless Shift frees them.
+            let keep = matches!(kind, Kind::Image { .. }) && matches!(grip, Grip::Corner(_));
+            let local = if keep {
+                proportional(rect, grip, turn.inverse() * to, constrain)
+            } else {
+                resize(rect, grip, turn.inverse() * to, constrain)
+            };
             let center = turn * local.center();
             let placed = local + (center - local.center());
             Shape {
@@ -165,7 +172,8 @@ fn rect_of(kind: &Kind) -> Option<Rect> {
         | Kind::Redact { rect }
         | Kind::Blur { rect }
         | Kind::Pixelate { rect }
-        | Kind::Spotlight { rect } => Some(rect.abs()),
+        | Kind::Spotlight { rect }
+        | Kind::Image { rect, .. } => Some(rect.abs()),
         _ => None,
     }
 }
@@ -178,6 +186,10 @@ fn with_rect(kind: &Kind, rect: Rect) -> Kind {
         Kind::Blur { .. } => Kind::Blur { rect },
         Kind::Pixelate { .. } => Kind::Pixelate { rect },
         Kind::Spotlight { .. } => Kind::Spotlight { rect },
+        Kind::Image { pixels, .. } => Kind::Image {
+            rect,
+            pixels: pixels.clone(),
+        },
         other => other.clone(),
     }
 }
@@ -206,6 +218,27 @@ fn resize(rect: Rect, grip: Grip, to: Point, constrain: bool) -> Rect {
         }
     }
     Rect::new(x0, y0, x1, y1).abs()
+}
+
+/// `rect` with the corner `grip` moved toward `to`, keeping its proportions unless `free`.
+fn proportional(rect: Rect, grip: Grip, to: Point, free: bool) -> Rect {
+    let stretched = resize(rect, grip, to, false);
+    if free || rect.width() <= 0.0 || rect.height() <= 0.0 {
+        return stretched;
+    }
+    let scale = (stretched.width() / rect.width()).max(stretched.height() / rect.height());
+    let size = kurbo::Size::new(rect.width() * scale, rect.height() * scale);
+    let fixed = match grip {
+        Grip::Corner(0) => Point::new(rect.x1, rect.y1),
+        Grip::Corner(1) => Point::new(rect.x0, rect.y1),
+        Grip::Corner(2) => Point::new(rect.x0, rect.y0),
+        _ => Point::new(rect.x1, rect.y0),
+    };
+    let toward = Vec2::new(
+        (to.x - fixed.x).signum() * size.width,
+        (to.y - fixed.y).signum() * size.height,
+    );
+    Rect::from_points(fixed, fixed + toward)
 }
 
 /// The map that stretches `from` onto `to`.
@@ -374,6 +407,23 @@ mod tests {
         assert!(to.y.abs() < 1e-9);
         let start = drag(&line, Grip::Start, Point::new(-5.0, -5.0), false);
         assert_eq!(start.kind.bounds(), Rect::new(-5.0, -5.0, 10.0, 0.0));
+    }
+
+    #[test]
+    fn pictures_keep_their_proportions_from_the_corners() {
+        let picture = shape(Kind::Image {
+            rect: Rect::new(0.0, 0.0, 40.0, 20.0),
+            pixels: crate::pixels::Pixels::new(image::RgbaImage::new(4, 2)),
+        });
+        assert_eq!(grips(&picture, 1.0).len(), 8, "pictures do not turn");
+        let wider = drag(&picture, Grip::Corner(2), Point::new(80.0, 25.0), false);
+        assert_eq!(wider.kind.bounds(), Rect::new(0.0, 0.0, 80.0, 40.0));
+        let flipped = drag(&picture, Grip::Corner(0), Point::new(50.0, 25.0), false);
+        assert_eq!(flipped.kind.bounds(), Rect::new(40.0, 20.0, 50.0, 25.0));
+        let free = drag(&picture, Grip::Corner(2), Point::new(80.0, 25.0), true);
+        assert_eq!(free.kind.bounds(), Rect::new(0.0, 0.0, 80.0, 25.0));
+        let edge = drag(&picture, Grip::Edge(1), Point::new(60.0, 99.0), false);
+        assert_eq!(edge.kind.bounds(), Rect::new(0.0, 0.0, 60.0, 20.0));
     }
 
     #[test]

@@ -14,6 +14,7 @@ use super::canvas::{Backdrop, Board};
 use super::viewport::Zoom;
 use super::{Editor, Message};
 use crate::controls;
+use crate::paint::Part;
 use crate::picker::{self, Picker};
 
 pub const TEXT_INPUT: &str = "kirie-editor-text";
@@ -205,14 +206,19 @@ impl Editor {
     fn center(&self) -> Element<'_, Message> {
         let palette = self.palette;
         let mut layers = if self.image.is_some() {
-            stack![
-                iced::widget::canvas(Backdrop { editor: self })
+            let board = |part| {
+                iced::widget::canvas(Board { editor: self, part })
                     .width(Length::Fill)
-                    .height(Length::Fill),
-                iced::widget::canvas(Board { editor: self })
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            ]
+                    .height(Length::Fill)
+            };
+            Part::all(self.document()).fold(
+                stack![
+                    iced::widget::canvas(Backdrop { editor: self })
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                ],
+                |layers, part| layers.push(board(part)),
+            )
         } else {
             stack![self.empty()]
         };

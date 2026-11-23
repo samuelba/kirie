@@ -1999,6 +1999,7 @@ dependencies = [
 name = "kirie-annotate"
 version = "0.1.1"
 dependencies = [
+ "base64 0.22.1",
  "cosmic-text",
  "image",
  "kurbo 0.11.3",

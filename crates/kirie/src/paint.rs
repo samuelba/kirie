@@ -64,6 +64,10 @@ pub struct Painter<'a> {
     pub source: &'a dyn PixelSource,
     pub typesetter: &'a RefCell<Typesetter>,
     pub patches: &'a RefCell<HashMap<PatchKey, image::Handle>>,
+    /// Image marks' pixels as the renderer holds them, by [`Pixels::id`].
+    ///
+    /// [`Pixels::id`]: kirie_annotate::Pixels::id
+    pub pictures: &'a RefCell<HashMap<u64, image::Handle>>,
 }
 
 /// The marks to draw: the document's, changed by the draft in progress, and a new one.
@@ -75,6 +79,39 @@ pub struct Marks<'a> {
     pub picked: &'a [ShapeId],
     /// The image area a spotlight dims around.
     pub visible: kurbo::Rect,
+    /// Only the marks of this layer, see [`layers`]; all of them if `None`.
+    pub layer: Option<usize>,
+}
+
+/// What one of the canvases stacked over a picture does. The input stays the lowest, so it
+/// keeps its state as layers come and go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Part {
+    /// Takes the pointer, and draws nothing.
+    Input,
+    /// Draws the marks of one layer, see [`layers`].
+    Marks(usize),
+    /// Draws what goes over every mark: outlines of the picked marks, a marquee, and the like.
+    Chrome,
+}
+
+impl Part {
+    /// The input, then each layer of `document`'s marks, then the chrome.
+    pub fn all(document: &Document) -> impl Iterator<Item = Part> {
+        std::iter::once(Part::Input)
+            .chain((0..layers(document)).map(Part::Marks))
+            .chain(std::iter::once(Part::Chrome))
+    }
+}
+
+/// How many canvases, one above the other, the marks of `document` take: a screen draws the
+/// pixels of a canvas over its paths, so each image or effect ends a layer, and the marks above
+/// it go on the next.
+pub fn layers(document: &Document) -> usize {
+    1 + document
+        .shapes()
+        .filter(|shape| shape.kind.is_raster())
+        .count()
 }
 
 /// Patches made for marks that are gone are dropped once there are this many.
@@ -131,6 +168,23 @@ impl Painter<'_> {
                 }
                 frame.fill(&path, color_of(*color));
             }
+            Primitive::Image { rect, pixels } => {
+                let handle = self.picture(pixels);
+                let mapped = transform.transform_rect_bbox(rect.abs());
+                #[allow(clippy::cast_possible_truncation)]
+                let local = Rectangle::new(
+                    Point::new(mapped.x0 as f32, mapped.y0 as f32),
+                    Size::new(mapped.width() as f32, mapped.height() as f32),
+                );
+                frame.draw_image(
+                    local,
+                    canvas::Image::new(handle).filter_method(if scale >= 2.0 {
+                        image::FilterMethod::Nearest
+                    } else {
+                        image::FilterMethod::Linear
+                    }),
+                );
+            }
             Primitive::Effect { rect, effect } => {
                 if let Some((handle, bounds)) = self.patch(*rect, *effect) {
                     let mapped = transform.transform_rect_bbox(bounds);
@@ -180,7 +234,18 @@ impl Painter<'_> {
             .collect();
         let stage = style::Stage::new(document, marks.visible, &shapes);
         let mut picked = Vec::new();
+        let mut layer = 0;
         for shape in shapes {
+            let shown = marks.layer.is_none_or(|only| only == layer);
+            if shape.kind.is_raster() {
+                layer += 1;
+            }
+            if marks.picked.contains(&shape.id) {
+                picked.push(shape.clone());
+            }
+            if !shown {
+                continue;
+            }
             let draft = shape.id == document.next_id();
             for primitive in style::primitives(&shape, document.style, document.unit, &stage) {
                 if draft {
@@ -188,9 +253,6 @@ impl Painter<'_> {
                 } else {
                     self.draw(frame, &primitive, transform);
                 }
-            }
-            if marks.picked.contains(&shape.id) {
-                picked.push(shape);
             }
         }
         picked
@@ -216,6 +278,24 @@ impl Painter<'_> {
                 .with_color(Color::WHITE.scale_alpha(0.8))
                 .with_width(1.0),
         );
+    }
+
+    /// The renderer's handle on `pixels`, made once.
+    fn picture(&self, pixels: &kirie_annotate::Pixels) -> image::Handle {
+        let mut pictures = self.pictures.borrow_mut();
+        if let Some(handle) = pictures.get(&pixels.id()) {
+            return handle.clone();
+        }
+        if pictures.len() >= PATCH_LIMIT {
+            pictures.clear();
+        }
+        let handle = image::Handle::from_rgba(
+            pixels.width(),
+            pixels.height(),
+            pixels.image().as_raw().clone(),
+        );
+        pictures.insert(pixels.id(), handle.clone());
+        handle
     }
 
     /// The frozen pixels under `rect` with `effect` applied, and where they go.

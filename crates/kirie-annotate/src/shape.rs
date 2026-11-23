@@ -267,6 +267,11 @@ pub enum Kind {
     Spotlight {
         rect: Rect,
     },
+    /// Another picture placed over this one, stretched over `rect`.
+    Image {
+        rect: Rect,
+        pixels: crate::pixels::Pixels,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -316,7 +321,8 @@ impl Kind {
             | Kind::Blur { rect }
             | Kind::Pixelate { rect }
             | Kind::Redact { rect }
-            | Kind::Spotlight { rect } => rect.abs(),
+            | Kind::Spotlight { rect }
+            | Kind::Image { rect, .. } => rect.abs(),
             Kind::Pen { points } | Kind::Highlighter { points } => points_bounds(points),
             Kind::Text { at, .. } => Rect::from_origin_size(*at, (0.0, 0.0)),
             Kind::Counter { at, .. } => Rect::from_center_size(*at, (28.0, 28.0)),
@@ -342,6 +348,10 @@ impl Kind {
             Kind::Pixelate { rect } => Kind::Pixelate { rect: *rect + by },
             Kind::Redact { rect } => Kind::Redact { rect: *rect + by },
             Kind::Spotlight { rect } => Kind::Spotlight { rect: *rect + by },
+            Kind::Image { rect, pixels } => Kind::Image {
+                rect: *rect + by,
+                pixels: pixels.clone(),
+            },
             Kind::Pen { points: p } => Kind::Pen { points: points(p) },
             Kind::Highlighter { points: p } => Kind::Highlighter { points: points(p) },
             Kind::Text { at, text } => Kind::Text {
@@ -377,6 +387,10 @@ impl Kind {
             Kind::Pixelate { rect: r } => Kind::Pixelate { rect: rect(r) },
             Kind::Redact { rect: r } => Kind::Redact { rect: rect(r) },
             Kind::Spotlight { rect: r } => Kind::Spotlight { rect: rect(r) },
+            Kind::Image { rect: r, pixels } => Kind::Image {
+                rect: rect(r),
+                pixels: pixels.clone(),
+            },
             Kind::Pen { points: p } => Kind::Pen { points: points(p) },
             Kind::Highlighter { points: p } => Kind::Highlighter { points: points(p) },
             Kind::Text { at, text } => Kind::Text {
@@ -395,6 +409,15 @@ impl Kind {
         matches!(
             self,
             Kind::Blur { .. } | Kind::Pixelate { .. } | Kind::Spotlight { .. }
+        )
+    }
+
+    /// Whether the mark draws pixels, which a screen draws above the paths around them: an
+    /// image, or an effect's patch.
+    pub const fn is_raster(&self) -> bool {
+        matches!(
+            self,
+            Kind::Blur { .. } | Kind::Pixelate { .. } | Kind::Image { .. }
         )
     }
 
