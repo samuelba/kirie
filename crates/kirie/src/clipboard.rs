@@ -33,7 +33,7 @@ pub async fn copy(image: RgbaImage) -> Result<(), String> {
 /// [`KINDS`].
 pub async fn offer(bytes: Vec<u8>, kind: &'static str) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+        let exe = crate::launch::exe().map_err(|error| error.to_string())?;
         let mut child = Command::new(exe)
             .args([SERVE, "--kind", kind])
             .stdin(Stdio::piped())

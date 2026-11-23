@@ -5,6 +5,7 @@ mod canvas;
 mod closing;
 mod demo;
 mod frame;
+mod release_card;
 mod settings;
 mod view;
 mod viewport;
@@ -190,6 +191,8 @@ pub enum Message {
     /// Opens or closes the about card.
     About(bool),
     Settings(settings::Event),
+    /// Looking for a newer release, and installing it.
+    Release(release_card::Event),
     OpenLink(&'static str),
     Opened(Result<Loaded, String>),
     Dropped(crate::drops::Dropped),
@@ -268,6 +271,8 @@ pub struct Editor {
     about: bool,
     /// The settings card, while it is open.
     settings: Option<settings::Form>,
+    /// Looking for newer releases, and what was found.
+    updates: release_card::Updates,
     /// What to do once the question about unsaved changes is answered.
     then: Then,
     viewport: Viewport,
@@ -339,6 +344,7 @@ impl Editor {
             closing: Closing::No,
             about: false,
             settings: None,
+            updates: release_card::Updates::new(),
             then: Then::Exit,
             viewport: Viewport::fitted(),
             cropping: None,
@@ -575,6 +581,7 @@ impl Editor {
             Message::Escape if self.closing == Closing::Asking => self.closing = Closing::No,
             Message::Escape | Message::About(false) if self.about => self.about = false,
             Message::Settings(event) => return self.edit_settings(event),
+            Message::Release(event) => return self.release_event(event),
             Message::About(_) | Message::OpenLink(_) | Message::ShowInFiles(_) => {
                 return self.outside(message);
             }
@@ -782,7 +789,7 @@ impl Editor {
             Message::Ipc(crate::ipc::Request::Present(token)) => self.raise(token),
             Message::Ipc(crate::ipc::Request::About(token)) => {
                 self.about = true;
-                self.raise(token)
+                Task::batch([self.raise(token), self.check_on_about()])
             }
             Message::Ipc(crate::ipc::Request::Settings(token)) => {
                 let _ = self.edit_settings(settings::Event::Open);
@@ -1247,7 +1254,12 @@ impl Editor {
     /// The about card, and links and files handed to the desktop.
     fn outside(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::About(open) => self.about = open,
+            Message::About(open) => {
+                self.about = open;
+                if open {
+                    return self.check_on_about();
+                }
+            }
             Message::OpenLink(link) => crate::launch::open(link),
             Message::ShowInFiles(path) => {
                 return Task::future(async move { crate::launch::show_in_files(&path).await })
@@ -1428,8 +1440,15 @@ impl Editor {
         } else {
             event::listen_with(key)
         };
+        let releases = if self.updates.check() {
+            iced::time::every(release_card::TICK)
+                .map(|_| Message::Release(release_card::Event::Tick))
+        } else {
+            Subscription::none()
+        };
         Subscription::batch([
             keys,
+            releases,
             event::listen_with(focus),
             Subscription::run(crate::ipc::requests).map(Message::Ipc),
             Subscription::run(crate::appearance::changes).map(Message::SystemScheme),
@@ -1553,7 +1572,7 @@ fn settings(placement: Placement) -> window::Settings {
 /// Runs the overlay in its own process, after the window has had time to hide.
 async fn capture() -> Result<(), String> {
     tokio::time::sleep(Duration::from_millis(350)).await;
-    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+    let exe = crate::launch::exe().map_err(|error| error.to_string())?;
     tokio::task::spawn_blocking(move || {
         std::process::Command::new(exe)
             .args(["capture", "--edit"])
@@ -1736,7 +1755,12 @@ pub fn run(loaded: Option<Loaded>, card: Option<Card>, token: Option<String>) ->
                 }
                 None => {}
             }
-            (editor, task)
+            let checked = if editor.updates.check() {
+                editor.check_release(false)
+            } else {
+                Task::none()
+            };
+            (editor, Task::batch([task, checked]))
         },
         Editor::update,
         Editor::view,

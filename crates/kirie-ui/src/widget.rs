@@ -145,7 +145,7 @@ pub fn primary_button<'a, Message: Clone + 'a>(
 
 /// A labeled button for a choice beside the main one.
 pub fn secondary_button<'a, Message: Clone + 'a>(
-    label: &'a str,
+    label: impl iced::widget::text::IntoFragment<'a>,
     palette: Palette,
     on_press: Message,
 ) -> Element<'a, Message> {

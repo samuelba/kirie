@@ -1,13 +1,15 @@
-//! The tray icon's menu, served as `com.canonical.dbusmenu`. It never changes, so the revision
-//! stays at 1 and the menu sends no update signals.
+//! The tray icon's menu, served as `com.canonical.dbusmenu`. It changes only when a newer release
+//! is found or gone: then the revision goes up and the menu tells the panel.
 
 #![allow(clippy::used_underscore_binding)]
 
 use std::collections::HashMap;
 
 use iced::futures::channel::mpsc::UnboundedSender;
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use zbus::interface;
+use zbus::object_server::SignalEmitter;
 use zbus::{OwnedVariant, Type, Variant};
 
 use super::Command;
@@ -15,7 +17,10 @@ use super::Command;
 pub const PATH: &str = "/MenuBar";
 
 const ROOT: i32 = 0;
-const REVISION: u32 = 1;
+/// The ids of the entry for a newer release and the separator after it, apart from the others'
+/// so that theirs stay the same whether it shows or not.
+const UPDATE: i32 = 100;
+const UPDATE_SEPARATOR: i32 = 101;
 
 /// One menu entry and, for the root, the entries under it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type, Variant, OwnedVariant)]
@@ -27,6 +32,8 @@ pub struct Layout {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Entry {
+    /// Opens the about card, which installs the newer release.
+    Update,
     Open,
     Capture,
     /// A screenshot after this many seconds.
@@ -49,18 +56,16 @@ const ENTRIES: [Entry; 8] = [
 ];
 
 impl Entry {
-    fn from_id(id: i32) -> Option<Self> {
-        let index = usize::try_from(id).ok()?.checked_sub(1)?;
-        ENTRIES.get(index).copied()
+    /// The entry with this id, while the menu shows a newer release if `update` is given.
+    fn from_id(id: i32, update: Option<&Version>) -> Option<Self> {
+        shown(update)
+            .into_iter()
+            .find_map(|(shown, entry)| (shown == id).then_some(entry))
     }
 
-    fn id(self) -> i32 {
-        let index = ENTRIES.iter().position(|entry| *entry == self).unwrap_or(0);
-        i32::try_from(index).unwrap_or(0) + 1
-    }
-
-    fn label(self) -> Option<String> {
+    fn label(self, update: Option<&Version>) -> Option<String> {
         match self {
+            Self::Update => update.map(|version| format!("Update to Kirie {version}…")),
             Self::Open => Some("Open Kirie".to_owned()),
             Self::Capture => Some("Take a Screenshot".to_owned()),
             Self::Delayed(seconds) => Some(format!("Take a Screenshot in {seconds} Seconds")),
@@ -73,6 +78,7 @@ impl Entry {
 
     fn command(self) -> Option<Command> {
         match self {
+            Self::Update => Some(Command::Update),
             Self::Open => Some(Command::Open),
             Self::Capture => Some(Command::Capture),
             Self::Delayed(seconds) => Some(Command::CaptureIn(seconds)),
@@ -83,8 +89,8 @@ impl Entry {
         }
     }
 
-    fn properties(self) -> HashMap<String, OwnedVariant> {
-        match self.label() {
+    fn properties(self, update: Option<&Version>) -> HashMap<String, OwnedVariant> {
+        match self.label(update) {
             Some(label) => HashMap::from([property("label", label)]),
             None => HashMap::from([property("type", "separator")]),
         }
@@ -101,24 +107,39 @@ fn root_properties() -> HashMap<String, OwnedVariant> {
     HashMap::from([property("children-display", "submenu")])
 }
 
+/// The entries the menu shows, with their ids: the newer release first, if there is one.
+fn shown(update: Option<&Version>) -> Vec<(i32, Entry)> {
+    let release = update.map(|_| {
+        [
+            (UPDATE, Entry::Update),
+            (UPDATE_SEPARATOR, Entry::Separator),
+        ]
+    });
+    release
+        .into_iter()
+        .flatten()
+        .chain((1..).zip(ENTRIES))
+        .collect()
+}
+
 /// The properties of entry `id`, or `None` for an id the menu does not have.
-fn properties_of(id: i32) -> Option<HashMap<String, OwnedVariant>> {
+fn properties_of(id: i32, update: Option<&Version>) -> Option<HashMap<String, OwnedVariant>> {
     if id == ROOT {
         return Some(root_properties());
     }
-    Entry::from_id(id).map(Entry::properties)
+    Entry::from_id(id, update).map(|entry| entry.properties(update))
 }
 
 /// The layout from `parent` down, with its children when `depth` allows any.
-pub fn layout(parent: i32, depth: i32) -> Option<Layout> {
-    let properties = properties_of(parent)?;
+pub fn layout(parent: i32, depth: i32, update: Option<&Version>) -> Option<Layout> {
+    let properties = properties_of(parent, update)?;
     let children = if parent == ROOT && depth != 0 {
-        ENTRIES
-            .iter()
-            .map(|entry| {
+        shown(update)
+            .into_iter()
+            .map(|(id, entry)| {
                 let child = Layout {
-                    id: entry.id(),
-                    properties: entry.properties(),
+                    id,
+                    properties: entry.properties(update),
                     children: Vec::new(),
                 };
                 OwnedVariant::try_from(Variant::from(child)).expect("layouts hold plain values")
@@ -135,9 +156,9 @@ pub fn layout(parent: i32, depth: i32) -> Option<Layout> {
 }
 
 /// What clicking entry `id` asks Kirie to do.
-pub fn command_for(id: i32, event: &str) -> Option<Command> {
+pub fn command_for(id: i32, event: &str, update: Option<&Version>) -> Option<Command> {
     (event == "clicked")
-        .then(|| Entry::from_id(id))
+        .then(|| Entry::from_id(id, update))
         .flatten()
         .and_then(Entry::command)
 }
@@ -149,15 +170,32 @@ fn unknown(id: i32) -> zbus::fdo::Error {
 #[derive(Debug)]
 pub struct Menu {
     commands: UnboundedSender<Command>,
+    /// The newer release the menu offers.
+    update: Option<Version>,
+    revision: u32,
 }
 
 impl Menu {
     pub fn new(commands: UnboundedSender<Command>) -> Self {
-        Self { commands }
+        Self {
+            commands,
+            update: None,
+            revision: 1,
+        }
+    }
+
+    /// Offers `update`, or no release; the menu's new revision when that changed it.
+    pub fn offer(&mut self, update: Option<Version>) -> Option<u32> {
+        if self.update == update {
+            return None;
+        }
+        self.update = update;
+        self.revision += 1;
+        Some(self.revision)
     }
 
     fn dispatch(&self, id: i32, event: &str) {
-        if let Some(command) = command_for(id, event) {
+        if let Some(command) = command_for(id, event, self.update.as_ref()) {
             let _ = self.commands.unbounded_send(command);
         }
     }
@@ -172,8 +210,9 @@ impl Menu {
         recursion_depth: i32,
         _property_names: Vec<String>,
     ) -> zbus::fdo::Result<(u32, Layout)> {
-        let layout = layout(parent_id, recursion_depth).ok_or_else(|| unknown(parent_id))?;
-        Ok((REVISION, layout))
+        let layout = layout(parent_id, recursion_depth, self.update.as_ref())
+            .ok_or_else(|| unknown(parent_id))?;
+        Ok((self.revision, layout))
     }
 
     fn get_group_properties(
@@ -181,20 +220,21 @@ impl Menu {
         ids: Vec<i32>,
         _property_names: Vec<String>,
     ) -> Vec<(i32, HashMap<String, OwnedVariant>)> {
+        let update = self.update.as_ref();
         let ids = if ids.is_empty() {
             std::iter::once(ROOT)
-                .chain(ENTRIES.iter().map(|entry| entry.id()))
+                .chain(shown(update).into_iter().map(|(id, _)| id))
                 .collect()
         } else {
             ids
         };
         ids.into_iter()
-            .filter_map(|id| properties_of(id).map(|properties| (id, properties)))
+            .filter_map(|id| properties_of(id, update).map(|properties| (id, properties)))
             .collect()
     }
 
     fn get_property(&self, id: i32, name: &str) -> zbus::fdo::Result<OwnedVariant> {
-        properties_of(id)
+        properties_of(id, self.update.as_ref())
             .ok_or_else(|| unknown(id))?
             .remove(name)
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs(format!("no property {name}")))
@@ -207,7 +247,7 @@ impl Menu {
     fn event_group(&self, events: Vec<(i32, String, OwnedVariant, u32)>) -> Vec<i32> {
         let mut missing = Vec::new();
         for (id, event, _data, _timestamp) in events {
-            if properties_of(id).is_none() {
+            if properties_of(id, self.update.as_ref()).is_none() {
                 missing.push(id);
             }
             self.dispatch(id, &event);
@@ -222,6 +262,14 @@ impl Menu {
     fn about_to_show_group(&self, _ids: Vec<i32>) -> (Vec<i32>, Vec<i32>) {
         (Vec::new(), Vec::new())
     }
+
+    /// Tells the panel that the entries under `parent` changed.
+    #[zbus(signal)]
+    pub async fn layout_updated(
+        emitter: &SignalEmitter<'_>,
+        revision: u32,
+        parent: i32,
+    ) -> zbus::Result<()>;
 
     #[zbus(property)]
     fn version(&self) -> u32 {
@@ -258,7 +306,7 @@ mod tests {
 
     #[test]
     fn the_root_lists_open_capture_separator_about_and_quit() {
-        let root = layout(ROOT, -1).expect("root");
+        let root = layout(ROOT, -1, None).expect("root");
         let children: Vec<Layout> = root
             .children
             .into_iter()
@@ -288,32 +336,71 @@ mod tests {
 
     #[test]
     fn a_depth_of_zero_leaves_out_the_children() {
-        assert_eq!(layout(ROOT, 0).expect("root").children, []);
+        assert_eq!(layout(ROOT, 0, None).expect("root").children, []);
     }
 
     #[test]
     fn unknown_entries_have_no_layout() {
-        assert!(layout(42, -1).is_none());
-        assert!(layout(-1, -1).is_none());
+        assert!(layout(42, -1, None).is_none());
+        assert!(layout(-1, -1, None).is_none());
+        assert!(layout(UPDATE, -1, None).is_none());
+    }
+
+    #[test]
+    fn a_newer_release_comes_first_and_leaves_the_other_ids_be() {
+        let version = Version::new(9, 9, 9);
+        let root = layout(ROOT, -1, Some(&version)).expect("root");
+        let children: Vec<Layout> = root
+            .children
+            .into_iter()
+            .map(|child| Layout::try_from(child).expect("a layout"))
+            .collect();
+        let ids: Vec<i32> = children.iter().map(|child| child.id).collect();
+        assert_eq!(ids, [UPDATE, UPDATE_SEPARATOR, 1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(
+            label(&children[0].properties).as_deref(),
+            Some("Update to Kirie 9.9.9…")
+        );
+        assert_eq!(
+            command_for(UPDATE, "clicked", Some(&version)),
+            Some(Command::Update)
+        );
+        assert_eq!(command_for(UPDATE, "clicked", None), None);
+        assert_eq!(
+            command_for(2, "clicked", Some(&version)),
+            Some(Command::Capture)
+        );
+    }
+
+    #[test]
+    fn offering_a_release_moves_the_revision_on_once() {
+        let (commands, _received) = mpsc::unbounded();
+        let mut menu = Menu::new(commands);
+        assert_eq!(menu.offer(Some(Version::new(9, 9, 9))), Some(2));
+        assert_eq!(menu.offer(Some(Version::new(9, 9, 9))), None);
+        assert_eq!(menu.offer(None), Some(3));
     }
 
     #[test]
     fn clicks_map_to_commands() {
-        assert_eq!(command_for(1, "clicked"), Some(Command::Open));
-        assert_eq!(command_for(2, "clicked"), Some(Command::Capture));
-        assert_eq!(command_for(3, "clicked"), Some(Command::CaptureIn(3)));
-        assert_eq!(command_for(4, "clicked"), Some(Command::CaptureIn(10)));
-        assert_eq!(command_for(6, "clicked"), Some(Command::Settings));
-        assert_eq!(command_for(7, "clicked"), Some(Command::About));
-        assert_eq!(command_for(8, "clicked"), Some(Command::Quit));
+        assert_eq!(command_for(1, "clicked", None), Some(Command::Open));
+        assert_eq!(command_for(2, "clicked", None), Some(Command::Capture));
+        assert_eq!(command_for(3, "clicked", None), Some(Command::CaptureIn(3)));
+        assert_eq!(
+            command_for(4, "clicked", None),
+            Some(Command::CaptureIn(10))
+        );
+        assert_eq!(command_for(6, "clicked", None), Some(Command::Settings));
+        assert_eq!(command_for(7, "clicked", None), Some(Command::About));
+        assert_eq!(command_for(8, "clicked", None), Some(Command::Quit));
     }
 
     #[test]
     fn other_events_and_entries_do_nothing() {
-        assert_eq!(command_for(5, "clicked"), None);
-        assert_eq!(command_for(1, "hovered"), None);
-        assert_eq!(command_for(ROOT, "clicked"), None);
-        assert_eq!(command_for(9, "clicked"), None);
+        assert_eq!(command_for(5, "clicked", None), None);
+        assert_eq!(command_for(1, "hovered", None), None);
+        assert_eq!(command_for(ROOT, "clicked", None), None);
+        assert_eq!(command_for(9, "clicked", None), None);
     }
 
     #[test]

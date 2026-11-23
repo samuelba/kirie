@@ -36,6 +36,17 @@ curl -fsSL https://samuelba.dev/kirie/install.sh | sh -s -- --uninstall
 When `minisign` or `rsign` is installed, the script checks the release's signature before
 installing anything.
 
+### Updates
+
+Kirie asks GitHub for the latest release when the editor or the tray icon starts, and once a day
+while they run. When a newer one is out, the editor shows a card in the canvas's corner and the
+tray menu offers **Update to Kirie …**. **Update** installs it in place after checking that the
+release is signed by the release key. New screenshots use it right away, the tray icon restarts
+into it on its own, and an open editor uses it once opened again. **About Kirie** shows the same
+update, and checks on request. Turn the automatic checks off under **Settings → Updates**.
+
+From a terminal, `kirie self-update` does the same.
+
 ## Set up a shortcut
 
 ```sh
