@@ -17,7 +17,7 @@ const FARTHEST: f64 = 1.0e6;
 /// The most bytes of marks read from the clipboard.
 pub const MAX_BYTES: usize = 256 * 1024 * 1024;
 /// The most pixels the image marks of one paste hold together.
-const MAX_PIXELS: u64 = 4 * kirie_annotate::pixels::MAX_PIXELS;
+const MAX_PIXELS: u64 = 2 * kirie_annotate::pixels::MAX_PIXELS;
 /// The longest pasted text, in characters, and the most points of a pasted stroke.
 const LONGEST: usize = 100_000;
 /// The highest step number pasted.
@@ -144,13 +144,15 @@ pub fn restack(document: &Document, picked: &[ShapeId], to: Restack) -> Option<O
     })
 }
 
-/// The restacking `key` with Ctrl asks for: ] and [ one place, and with Shift all the way.
-pub fn restack_key(key: &str, shift: bool) -> Option<Restack> {
-    match (key, shift) {
-        ("]" | "}", true) => Some(Restack::Front),
-        ("[" | "{", true) => Some(Restack::Back),
-        ("]", false) => Some(Restack::Forward),
-        ("[", false) => Some(Restack::Backward),
+/// The restacking `key` with Ctrl asks for: ] and [ one place, and } and { (Shift+] and
+/// Shift+[ where those are) all the way. By the character alone, so layouts that need Shift for
+/// [ and ] still reach every one.
+pub fn restack_key(key: &str) -> Option<Restack> {
+    match key {
+        "}" => Some(Restack::Front),
+        "{" => Some(Restack::Back),
+        "]" => Some(Restack::Forward),
+        "[" => Some(Restack::Backward),
         _ => None,
     }
 }
@@ -488,9 +490,9 @@ mod tests {
         let forward = restack(&document, &[ShapeId(1)], Restack::Forward).unwrap();
         assert_eq!(order(forward), [2, 1, 3]);
         assert!(restack(&document, &[], Restack::Front).is_none());
-        assert_eq!(restack_key("}", true), Some(Restack::Front));
-        assert_eq!(restack_key("[", false), Some(Restack::Backward));
-        assert_eq!(restack_key("a", false), None);
+        assert_eq!(restack_key("}"), Some(Restack::Front));
+        assert_eq!(restack_key("["), Some(Restack::Backward));
+        assert_eq!(restack_key("a"), None);
     }
 
     #[test]

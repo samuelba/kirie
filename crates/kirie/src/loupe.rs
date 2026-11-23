@@ -61,6 +61,7 @@ pub fn draw(frame: &mut Frame, lens: &Lens, label: &str, at: Point, size: Size, 
     } else {
         at.y - GAP - card.height
     };
+    let (x, y) = (x.round(), y.round());
     let origin = Point::new(x, y);
     let outline = Path::rounded_rectangle(origin, card, radius::CONTROL.into());
     frame.fill(&outline, palette.surface[0]);

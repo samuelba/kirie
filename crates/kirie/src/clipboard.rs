@@ -11,6 +11,8 @@ pub const SERVE: &str = "serve-clipboard";
 pub const PNG: &str = "image/png";
 /// What the background copy offers.
 pub const KINDS: [&str; 2] = [PNG, crate::marks::MIME];
+/// How long the clipboard service gets to say that it holds the clipboard.
+const READY: std::time::Duration = std::time::Duration::from_secs(2);
 /// The most bytes read from the clipboard.
 const MAX_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -35,7 +37,7 @@ pub async fn offer(bytes: Vec<u8>, kind: &'static str) -> Result<(), String> {
         let mut child = Command::new(exe)
             .args([SERVE, "--kind", kind])
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
             .map_err(|error| format!("cannot start the clipboard service: {error}"))?;
@@ -45,20 +47,22 @@ pub async fn offer(bytes: Vec<u8>, kind: &'static str) -> Result<(), String> {
             .ok_or("the clipboard service has no input")?
             .write_all(&bytes)
             .map_err(|error| format!("cannot hand it to the clipboard: {error}"))?;
-        // A service that cannot take the clipboard, as where the compositor lets no program
-        // do so, gives up at once; one that took it keeps running.
-        for _ in 0..10 {
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            match child.try_wait() {
-                Ok(Some(status)) if !status.success() => {
-                    return Err("the clipboard cannot be reached here".to_owned());
-                }
-                Ok(Some(_)) => return Ok(()),
-                Ok(None) => {}
-                Err(error) => return Err(format!("cannot follow the clipboard service: {error}")),
-            }
+        // The service says when it holds the clipboard, and gives up at once where the
+        // compositor lets no program take it; one slow to start is left to it.
+        let mut said = child
+            .stdout
+            .take()
+            .ok_or("the clipboard service has no output")?;
+        let (sender, ready) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::Read as _;
+            let mut byte = [0];
+            let _ = sender.send(said.read(&mut byte).is_ok_and(|read| read == 1));
+        });
+        match ready.recv_timeout(READY) {
+            Ok(false) => Err("the clipboard cannot be reached here".to_owned()),
+            Ok(true) | Err(_) => Ok(()),
         }
-        Ok(())
     })
     .await
     .map_err(|error| error.to_string())?
@@ -113,10 +117,15 @@ pub fn serve(kind: &str) -> anyhow::Result<()> {
     anyhow::ensure!(!bytes.is_empty(), "nothing to copy");
     let mut options = Options::new();
     options.foreground(true);
-    options.copy(
+    let prepared = options.prepare_copy(
         Source::Bytes(bytes.into_boxed_slice()),
         MimeType::Specific(kind.to_owned()),
     )?;
+    // Tells the Kirie that started this one that the clipboard is taken.
+    let mut said = std::io::stdout();
+    said.write_all(b"\n")?;
+    said.flush()?;
+    prepared.serve()?;
     Ok(())
 }
 

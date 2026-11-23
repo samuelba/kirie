@@ -1210,7 +1210,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
     let command = modifiers.command();
     if command
         && let keyboard::Key::Character(written) = key.as_ref()
-        && let Some(to) = crate::marks::restack_key(written, modifiers.shift())
+        && let Some(to) = crate::marks::restack_key(written)
     {
         return Some(Message::Restack(to));
     }

@@ -165,6 +165,8 @@ pub enum Message {
     Duplicate,
     /// Moves the picked marks up or down among the others.
     Restack(crate::marks::Restack),
+    /// Copied marks reached the clipboard, or did not; with what to tell.
+    Offered(Result<String, String>),
     /// What was on the clipboard when Ctrl+V was pressed.
     Pasted(Result<Pasted, String>),
     Escape,
@@ -202,6 +204,13 @@ pub enum Message {
     /// Window `id`, placed so, is to be opened anew to come to the front.
     Remap(window::Id, Placement),
     CaptureEnded(Result<(), String>),
+}
+
+/// How far copied marks got to the clipboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Offer {
+    Pending,
+    Failed,
 }
 
 /// What Ctrl+V found on the clipboard.
@@ -274,9 +283,10 @@ pub struct Editor {
     draft: Option<Draft>,
     /// The marks the select tool picked; a lone one shows its grips.
     picked: Vec<ShapeId>,
-    /// The marks copied last, which Ctrl+V pastes when the clipboard holds neither marks nor an
-    /// image, as where the compositor lets no program offer them.
-    clip: Vec<Shape>,
+    /// The marks copied last, while the clipboard is not known to hold them: Ctrl+V pastes them
+    /// while they are on their way there, or, should they never get there, when it holds
+    /// neither marks nor an image.
+    clip: Option<(Vec<Shape>, Offer)>,
     /// A slider is being dragged; its moves undo as one step.
     sliding: bool,
     typing: Option<Typing>,
@@ -340,7 +350,7 @@ impl Editor {
             picker: None,
             draft: None,
             picked: Vec::new(),
-            clip: Vec::new(),
+            clip: None,
             sliding: false,
             typing: None,
             last_click: None,
@@ -560,15 +570,15 @@ impl Editor {
             | Message::Cut
             | Message::Duplicate
             | Message::Restack(_)
+            | Message::Offered(_)
             | Message::Pasted(_) => return self.edit_marks(message),
             Message::Escape if self.closing == Closing::Asking => self.closing = Closing::No,
             Message::Escape | Message::About(false) if self.about => self.about = false,
-            Message::Escape if self.settings.is_some() => self.settings = None,
             Message::Settings(event) => return self.edit_settings(event),
             Message::About(_) | Message::OpenLink(_) | Message::ShowInFiles(_) => {
                 return self.outside(message);
             }
-            Message::Escape | Message::CropCancel if self.cropping.is_some() => {
+            Message::CropCancel if self.cropping.is_some() => {
                 self.cropping = None;
                 self.viewport = Viewport::fitted();
             }
@@ -607,11 +617,18 @@ impl Editor {
         Task::none()
     }
 
-    /// Esc puts down what is open, one thing at a time: the eyedropper, the color picker, the
-    /// text being typed, the mark being drawn, then the picked marks.
+    /// Esc puts down what is open, one thing at a time: the eyedropper, the settings, the crop,
+    /// the color picker, the text being typed, the mark being drawn, then the picked marks.
     fn escape(&mut self) -> Task<Message> {
         if self.sampling() {
             return self.edit_color(picker::Event::Eyedropper);
+        }
+        if self.settings.take().is_some() {
+            return Task::none();
+        }
+        if self.cropping.take().is_some() {
+            self.viewport = Viewport::fitted();
+            return Task::none();
         }
         if self.picker.take().is_none()
             && self.typing.take().is_none()
@@ -670,6 +687,16 @@ impl Editor {
                 }
             }
             Message::Pasted(Err(error)) => return self.toast(Err(error)),
+            Message::Offered(Ok(copied)) => {
+                self.clip = None;
+                return self.toast(Ok(copied));
+            }
+            Message::Offered(Err(copied)) => {
+                if let Some((_, offer)) = &mut self.clip {
+                    *offer = Offer::Failed;
+                }
+                return self.toast(Ok(copied));
+            }
             Message::Delete if !self.picked.is_empty() => {
                 let ids = std::mem::take(&mut self.picked);
                 self.history.apply(Op::Remove { ids });
@@ -701,7 +728,7 @@ impl Editor {
         if marks.is_empty() {
             return Task::none();
         }
-        self.clip.clone_from(&marks);
+        self.clip = Some((marks.clone(), Offer::Pending));
         let copied = if marks.len() == 1 {
             "Copied the mark; Ctrl+V pastes it".to_owned()
         } else {
@@ -714,10 +741,10 @@ impl Editor {
             crate::clipboard::offer(bytes, crate::marks::MIME).await
         };
         Task::perform(offered, move |offered| {
-            Message::Done(Ok(match offered {
-                Ok(()) => copied,
-                Err(error) => format!("{copied} here; other apps cannot ({error})"),
-            }))
+            Message::Offered(match offered {
+                Ok(()) => Ok(copied),
+                Err(error) => Err(format!("{copied} here; other apps cannot ({error})")),
+            })
         })
     }
 
@@ -1418,19 +1445,26 @@ impl Editor {
     }
 }
 
-/// The image on the clipboard, read through the window's data device, else through the
-/// clipboard protocol of wlroots compositors.
-/// What is on the clipboard: marks, else an image, else `clip`, the marks copied last.
-async fn paste(device: Option<crate::drops::Device>, clip: Vec<Shape>) -> Result<Pasted, String> {
+/// What Ctrl+V pastes: `clip`, marks still on their way to the clipboard; else marks or an
+/// image on the clipboard, read through the window's data device, else through the clipboard
+/// protocol of wlroots compositors; else `clip`, marks that never got there.
+async fn paste(
+    device: Option<crate::drops::Device>,
+    clip: Option<(Vec<Shape>, Offer)>,
+) -> Result<Pasted, String> {
     const KINDS: &[&str] = &[crate::marks::MIME, crate::drops::PNG];
+    let unsent = match clip {
+        Some((marks, Offer::Pending)) => return Ok(Pasted::Marks(marks)),
+        Some((marks, Offer::Failed)) => Some(marks),
+        None => None,
+    };
     let found = match crate::drops::clipboard_kind(device, KINDS).await {
         Some(found) => Ok(found),
         None => crate::clipboard::paste(KINDS).await,
     };
     let (kind, bytes) = match found {
         Ok(found) => found,
-        Err(_) if !clip.is_empty() => return Ok(Pasted::Marks(clip)),
-        Err(error) => return Err(error),
+        Err(error) => return unsent.map(Pasted::Marks).ok_or(error),
     };
     tokio::task::spawn_blocking(move || {
         if kind == crate::marks::MIME {
@@ -1642,7 +1676,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
     let command = modifiers.command();
     if command
         && let keyboard::Key::Character(written) = key.as_ref()
-        && let Some(to) = crate::marks::restack_key(written, modifiers.shift())
+        && let Some(to) = crate::marks::restack_key(written)
     {
         return Some(Message::Restack(to));
     }

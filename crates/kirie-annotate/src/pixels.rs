@@ -24,10 +24,15 @@ thread_local! {
 /// Runs `read` with image marks it reads holding `pixels` together at most, so a project or a
 /// paste full of small files that unpack into huge images is refused before they unpack.
 pub fn budget<T>(pixels: u64, read: impl FnOnce() -> T) -> T {
-    let before = LEFT.replace(Some(pixels));
-    let read = read();
-    LEFT.set(before);
-    read
+    /// Puts back the budget there was, even when reading panics.
+    struct Restore(Option<u64>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            LEFT.set(self.0);
+        }
+    }
+    let _restore = Restore(LEFT.replace(Some(pixels)));
+    read()
 }
 
 /// Whether `width`×`height` is an image a mark may hold, taking it from the budget if one runs.
@@ -161,6 +166,12 @@ mod tests {
         let wide = ron::to_string(&Pixels::new(RgbaImage::new(MAX_SIDE + 1, 1))).unwrap();
         assert!(ron::from_str::<Pixels>(&wide).is_err());
         assert!(fits(10, 10) && !fits(0, 10) && !fits(MAX_SIDE, MAX_SIDE));
+        let panicked = std::panic::catch_unwind(|| budget(1, || panic!("broken")));
+        assert!(panicked.is_err());
+        assert!(
+            ron::from_str::<(Pixels, Pixels)>(&two).is_ok(),
+            "a panic leaves no budget behind"
+        );
     }
 
     #[test]
