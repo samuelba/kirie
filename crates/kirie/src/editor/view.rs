@@ -103,10 +103,18 @@ impl Editor {
                 ))
                 .push(icon_button(
                     Icon::Project,
-                    "Save editable project, with the original under the marks (Ctrl+Shift+S)",
+                    "Save editable project to Pictures, with the original under the marks \
+                     (Ctrl+Alt+S)",
                     palette,
                     false,
                     Some(Message::SaveProject),
+                ))
+                .push(icon_button(
+                    Icon::SaveAs,
+                    "Save as… (Ctrl+Shift+S)",
+                    palette,
+                    false,
+                    Some(Message::SaveAs),
                 ))
                 .push(icon_button(
                     Icon::Save,

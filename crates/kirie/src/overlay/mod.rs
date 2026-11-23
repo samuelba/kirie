@@ -53,6 +53,8 @@ pub enum Pointer {
 pub enum Action {
     Copy,
     Save,
+    /// Closes the overlay and asks where to save, and as what.
+    SaveAs,
     /// Hands the selection and its marks to the editor.
     Edit,
 }
@@ -129,6 +131,8 @@ pub enum Outcome {
     #[default]
     Canceled,
     Saved(PathBuf),
+    /// The picture and its marks, to save where the user picks once the overlay is gone.
+    SaveAs(Box<kirie_annotate::project::Project>),
     Copied,
     /// A project for the editor to open.
     Edit(PathBuf),
@@ -920,6 +924,13 @@ impl Overlay {
                 Err(error) => self.close(Outcome::Failed(error)),
             };
         }
+        // The file dialog would open under the overlay, so it waits for the overlay to close.
+        if action == Action::SaveAs {
+            return match self.project() {
+                Ok(project) => self.close(Outcome::SaveAs(Box::new(project))),
+                Err(error) => self.close(Outcome::Failed(error)),
+            };
+        }
         let picture = match self.picture() {
             Ok(picture) => picture,
             Err(error) => return self.close(Outcome::Failed(error)),
@@ -931,7 +942,7 @@ impl Overlay {
             Action::Copy => Task::perform(crate::clipboard::copy(picture), |copied| {
                 Message::Finished(copied.map(|()| Outcome::Copied))
             }),
-            Action::Edit => Task::none(),
+            Action::Edit | Action::SaveAs => Task::none(),
         }
     }
 
@@ -1080,6 +1091,9 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("z") if command => Some(Message::Undo),
         keyboard::Key::Character("y") if command => Some(Message::Redo),
         keyboard::Key::Character("a") if command => Some(Message::SelectAll),
+        keyboard::Key::Character("s") if command && modifiers.shift() => {
+            Some(Message::Finish(Action::SaveAs))
+        }
         keyboard::Key::Character("s") if command => Some(Message::Finish(Action::Save)),
         keyboard::Key::Character("c") if command => Some(Message::Finish(Action::Copy)),
         keyboard::Key::Character("e") if command => Some(Message::Finish(Action::Edit)),

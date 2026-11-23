@@ -233,10 +233,20 @@ fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
         block_on(ipc::resume())?;
     }
     match outcome.map_err(anyhow::Error::msg)? {
-        overlay::Outcome::Saved(path) => {
-            println!("{}", path.display());
-            block_on(notify::show("Screenshot saved", &save::pretty(&path)))?;
-            Ok(())
+        overlay::Outcome::Saved(path) => saved(&path),
+        overlay::Outcome::SaveAs(project) => {
+            let name = format!("{}.png", save::stem(&jiff::Zoned::now()));
+            let folder = save::screenshots_dir();
+            let _ = std::fs::create_dir_all(&folder);
+            let Some((path, format)) =
+                block_on(dialog::save_as(&name, &folder, &save::Format::ALL))?
+                    .map_err(anyhow::Error::msg)?
+            else {
+                return Ok(());
+            };
+            let path =
+                block_on(save::save_as(*project, path, format))?.map_err(anyhow::Error::msg)?;
+            saved(&path)
         }
         overlay::Outcome::Copied => {
             block_on(notify::show(
@@ -256,6 +266,13 @@ fn capture_region(cursor: bool, edit: bool) -> anyhow::Result<()> {
         }
         overlay::Outcome::Failed(error) => anyhow::bail!(error),
     }
+}
+
+/// Tells where the overlay's picture was saved.
+fn saved(path: &std::path::Path) -> anyhow::Result<()> {
+    println!("{}", path.display());
+    block_on(notify::show("Screenshot saved", &save::pretty(path)))?;
+    Ok(())
 }
 
 /// The editor, for a picture the overlay hands over. The extension trusts only the overlay it

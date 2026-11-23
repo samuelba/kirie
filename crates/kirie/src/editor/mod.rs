@@ -160,6 +160,9 @@ pub enum Message {
     Paste,
     Save,
     SaveProject,
+    /// Asks where to save, and as what.
+    SaveAs,
+    SaveTo(PathBuf, crate::save::Format),
     Done(Result<String, String>),
     /// The image left the editor, saved or copied, as this document had it.
     Exported(String, Box<Document>),
@@ -530,6 +533,8 @@ impl Editor {
             | Message::Paste
             | Message::Save
             | Message::SaveProject
+            | Message::SaveAs
+            | Message::SaveTo(..)
             | Message::Unfocused
             | Message::Dropped(_) => return self.files(message),
             Message::Done(Ok(text)) if text.is_empty() => {}
@@ -741,6 +746,22 @@ impl Editor {
             }),
             Message::Save => self.export(Export::Save),
             Message::SaveProject => self.export(Export::Project),
+            Message::SaveAs if self.image.is_some() => {
+                let name = self.suggested_name();
+                Task::perform(
+                    async move {
+                        let folder = crate::save::screenshots_dir();
+                        let _ = std::fs::create_dir_all(&folder);
+                        crate::dialog::save_as(&name, &folder, &crate::save::Format::ALL).await
+                    },
+                    |picked| match picked {
+                        Ok(Some((path, format))) => Message::SaveTo(path, format),
+                        Ok(None) => Message::Done(Ok(String::new())),
+                        Err(error) => Message::Done(Err(error)),
+                    },
+                )
+            }
+            Message::SaveTo(path, format) => self.export(Export::To(path, format)),
             // Made anew before anything can be dragged from another window onto this one.
             Message::Unfocused => {
                 if let Some(device) = &self.device {
@@ -1044,6 +1065,20 @@ impl Editor {
         iced::widget::operation::focus(view::TEXT_INPUT)
     }
 
+    /// The name the save dialog suggests: the open file's, else one with the time.
+    fn suggested_name(&self) -> String {
+        let stem = self
+            .path
+            .as_deref()
+            .filter(|path| !crate::save::is_handoff(path))
+            .and_then(Path::file_stem)
+            .map_or_else(
+                || crate::save::stem(&jiff::Zoned::now()),
+                |stem| stem.to_string_lossy().into_owned(),
+            );
+        format!("{stem}.png")
+    }
+
     fn export(&mut self, export: Export) -> Task<Message> {
         self.keep_crop();
         self.commit_text();
@@ -1056,14 +1091,22 @@ impl Editor {
             Err(error) => Message::Done(Err(error)),
         };
         let saved = |path: std::path::PathBuf| format!("Saved {}", crate::save::pretty(&path));
-        if export == Export::Project {
-            let project = Project {
-                image: image.clone(),
-                document: self.document().clone(),
-            };
-            return Task::perform(crate::save::save_project(project), move |done| {
-                exported(done.map(saved))
-            });
+        let project = || Project {
+            image: image.clone(),
+            document: self.document().clone(),
+        };
+        match export {
+            Export::Project => {
+                return Task::perform(crate::save::save_project(project()), move |done| {
+                    exported(done.map(saved))
+                });
+            }
+            Export::To(path, format) => {
+                return Task::perform(crate::save::save_as(project(), path, format), move |done| {
+                    exported(done.map(saved))
+                });
+            }
+            Export::Copy | Export::Save => {}
         }
         let rendered = kirie_annotate::render::render(
             self.document(),
@@ -1081,7 +1124,7 @@ impl Editor {
             Export::Copy => Task::perform(crate::clipboard::copy(picture), move |copied| {
                 exported(copied.map(|()| "Copied to the clipboard".to_owned()))
             }),
-            Export::Save | Export::Project => {
+            Export::Save | Export::Project | Export::To(..) => {
                 Task::perform(crate::save::save(picture), move |done| {
                     exported(done.map(saved))
                 })
@@ -1228,11 +1271,13 @@ fn settled(message: &Message) -> bool {
     )
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Export {
     Copy,
     Save,
     Project,
+    /// To a file the user chose.
+    To(PathBuf, crate::save::Format),
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -1328,7 +1373,8 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("v") if command => Some(Message::Paste),
         keyboard::Key::Character("w") if command => Some(Message::Discard),
         keyboard::Key::Character("o") if command => Some(Message::Open),
-        keyboard::Key::Character("s") if command && modifiers.shift() => Some(Message::SaveProject),
+        keyboard::Key::Character("s") if command && modifiers.shift() => Some(Message::SaveAs),
+        keyboard::Key::Character("s") if command && modifiers.alt() => Some(Message::SaveProject),
         keyboard::Key::Character("s") if command => Some(Message::Save),
         keyboard::Key::Character("0") if command => Some(Message::ZoomFit),
         keyboard::Key::Character("1") if command => Some(Message::ZoomActual),

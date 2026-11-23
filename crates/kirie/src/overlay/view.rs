@@ -233,13 +233,23 @@ impl Overlay {
     /// Edit, save, copy and cancel; the action Enter takes is the primary button.
     fn actions(&self) -> Element<'_, Message> {
         let palette = self.palette;
-        let save = icon_button(
-            Icon::Save,
-            "Save to Pictures (Ctrl+S)",
-            palette,
-            false,
-            Some(Message::Finish(Action::Save)),
-        );
+        let save = row![
+            icon_button(
+                Icon::SaveAs,
+                "Save as… (Ctrl+Shift+S)",
+                palette,
+                false,
+                Some(Message::Finish(Action::SaveAs)),
+            ),
+            icon_button(
+                Icon::Save,
+                "Save to Pictures (Ctrl+S)",
+                palette,
+                false,
+                Some(Message::Finish(Action::Save)),
+            ),
+        ]
+        .spacing(space::XS);
         let edit = Message::Finish(Action::Edit);
         let copy = Message::Finish(Action::Copy);
         let actions = match self.primary {
@@ -248,7 +258,7 @@ impl Overlay {
                 icon_button(Icon::Copy, "Copy (Ctrl+C)", palette, false, Some(copy)),
                 primary_button(Icon::Edit, "Back to the editor", palette, edit),
             ],
-            Action::Copy | Action::Save => row![
+            Action::Copy | Action::Save | Action::SaveAs => row![
                 icon_button(
                     Icon::Edit,
                     "Open in the editor (Ctrl+E)",

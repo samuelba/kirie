@@ -62,6 +62,7 @@ Then mark it up with the toolbar under the selection.
 |---|---|
 | Enter or Ctrl+C | Copy the picture and close |
 | Ctrl+S | Save it to `~/Pictures/Screenshots` |
+| Ctrl+Shift+S | Save it where you choose, as PNG, JPEG, WebP or a `.kirie` project |
 | Ctrl+E | Open it in the editor, with its marks still editable |
 | Ctrl+A | Select every screen |
 | Arrow keys | Move the selection (with Shift: by 10) |
@@ -84,7 +85,8 @@ in the status bar (Ctrl+0 fits the image, Ctrl+1 shows it at actual size); pan w
 wheel or the middle button. Press C, or the crop button under the tools, to keep only part of the image: drag the
 frame and press Enter. **Frame** puts room around the picture, filled with a color or left
 transparent, with a soft shadow under the picture if you like, and can take in marks drawn
-beyond the picture's edges. **Save project** (Ctrl+Shift+S) keeps a `.kirie` file whose marks you can change later. The installer
+beyond the picture's edges. **Save project** (Ctrl+Alt+S) keeps a `.kirie` file in `~/Pictures/Screenshots` whose marks you
+can change later; **Save as** (Ctrl+Shift+S) asks where to save, as an image or a project. The installer
 registers the `.kirie` file type, so a double click opens a project in Kirie.
 
 Saved and copied images hold only the finished picture. Redact covers every pixel it touches

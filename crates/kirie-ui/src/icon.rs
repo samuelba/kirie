@@ -39,6 +39,7 @@ icons! {
     Redo => "redo-2",
     Copy => "copy",
     Save => "download",
+    SaveAs => "save",
     Edit => "square-pen",
     Close => "x",
     Done => "check",
