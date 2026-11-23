@@ -22,6 +22,8 @@ pub struct Settings {
     pub copy_on_save: bool,
     /// Kirie asks GitHub for the latest release when it starts and once a day.
     pub check_updates: bool,
+    /// The overlay shows a magnifier beside the pointer while a region is picked.
+    pub magnifier: bool,
 }
 
 impl Default for Settings {
@@ -31,6 +33,7 @@ impl Default for Settings {
             name: DEFAULT_NAME.to_owned(),
             copy_on_save: true,
             check_updates: true,
+            magnifier: true,
         }
     }
 }
@@ -149,6 +152,7 @@ mod tests {
         assert_eq!(settings.stem(&noon()), "Kirie_2026-11-22_12-00-05");
         assert!(Settings::default().copy_on_save);
         assert!(Settings::default().check_updates);
+        assert!(Settings::default().magnifier);
         assert!(Settings::default().folder().ends_with("Screenshots"));
         let elsewhere = Settings {
             folder: Some(PathBuf::from("/shots")),
@@ -164,6 +168,7 @@ mod tests {
             name: "x".to_owned(),
             copy_on_save: false,
             check_updates: false,
+            magnifier: false,
         };
         let text = ron::to_string(&settings).unwrap();
         assert_eq!(ron::from_str::<Settings>(&text).unwrap(), settings);

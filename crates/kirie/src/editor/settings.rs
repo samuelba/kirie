@@ -25,6 +25,7 @@ pub enum Event {
     ResetFolder,
     ToggleCopy,
     ToggleUpdates,
+    ToggleMagnifier,
 }
 
 /// The card while it is open.
@@ -83,6 +84,7 @@ impl Editor {
             Event::ResetFolder => form.kept.folder = None,
             Event::ToggleCopy => form.kept.copy_on_save = !form.kept.copy_on_save,
             Event::ToggleUpdates => form.kept.check_updates = !form.kept.check_updates,
+            Event::ToggleMagnifier => form.kept.magnifier = !form.kept.magnifier,
         }
         if form.kept == before {
             return Task::none();
@@ -115,22 +117,7 @@ impl Editor {
                 event(Event::ResetFolder),
             ));
         }
-        let name = text_input(settings::DEFAULT_NAME, &form.name)
-            .on_input(|name| Message::Settings(Event::Name(name)))
-            .size(14)
-            .padding([space::XS, space::S])
-            .style(move |_, _| text_input::Style {
-                background: Background::Color(palette.surface[1]),
-                border: Border {
-                    color: palette.border,
-                    width: 1.0,
-                    radius: radius::CONTROL.into(),
-                },
-                icon: palette.muted,
-                placeholder: palette.muted,
-                value: palette.text,
-                selection: palette.accent.scale_alpha(0.4),
-            });
+        let name = name_input(&form.name, palette);
         let example = match form.example() {
             Ok(example) => text(format!("For example {example}"))
                 .size(12)
@@ -159,6 +146,17 @@ impl Editor {
             ),
             event(Event::ToggleUpdates),
         );
+        let magnifier = toggle(
+            palette,
+            Icon::ZoomIn,
+            "Show the magnifier",
+            form.kept.magnifier,
+            (
+                "A magnifier follows the pointer while you pick a region; M turns it off",
+                "Press M while picking a region to show it",
+            ),
+            event(Event::ToggleMagnifier),
+        );
         let card = container(
             column![
                 text("Settings").size(20),
@@ -179,6 +177,7 @@ impl Editor {
                     .spacing(space::XS)
                     .into(),
                 ),
+                section(palette, "Picking a region", magnifier),
                 section(palette, "When saving", copy),
                 section(palette, "Updates", updates),
                 row![
@@ -218,6 +217,26 @@ fn toggle<'a>(
     .into()
 }
 
+fn name_input(name: &str, palette: Palette) -> Element<'_, Message> {
+    text_input(settings::DEFAULT_NAME, name)
+        .on_input(|name| Message::Settings(Event::Name(name)))
+        .size(14)
+        .padding([space::XS, space::S])
+        .style(move |_, _| text_input::Style {
+            background: Background::Color(palette.surface[1]),
+            border: Border {
+                color: palette.border,
+                width: 1.0,
+                radius: radius::CONTROL.into(),
+            },
+            icon: palette.muted,
+            placeholder: palette.muted,
+            value: palette.text,
+            selection: palette.accent.scale_alpha(0.4),
+        })
+        .into()
+}
+
 fn section<'a>(
     palette: Palette,
     title: &'static str,
@@ -250,6 +269,8 @@ mod tests {
         let _ = editor.update(Message::Settings(Event::ToggleUpdates));
         assert!(!editor.settings.as_ref().unwrap().kept.check_updates);
         assert!(!editor.updates.check(), "the editor stops looking at once");
+        let _ = editor.update(Message::Settings(Event::ToggleMagnifier));
+        assert!(!editor.settings.as_ref().unwrap().kept.magnifier);
         let picked = Event::Folder(Ok(Some("/shots".into())));
         let _ = editor.update(Message::Settings(picked));
         assert_eq!(
