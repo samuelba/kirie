@@ -398,7 +398,11 @@ impl Editor {
             ));
         }
         if !self.picked.is_empty() {
-            content = content.push(self.mark_actions());
+            content = content.push(rule::horizontal(1)).push(section(
+                palette,
+                "Selection",
+                self.mark_actions(),
+            ));
         }
         container(scrollable(
             container(content).padding(Padding::new(space::L)),
@@ -412,7 +416,8 @@ impl Editor {
     /// What the picked marks can do: come to the front, go to the back, go away.
     fn mark_actions(&self) -> Element<'_, Message> {
         let palette = self.palette;
-        let several = self.picked.len() > 1;
+        let count = self.picked.len();
+        let several = count > 1;
         let action = |icon, tip, message| icon_button(icon, tip, palette, false, Some(message));
         row![
             action(
@@ -434,8 +439,16 @@ impl Editor {
                 },
                 Message::Delete,
             ),
+            text(if several {
+                format!("{count} marks picked")
+            } else {
+                "1 mark picked".to_owned()
+            })
+            .size(12)
+            .color(palette.muted),
         ]
         .spacing(space::XS)
+        .align_y(Alignment::Center)
         .into()
     }
 
