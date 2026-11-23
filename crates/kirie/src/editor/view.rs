@@ -14,6 +14,7 @@ use super::canvas::{Backdrop, Board};
 use super::viewport::Zoom;
 use super::{Editor, Message};
 use crate::controls;
+use crate::marks::Restack;
 use crate::paint::Part;
 use crate::picker::{self, Picker};
 
@@ -375,17 +376,7 @@ impl Editor {
             ));
         }
         if !self.picked.is_empty() {
-            content = content.push(icon_button(
-                Icon::Delete,
-                if self.picked.len() > 1 {
-                    "Delete marks (Del)"
-                } else {
-                    "Delete mark (Del)"
-                },
-                palette,
-                false,
-                Some(Message::Delete),
-            ));
+            content = content.push(self.mark_actions());
         }
         container(scrollable(
             container(content).padding(Padding::new(space::L)),
@@ -393,6 +384,36 @@ impl Editor {
         .width(INSPECTOR)
         .height(Length::Fill)
         .style(panel(palette))
+        .into()
+    }
+
+    /// What the picked marks can do: come to the front, go to the back, go away.
+    fn mark_actions(&self) -> Element<'_, Message> {
+        let palette = self.palette;
+        let several = self.picked.len() > 1;
+        let action = |icon, tip, message| icon_button(icon, tip, palette, false, Some(message));
+        row![
+            action(
+                Icon::BringToFront,
+                "Bring to front (Ctrl+Shift+]; one step: Ctrl+])",
+                Message::Restack(Restack::Front),
+            ),
+            action(
+                Icon::SendToBack,
+                "Send to back (Ctrl+Shift+[; one step: Ctrl+[)",
+                Message::Restack(Restack::Back),
+            ),
+            action(
+                Icon::Delete,
+                if several {
+                    "Delete marks (Del)"
+                } else {
+                    "Delete mark (Del)"
+                },
+                Message::Delete,
+            ),
+        ]
+        .spacing(space::XS)
         .into()
     }
 

@@ -68,6 +68,15 @@ pub enum Op {
     Raise {
         ids: Vec<ShapeId>,
     },
+    /// Sends marks to the bottom, keeping their order among themselves.
+    Lower {
+        ids: Vec<ShapeId>,
+    },
+    /// Moves each mark one place up, or down, past the next mark that is not moved too.
+    Shift {
+        ids: Vec<ShapeId>,
+        up: bool,
+    },
     Clear,
     /// Several edits as one step, applied in order.
     Batch(Vec<Op>),
@@ -342,15 +351,7 @@ impl Document {
                 ..shape.clone()
             }),
             Op::Remove { ids } => next.shapes.retain(|shape| !ids.contains(&shape.id)),
-            Op::Raise { ids } => {
-                let (raised, kept): (Vec<_>, Vec<_>) = next
-                    .shapes
-                    .into_iter()
-                    .partition(|shape| ids.contains(&shape.id));
-                let mut raised = raised;
-                raised.sort_by_key(|shape| ids.iter().position(|id| *id == shape.id));
-                next.shapes = kept.into_iter().chain(raised).collect();
-            }
+            Op::Raise { .. } | Op::Lower { .. } | Op::Shift { .. } => next.restack(op),
             Op::Clear => next.shapes.clear(),
             Op::Batch(ops) => {
                 for op in ops {
@@ -401,6 +402,45 @@ impl Document {
             }
         }
         next
+    }
+
+    /// Moves marks up or down among the others, for [`Op::Raise`], [`Op::Lower`] and
+    /// [`Op::Shift`].
+    fn restack(&mut self, op: Op) {
+        match op {
+            Op::Raise { ids } => {
+                let (raised, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.shapes)
+                    .into_iter()
+                    .partition(|shape| ids.contains(&shape.id));
+                let mut raised = raised;
+                raised.sort_by_key(|shape| ids.iter().position(|id| *id == shape.id));
+                self.shapes = kept.into_iter().chain(raised).collect();
+            }
+            Op::Lower { ids } => {
+                let (lowered, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.shapes)
+                    .into_iter()
+                    .partition(|shape| ids.contains(&shape.id));
+                self.shapes = lowered.into_iter().chain(kept).collect();
+            }
+            Op::Shift { ids, up } => {
+                let moved = |shape: &Arc<Shape>| ids.contains(&shape.id);
+                let count = self.shapes.len();
+                if up {
+                    for at in (0..count.saturating_sub(1)).rev() {
+                        if moved(&self.shapes[at]) && !moved(&self.shapes[at + 1]) {
+                            self.shapes.swap(at, at + 1);
+                        }
+                    }
+                } else {
+                    for at in 1..count {
+                        if moved(&self.shapes[at]) && !moved(&self.shapes[at - 1]) {
+                            self.shapes.swap(at, at - 1);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     fn map(&mut self, ids: &[ShapeId], change: impl Fn(&Shape) -> Shape) {
@@ -654,6 +694,29 @@ mod tests {
             doc.within(Rect::new(0.0, 5.0, 60.0, 20.0)).is_empty(),
             "lines cut in half"
         );
+    }
+
+    #[test]
+    fn lowering_and_shifting_restack_marks() {
+        let doc = Document::new(10, 10, 1.0)
+            .apply(line(1.0))
+            .apply(line(2.0))
+            .apply(line(3.0))
+            .apply(line(4.0));
+        let order = |doc: &Document| doc.shapes().map(|shape| shape.id.0).collect::<Vec<_>>();
+        let lowered = doc.apply(Op::Lower {
+            ids: vec![ShapeId(4), ShapeId(2)],
+        });
+        assert_eq!(order(&lowered), [2, 4, 1, 3]);
+        let up = |ids: Vec<u64>, up| Op::Shift {
+            ids: ids.into_iter().map(ShapeId).collect(),
+            up,
+        };
+        assert_eq!(order(&doc.apply(up(vec![1, 2], true))), [3, 1, 2, 4]);
+        assert_eq!(order(&doc.apply(up(vec![4], true))), [1, 2, 3, 4]);
+        assert_eq!(order(&doc.apply(up(vec![3, 4], false))), [1, 3, 4, 2]);
+        assert_eq!(order(&doc.apply(up(vec![1], false))), [1, 2, 3, 4]);
+        assert_eq!(order(&doc.apply(up(vec![1, 3], true))), [2, 1, 4, 3]);
     }
 
     #[test]

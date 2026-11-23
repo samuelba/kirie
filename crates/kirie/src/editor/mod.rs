@@ -162,6 +162,8 @@ pub enum Message {
     Cut,
     /// Copies the picked marks a step aside.
     Duplicate,
+    /// Moves the picked marks up or down among the others.
+    Restack(crate::marks::Restack),
     /// What was on the clipboard when Ctrl+V was pressed.
     Pasted(Result<Pasted, String>),
     Escape,
@@ -552,6 +554,7 @@ impl Editor {
             | Message::CopyKey
             | Message::Cut
             | Message::Duplicate
+            | Message::Restack(_)
             | Message::Pasted(_) => return self.edit_marks(message),
             Message::Escape if self.closing == Closing::Asking => self.closing = Closing::No,
             Message::Escape | Message::About(false) if self.about => self.about = false,
@@ -627,6 +630,11 @@ impl Editor {
                 if let Some((op, ids)) = crate::marks::duplicate(self.document(), &self.picked) {
                     self.history.apply(op);
                     self.picked = ids;
+                }
+            }
+            Message::Restack(to) => {
+                if let Some(op) = crate::marks::restack(self.document(), &self.picked, to) {
+                    self.history.apply(op);
                 }
             }
             Message::Pasted(Ok(Pasted::Marks(_))) if self.image.is_none() => {
@@ -1613,6 +1621,12 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         return None;
     }
     let command = modifiers.command();
+    if command
+        && let keyboard::Key::Character(written) = key.as_ref()
+        && let Some(to) = crate::marks::restack_key(written, modifiers.shift())
+    {
+        return Some(Message::Restack(to));
+    }
     match key.as_ref() {
         keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
         keyboard::Key::Named(Named::Delete | Named::Backspace) => Some(Message::Delete),

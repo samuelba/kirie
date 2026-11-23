@@ -65,6 +65,8 @@ icons! {
     Expand => "expand",
     Pin => "pin",
     Pipette => "pipette",
+    BringToFront => "bring-to-front",
+    SendToBack => "send-to-back",
 }
 
 impl Icon {

@@ -86,6 +86,8 @@ pub enum Message {
     Delete,
     /// Copies the picked marks a step aside.
     Duplicate,
+    /// Moves the picked marks up or down among the others.
+    Restack(crate::marks::Restack),
     Escape,
     Finish(Action),
     /// Enter: the action the overlay was opened for.
@@ -505,7 +507,7 @@ impl Overlay {
                 self.travel(false);
                 Task::none()
             }
-            Message::Delete | Message::Duplicate => {
+            Message::Delete | Message::Duplicate | Message::Restack(_) => {
                 self.edit_marks(&message);
                 Task::none()
             }
@@ -540,7 +542,7 @@ impl Overlay {
         }
     }
 
-    /// Deleting and duplicating the picked marks.
+    /// Deleting, duplicating and restacking the picked marks.
     fn edit_marks(&mut self, message: &Message) {
         match message {
             Message::Delete if !self.picked.is_empty() => {
@@ -551,6 +553,11 @@ impl Overlay {
                 if let Some((op, ids)) = crate::marks::duplicate(self.document(), &self.picked) {
                     self.history.apply(op);
                     self.picked = ids;
+                }
+            }
+            Message::Restack(to) => {
+                if let Some(op) = crate::marks::restack(self.document(), &self.picked, *to) {
+                    self.history.apply(op);
                 }
             }
             _ => {}
@@ -1197,6 +1204,12 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
     }
     let step = if modifiers.shift() { 10.0 } else { 1.0 };
     let command = modifiers.command();
+    if command
+        && let keyboard::Key::Character(written) = key.as_ref()
+        && let Some(to) = crate::marks::restack_key(written, modifiers.shift())
+    {
+        return Some(Message::Restack(to));
+    }
     match key.as_ref() {
         keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
         keyboard::Key::Named(Named::Enter) => Some(Message::Accept),

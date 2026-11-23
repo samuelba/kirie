@@ -76,7 +76,8 @@ Hold **Shift** while drawing to snap lines to 45° and boxes to squares.
 
 With the select tool, drag a box around marks to pick them all, or Shift+click a mark to add it
 or take it out. Picked marks move, change color and delete together; in the editor, Ctrl+A picks
-every mark. Ctrl+D duplicates the picked marks. In the editor, Ctrl+C and Ctrl+X copy or cut
+every mark. Ctrl+D duplicates the picked marks. Ctrl+Shift+] brings them to the front and Ctrl+Shift+[
+sends them to the back (Ctrl+] and Ctrl+[ move them one place); the editor has buttons for both. In the editor, Ctrl+C and Ctrl+X copy or cut
 them (with nothing picked, Ctrl+C copies the picture), and Ctrl+V pastes them back where they
 were, or onto another image. With an image open, Ctrl+V puts a copied picture on top of it as
 a mark of its own, to move and resize: its corners keep its proportions, unless you hold Shift.

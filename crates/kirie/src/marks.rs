@@ -114,6 +114,47 @@ pub fn all(document: &Document, picked: &[ShapeId], is: impl Fn(&Kind) -> bool) 
     shapes.peek().is_some() && shapes.all(|shape| is(&shape.kind))
 }
 
+/// Where the picked marks go among the others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Restack {
+    Front,
+    Back,
+    /// One place up.
+    Forward,
+    /// One place down.
+    Backward,
+}
+
+/// The edit that moves the picked marks `to` their new place among the others, keeping their
+/// order among themselves.
+pub fn restack(document: &Document, picked: &[ShapeId], to: Restack) -> Option<Op> {
+    let ids: Vec<ShapeId> = document
+        .shapes()
+        .map(|shape| shape.id)
+        .filter(|id| picked.contains(id))
+        .collect();
+    if ids.is_empty() {
+        return None;
+    }
+    Some(match to {
+        Restack::Front => Op::Raise { ids },
+        Restack::Back => Op::Lower { ids },
+        Restack::Forward => Op::Shift { ids, up: true },
+        Restack::Backward => Op::Shift { ids, up: false },
+    })
+}
+
+/// The restacking `key` with Ctrl asks for: ] and [ one place, and with Shift all the way.
+pub fn restack_key(key: &str, shift: bool) -> Option<Restack> {
+    match (key, shift) {
+        ("]" | "}", true) => Some(Restack::Front),
+        ("[" | "{", true) => Some(Restack::Back),
+        ("]", false) => Some(Restack::Forward),
+        ("[", false) => Some(Restack::Backward),
+        _ => None,
+    }
+}
+
 /// Forgets picked marks that are gone, after an undo or a redo.
 pub fn prune(document: &Document, picked: &mut Vec<ShapeId>) {
     picked.retain(|id| document.shape(*id).is_some());
@@ -423,6 +464,33 @@ mod tests {
         assert_eq!(doubled.shapes().len(), 5);
         let copy = doubled.shape(ShapeId(4)).unwrap().kind.bounds();
         assert_eq!(copy.origin(), Point::new(10.0 + STEP, 10.0 + STEP));
+    }
+
+    #[test]
+    fn restacking_keeps_the_picked_marks_in_their_order() {
+        let document = boxes();
+        let order = |op| {
+            document
+                .apply(op)
+                .shapes()
+                .map(|shape| shape.id.0)
+                .collect::<Vec<_>>()
+        };
+        let picked = [ShapeId(3), ShapeId(1)];
+        assert_eq!(
+            order(restack(&document, &picked, Restack::Front).unwrap()),
+            [2, 1, 3]
+        );
+        assert_eq!(
+            order(restack(&document, &picked, Restack::Back).unwrap()),
+            [1, 3, 2]
+        );
+        let forward = restack(&document, &[ShapeId(1)], Restack::Forward).unwrap();
+        assert_eq!(order(forward), [2, 1, 3]);
+        assert!(restack(&document, &[], Restack::Front).is_none());
+        assert_eq!(restack_key("}", true), Some(Restack::Front));
+        assert_eq!(restack_key("[", false), Some(Restack::Backward));
+        assert_eq!(restack_key("a", false), None);
     }
 
     #[test]
