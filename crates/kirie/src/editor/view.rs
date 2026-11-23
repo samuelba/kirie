@@ -1,11 +1,11 @@
 //! The editor window: a header bar, the tool rail, the canvas and the inspector.
 
-use iced::widget::{Space, column, container, row, rule, scrollable, stack, svg, text};
+use iced::widget::{Space, button, column, container, row, rule, scrollable, stack, svg, text};
 use iced::{Alignment, Background, Border, Element, Length, Padding};
 use kirie_annotate::{StyleId, Tool};
 use kirie_ui::icon::Icon;
 use kirie_ui::widget::{
-    divider, floating, icon_button, primary_button, secondary_button, small_icon_button,
+    divider, floating, hint, icon_button, primary_button, secondary_button, small_icon_button,
     small_pick_list,
 };
 use kirie_ui::{Palette, Scheme, space};
@@ -17,7 +17,7 @@ use crate::controls;
 use crate::picker::{self, Picker};
 
 pub const TEXT_INPUT: &str = "kirie-editor-text";
-const APP_ICON: &[u8] =
+pub const APP_ICON: &[u8] =
     include_bytes!("../../../../packaging/icons/hicolor/scalable/apps/dev.samuelba.Kirie.svg");
 const INSPECTOR: f32 = 248.0;
 
@@ -37,7 +37,7 @@ impl Editor {
             text_color: Some(palette.text),
             ..container::Style::default()
         });
-        match self.closing_dialog() {
+        match self.closing_dialog().or_else(|| self.about_dialog()) {
             Some(dialog) => stack![window, dialog].into(),
             None => window.into(),
         }
@@ -46,12 +46,7 @@ impl Editor {
     fn header(&self) -> Element<'_, Message> {
         let palette = self.palette;
         let has_image = self.image.is_some();
-        let brand = row![
-            svg(svg::Handle::from_memory(APP_ICON)).width(26).height(26),
-            text("Kirie").size(16),
-        ]
-        .spacing(space::S)
-        .align_y(Alignment::Center);
+        let brand = self.brand();
         let history = row![
             icon_button(
                 Icon::Undo,
@@ -138,6 +133,35 @@ impl Editor {
         .padding([space::S, space::L])
         .style(panel(palette))
         .into()
+    }
+
+    /// Kirie's icon and name, which open the about card.
+    fn brand(&self) -> Element<'_, Message> {
+        let palette = self.palette;
+        let brand = button(
+            row![
+                svg(svg::Handle::from_memory(APP_ICON)).width(26).height(26),
+                text("Kirie").size(16),
+            ]
+            .spacing(space::S)
+            .align_y(Alignment::Center),
+        )
+        .padding([space::XS, space::S])
+        .on_press(Message::About(true))
+        .style(move |_, status| button::Style {
+            background: match status {
+                button::Status::Hovered => Some(Background::Color(palette.surface[1])),
+                button::Status::Pressed => Some(Background::Color(palette.surface[2])),
+                _ => None,
+            },
+            text_color: palette.text,
+            border: Border {
+                radius: kirie_ui::radius::CONTROL.into(),
+                ..Border::default()
+            },
+            ..button::Style::default()
+        });
+        hint(brand.into(), "About Kirie", palette)
     }
 
     fn rail(&self) -> Element<'_, Message> {

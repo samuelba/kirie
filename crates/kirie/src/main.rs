@@ -8,6 +8,7 @@ mod drops;
 mod editor;
 mod extension;
 mod ipc;
+mod launch;
 mod notify;
 mod overlay;
 mod paint;

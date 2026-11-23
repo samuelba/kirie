@@ -383,7 +383,8 @@ pub fn divider<'a, Message: 'a>(palette: Palette) -> Element<'a, Message> {
         .into()
 }
 
-fn hint<'a, Message: 'a>(
+/// Shows `label` above `content` while the pointer rests on it.
+pub fn hint<'a, Message: 'a>(
     content: Element<'a, Message>,
     label: &'a str,
     palette: Palette,

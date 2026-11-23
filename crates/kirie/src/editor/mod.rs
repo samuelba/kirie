@@ -1,5 +1,6 @@
 //! App mode: a window to mark up any image or screenshot, keep it editable, and export it.
 
+mod about;
 mod canvas;
 mod closing;
 mod demo;
@@ -162,6 +163,9 @@ pub enum Message {
     Close(Answer),
     /// Puts the image away, asking first about unsaved changes.
     Discard,
+    /// Opens or closes the about card.
+    About(bool),
+    OpenLink(&'static str),
     Opened(Result<Loaded, String>),
     Dropped(crate::drops::Dropped),
     ToastExpired(u64),
@@ -219,6 +223,8 @@ pub struct Editor {
     /// The document as last opened, saved or copied, to tell unsaved changes.
     kept: Document,
     closing: Closing,
+    /// The about card is open.
+    about: bool,
     /// What to do once the question about unsaved changes is answered.
     then: Then,
     viewport: Viewport,
@@ -272,6 +278,7 @@ impl Editor {
             history: History::new(blank.clone()),
             kept: blank,
             closing: Closing::No,
+            about: false,
             then: Then::Exit,
             viewport: Viewport::fitted(),
             cropping: None,
@@ -496,6 +503,9 @@ impl Editor {
                 }
             }
             Message::Escape if self.closing == Closing::Asking => self.closing = Closing::No,
+            Message::Escape | Message::About(false) if self.about => self.about = false,
+            Message::About(open) => self.about = open,
+            Message::OpenLink(link) => crate::launch::open(link),
             Message::Escape | Message::CropCancel if self.cropping.is_some() => {
                 self.cropping = None;
                 self.viewport = Viewport::fitted();
@@ -1043,7 +1053,10 @@ impl Editor {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let quiet = self.typing.is_some() || self.picker.is_some() || self.closing != Closing::No;
+        let quiet = self.typing.is_some()
+            || self.picker.is_some()
+            || self.closing != Closing::No
+            || self.about;
         let keys = if quiet {
             event::listen_with(typing_key)
         } else if self.cropping.is_some() {
