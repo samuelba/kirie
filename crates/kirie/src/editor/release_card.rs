@@ -43,7 +43,7 @@ pub struct Updates {
 impl Updates {
     pub fn new() -> Self {
         Self {
-            check: crate::settings::Settings::load().check_updates,
+            check: crate::storage::settings::Settings::load().check_updates,
             last_check: None,
             release: None,
             card: Card::Hidden,
@@ -114,7 +114,7 @@ impl Editor {
             }
             Event::OpenRelease => {
                 if let Some(release) = &self.updates.release {
-                    crate::launch::open(&release.url);
+                    crate::desktop::launch::open(&release.url);
                 }
             }
             Event::Skip => {
@@ -196,7 +196,7 @@ impl Editor {
             return Task::none();
         };
         if !matches!(self.updates.install, InstallKind::Script { .. }) {
-            crate::launch::open(&release.url);
+            crate::desktop::launch::open(&release.url);
             return Task::none();
         }
         if matches!(self.updates.card, Card::Updating | Card::Installed(_)) {

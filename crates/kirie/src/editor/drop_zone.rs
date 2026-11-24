@@ -95,7 +95,7 @@ impl canvas::Program<Message> for Zone {
 mod tests {
     use super::super::Editor;
     use super::Message;
-    use crate::drops::Dropped;
+    use crate::desktop::drops::Dropped;
 
     #[test]
     fn the_hint_shows_while_something_is_dragged_over() {

@@ -43,7 +43,7 @@ impl Settings {
     /// back to the usual one.
     pub fn load() -> Self {
         let loaded: Self = config_path()
-            .and_then(|path| crate::store::read(&path))
+            .and_then(|path| crate::storage::store::read(&path))
             .unwrap_or_default();
         if name(&loaded.name, &jiff::Zoned::now()).is_ok() {
             loaded
@@ -58,7 +58,7 @@ impl Settings {
     /// Keeps the settings; tests keep nothing.
     pub fn save(&self) -> Result<(), String> {
         match config_path() {
-            Some(path) => crate::store::save(&path, self),
+            Some(path) => crate::storage::store::save(&path, self),
             None if cfg!(test) => Ok(()),
             None => Err("cannot find the config folder".to_owned()),
         }
@@ -66,7 +66,9 @@ impl Settings {
 
     /// The folder screenshots are saved to.
     pub fn folder(&self) -> PathBuf {
-        self.folder.clone().unwrap_or_else(crate::save::default_dir)
+        self.folder
+            .clone()
+            .unwrap_or_else(crate::storage::save::default_dir)
     }
 
     /// The name of a screenshot taken `now`, without extension.
@@ -107,7 +109,7 @@ pub fn name(pattern: &str, now: &jiff::Zoned) -> Result<String, String> {
 
 /// `folder` as it is shown: with the home folder as `~`.
 pub fn shown(folder: &Path) -> String {
-    crate::save::pretty(folder)
+    crate::storage::save::pretty(folder)
 }
 
 #[cfg(test)]

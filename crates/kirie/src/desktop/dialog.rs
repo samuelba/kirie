@@ -7,7 +7,7 @@ use kirie_capture::CaptureError;
 use kirie_capture::portal;
 use zbus::Variant;
 
-use crate::save::Format;
+use crate::storage::save::Format;
 
 /// Asks for an image or a `.kirie` project; `None` when the dialog was canceled.
 pub async fn open_image() -> Result<Option<PathBuf>, String> {

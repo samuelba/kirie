@@ -104,10 +104,10 @@ pub fn capture(area: Area, target: &Target, cursor: bool) -> anyhow::Result<()> 
     match target {
         Target::Editor => {
             let unit = f64::from(width) / f64::from(part.width.max(1));
-            let document = crate::drawing::Drawing::load()
+            let document = crate::annotate::drawing::Drawing::load()
                 .styled(kirie_annotate::Document::new(width, height, unit));
             let project = kirie_annotate::project::Project { image, document };
-            let path = crate::save::save_handoff(&project).map_err(anyhow::Error::msg)?;
+            let path = crate::storage::save::save_handoff(&project).map_err(anyhow::Error::msg)?;
             crate::open_handoff(&path)?;
         }
         Target::File(path) => {
@@ -120,14 +120,14 @@ pub fn capture(area: Area, target: &Target, cursor: bool) -> anyhow::Result<()> 
             );
         }
         Target::Stdout => {
-            let png = crate::clipboard::encode_png(&image).map_err(anyhow::Error::msg)?;
+            let png = crate::desktop::clipboard::encode_png(&image).map_err(anyhow::Error::msg)?;
             let mut out = std::io::stdout().lock();
             out.write_all(&png)
                 .and_then(|()| out.flush())
                 .context("cannot write to stdout")?;
         }
         Target::Clipboard => {
-            crate::block_on(crate::clipboard::copy(image))?.map_err(anyhow::Error::msg)?;
+            crate::block_on(crate::desktop::clipboard::copy(image))?.map_err(anyhow::Error::msg)?;
             eprintln!("Copied {width}×{height} to the clipboard");
         }
     }

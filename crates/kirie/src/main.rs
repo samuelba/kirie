@@ -1,32 +1,11 @@
-mod activation;
-mod appearance;
-mod clipboard;
-mod controls;
-mod cursor;
-mod dialog;
-mod drawing;
-mod drops;
+mod annotate;
+mod canvas;
+mod desktop;
 mod editor;
-mod emoji_picker;
-mod extension;
-mod ipc;
-mod launch;
-mod loupe;
-mod notify;
 mod overlay;
-mod paint;
-mod picker;
-mod region;
 mod release;
-mod save;
 mod script;
-mod selection;
-mod settings;
-mod shortcuts;
-mod store;
-mod swatches;
-mod tray;
-mod typing;
+mod storage;
 mod update;
 
 use std::path::PathBuf;
@@ -34,6 +13,9 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use kirie_capture::Cursor;
+
+use desktop::{activation, clipboard, dialog, extension, ipc, launch, notify, shortcuts, tray};
+use storage::save;
 
 pub const APP_ID: &str = "dev.samuelba.Kirie";
 /// The longest wait before a screenshot, in seconds.

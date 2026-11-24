@@ -103,7 +103,7 @@ async fn serve() -> anyhow::Result<()> {
                 }
             }
             _ = looks.tick() => {
-                if !restart_failed && let Some(binary) = crate::launch::replaced_binary() {
+                if !restart_failed && let Some(binary) = crate::desktop::launch::replaced_binary() {
                     restart_failed = !restart(&connection, binary).await;
                 }
                 let now = SystemTime::now();
@@ -149,7 +149,7 @@ async fn obey(command: Command, token: &Token) {
 /// Runs Kirie with `args` in the background, with the activation `token` that lets its window
 /// come to the front.
 fn start(args: &[&str], token: Option<String>) {
-    let exe = match crate::launch::exe() {
+    let exe = match crate::desktop::launch::exe() {
         Ok(exe) => exe,
         Err(error) => {
             tracing::warn!(%error, "cannot find Kirie to start it");
@@ -161,17 +161,17 @@ fn start(args: &[&str], token: Option<String>) {
     command
         .args(args)
         .env_remove(kirie_capture::shell::LAUNCHED_ENV)
-        .env_remove(crate::activation::ENV);
+        .env_remove(crate::desktop::activation::ENV);
     if let Some(token) = token {
-        command.env(crate::activation::ENV, token);
+        command.env(crate::desktop::activation::ENV, token);
     }
-    crate::launch::spawn(command);
+    crate::desktop::launch::spawn(command);
 }
 
 /// Looks for a newer release in the background, when the user lets Kirie, and sends what it
 /// found; a failed look sends nothing, so the menu stays as it is.
 fn look_for_release(found: UnboundedSender<Option<Version>>) {
-    if !crate::settings::Settings::load().check_updates {
+    if !crate::storage::settings::Settings::load().check_updates {
         return;
     }
     tokio::spawn(async move {

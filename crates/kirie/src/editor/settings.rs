@@ -10,7 +10,7 @@ use kirie_ui::widget::{floating, icon_button, primary_button, secondary_button};
 use kirie_ui::{Palette, radius, space};
 
 use super::{Editor, Message};
-use crate::settings::{self, Settings};
+use crate::storage::settings::{self, Settings};
 
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -75,7 +75,7 @@ impl Editor {
             Event::ChooseFolder => {
                 let folder = form.kept.folder();
                 return Task::perform(
-                    async move { crate::dialog::choose_folder(&folder).await },
+                    async move { crate::desktop::dialog::choose_folder(&folder).await },
                     |picked| Message::Settings(Event::Folder(picked)),
                 );
             }

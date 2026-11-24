@@ -9,9 +9,9 @@ use kirie_ui::space;
 use kirie_ui::widget::{divider, floating, icon_button, primary_button, secondary_button};
 
 use super::{Action, Message, Overlay, canvas};
-use crate::controls;
-use crate::paint::Part;
-use crate::picker::{self, Picker};
+use crate::annotate::controls;
+use crate::annotate::paint::Part;
+use crate::annotate::picker::{self, Picker};
 
 pub const TEXT_INPUT: &str = "kirie-text";
 /// Room the toolbar takes; used to keep it on screen.
@@ -63,7 +63,7 @@ impl Overlay {
             if screen.area.contains(desktop) {
                 let at = Point::new(desktop.x - screen.area.x, desktop.y - screen.area.y);
                 layers = layers.push(
-                    pin(crate::typing::text_box(
+                    pin(crate::annotate::typing::text_box(
                         typing,
                         TEXT_INPUT,
                         &self.emojis,
@@ -169,7 +169,7 @@ impl Overlay {
         } else {
             0.0
         } + if self.stickering() {
-            crate::emoji_picker::HEIGHT + space::XS
+            crate::annotate::emoji_picker::HEIGHT + space::XS
         } else {
             0.0
         };

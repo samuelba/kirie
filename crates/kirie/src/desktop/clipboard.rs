@@ -26,7 +26,7 @@ pub async fn copy(image: RgbaImage) -> Result<(), String> {
 /// GNOME keeps a PNG the window offers after the window closes.
 pub async fn copy_from(
     image: RgbaImage,
-    device: Option<crate::drops::Device>,
+    device: Option<crate::desktop::drops::Device>,
 ) -> Result<(), String> {
     let png = tokio::task::spawn_blocking(move || encode_png(&image))
         .await
@@ -44,7 +44,7 @@ pub async fn copy_from(
 pub async fn offer_from(
     bytes: Vec<u8>,
     kind: &'static str,
-    device: Option<crate::drops::Device>,
+    device: Option<crate::desktop::drops::Device>,
 ) -> Result<(), String> {
     let Some(device) = device else {
         return offer(bytes, kind).await;
@@ -63,7 +63,7 @@ pub async fn offer_from(
 /// [`KINDS`].
 pub async fn offer(bytes: Vec<u8>, kind: &'static str) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        let exe = crate::launch::exe().map_err(|error| error.to_string())?;
+        let exe = crate::desktop::launch::exe().map_err(|error| error.to_string())?;
         let mut child = Command::new(exe)
             .args([SERVE, "--kind", kind])
             .stdin(Stdio::piped())

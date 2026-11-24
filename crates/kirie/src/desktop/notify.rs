@@ -82,7 +82,7 @@ pub async fn show(summary: &str, body: &str) {
 /// Failures are logged, never shown.
 pub async fn saved(path: &Path, copied: bool) {
     let summary = summary(copied);
-    let body = crate::save::pretty(path);
+    let body = crate::storage::save::pretty(path);
     let shown = async {
         let connection = zbus::Connection::session().await?;
         let proxy = NotificationsProxy::new(&connection).await?;
@@ -124,8 +124,8 @@ pub async fn saved(path: &Path, copied: bool) {
         Ok::<_, zbus::Error>(tokio::time::timeout(WAIT, answer).await.ok().flatten())
     };
     match shown.await {
-        Ok(Some(action)) if action == SHOW => crate::launch::show_in_files(path).await,
-        Ok(Some(action)) if action == OPEN || action == DEFAULT => crate::launch::open(path),
+        Ok(Some(action)) if action == SHOW => super::launch::show_in_files(path).await,
+        Ok(Some(action)) if action == OPEN || action == DEFAULT => super::launch::open(path),
         Ok(_) => {}
         Err(error) => tracing::debug!(%error, "cannot show a notification"),
     }

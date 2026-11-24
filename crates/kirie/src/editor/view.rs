@@ -13,9 +13,9 @@ use kirie_ui::{Palette, Scheme, space};
 use super::canvas::{Backdrop, Board};
 use super::viewport::Zoom;
 use super::{Editor, Message};
-use crate::controls;
-use crate::paint::Part;
-use crate::picker::{self, Picker};
+use crate::annotate::controls;
+use crate::annotate::paint::Part;
+use crate::annotate::picker::{self, Picker};
 use kirie_annotate::marks::Restack;
 
 pub const TEXT_INPUT: &str = "kirie-editor-text";
@@ -254,7 +254,7 @@ impl Editor {
             floating_bits = floating_bits.push(
                 container(
                     row![
-                        crate::typing::text_box(
+                        crate::annotate::typing::text_box(
                             typing,
                             TEXT_INPUT,
                             &self.emojis,

@@ -50,7 +50,7 @@ struct Latest {
 /// Whether the user wants to hear about `version`: Kirie may look for releases and this one
 /// was not skipped.
 pub fn wanted(version: &Version) -> bool {
-    crate::settings::Settings::load().check_updates && !is_skipped(version)
+    crate::storage::settings::Settings::load().check_updates && !is_skipped(version)
 }
 
 /// Asks GitHub for the latest release; `None` when the running build is up to date.
@@ -129,7 +129,7 @@ fn newer_than(current: &str, latest: Latest) -> Result<Option<Release>, String> 
 
 /// Whether the user chose to skip exactly this version.
 pub fn is_skipped(version: &Version) -> bool {
-    crate::store::state_path(SKIPPED_FILE).is_some_and(|path| skipped_at(&path, version))
+    crate::storage::store::state_path(SKIPPED_FILE).is_some_and(|path| skipped_at(&path, version))
 }
 
 fn skipped_at(path: &Path, version: &Version) -> bool {
@@ -138,13 +138,13 @@ fn skipped_at(path: &Path, version: &Version) -> bool {
 
 /// Remembers that the user does not want to hear about `version` again.
 pub fn skip(version: &Version) {
-    if let Some(path) = crate::store::state_path(SKIPPED_FILE) {
+    if let Some(path) = crate::storage::store::state_path(SKIPPED_FILE) {
         skip_at(&path, version);
     }
 }
 
 fn skip_at(path: &Path, version: &Version) {
-    if let Err(error) = crate::store::write(path, &version.to_string()) {
+    if let Err(error) = crate::storage::store::write(path, &version.to_string()) {
         tracing::warn!(path = %path.display(), %error, "cannot remember the skipped release");
     }
 }
@@ -171,7 +171,7 @@ pub fn install_kind() -> InstallKind {
     let marker = std::fs::read_to_string(dirs.data_dir().join(MARKER)).ok();
     kind_of(
         marker.as_deref(),
-        crate::launch::exe().ok().as_deref(),
+        crate::desktop::launch::exe().ok().as_deref(),
         &script_binary(bin_dir),
     )
 }

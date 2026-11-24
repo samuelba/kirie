@@ -2,6 +2,7 @@
 //! region, marks it up, and copies or saves it.
 
 mod canvas;
+pub mod region;
 mod view;
 
 use std::cell::RefCell;
@@ -21,12 +22,12 @@ use kirie_annotate::{
 use kirie_capture::{Frame, geometry};
 use kirie_ui::Palette;
 
-use crate::drawing::Drawing;
-use crate::emoji_picker::EmojiPicker;
-use crate::picker::{self, Picker, Target};
-use crate::selection::{self, Release, Selection};
-use crate::swatches::Swatches;
-use crate::typing::{self, Typing};
+use crate::annotate::drawing::Drawing;
+use crate::annotate::emoji_picker::EmojiPicker;
+use crate::annotate::picker::{self, Picker, Target};
+use crate::annotate::selection::{self, Release, Selection};
+use crate::annotate::swatches::Swatches;
+use crate::annotate::typing::{self, Typing};
 
 pub const NAMESPACE: &str = "kirie-overlay";
 /// How close to a handle a press grabs it, in logical pixels.
@@ -75,14 +76,14 @@ pub enum Message {
     /// Opens the color picker on a swatch, or to add one.
     EditColor(Target),
     Picker(picker::Event),
-    Weight(crate::controls::WeightEvent),
+    Weight(crate::annotate::controls::WeightEvent),
     ToggleFill,
-    Brightness(crate::controls::BrightnessEvent),
+    Brightness(crate::annotate::controls::BrightnessEvent),
     Spot(kirie_annotate::SpotShape),
-    Look(crate::controls::TextEvent),
-    Emoji(crate::emoji_picker::Event),
+    Look(crate::annotate::controls::TextEvent),
+    Emoji(crate::annotate::emoji_picker::Event),
     /// Moves through or picks the emoji offered while typing.
-    Choose(crate::typing::Choice),
+    Choose(crate::annotate::typing::Choice),
     TextEdit(iced::widget::text_editor::Action),
     TextDone,
     Undo,
@@ -231,7 +232,7 @@ pub struct Overlay {
     /// The magnifier shows while a region is picked.
     magnifier: bool,
     typesetter: RefCell<Typesetter>,
-    patches: RefCell<HashMap<crate::paint::PatchKey, image::Handle>>,
+    patches: RefCell<HashMap<crate::annotate::paint::PatchKey, image::Handle>>,
     pictures: RefCell<HashMap<u64, image::Handle>>,
     outcome: Arc<Mutex<Outcome>>,
 }
@@ -342,8 +343,8 @@ impl Overlay {
             .map(|window| (area(window.rect), window.title))
             .collect();
         let swatches = Swatches::load();
-        let remembered =
-            crate::region::load().and_then(|region| crate::region::within(region, desktop));
+        let remembered = crate::overlay::region::load()
+            .and_then(|region| crate::overlay::region::within(region, desktop));
         let overlay = Self {
             windows,
             captures: frames,
@@ -374,7 +375,7 @@ impl Overlay {
             primary,
             host,
             flash: Some(Flash::new()),
-            magnifier: crate::settings::Settings::load().magnifier,
+            magnifier: crate::storage::settings::Settings::load().magnifier,
             typesetter: RefCell::new(Typesetter::new()),
             patches: RefCell::new(HashMap::new()),
             pictures: RefCell::new(HashMap::new()),
@@ -483,7 +484,7 @@ impl Overlay {
                     self.picked.clear();
                 }
                 self.tool = tool;
-                self.paint.color = crate::controls::tool_color(
+                self.paint.color = crate::annotate::controls::tool_color(
                     tool,
                     self.paint.color,
                     self.swatches.first(self.style()),
@@ -617,9 +618,9 @@ impl Overlay {
 
     fn toggle_remember(&mut self) {
         if self.remembered.take().is_some() {
-            crate::region::forget();
+            crate::overlay::region::forget();
         } else if let Some(region) = self.selection.rect() {
-            crate::region::remember(region);
+            crate::overlay::region::remember(region);
             self.remembered = Some(region);
         }
     }
@@ -627,9 +628,9 @@ impl Overlay {
     /// Keeps the choice for later screenshots, on top of whatever else was set meanwhile.
     fn toggle_magnifier(&mut self) -> Task<Message> {
         self.magnifier = !self.magnifier;
-        let settings = crate::settings::Settings {
+        let settings = crate::storage::settings::Settings {
             magnifier: self.magnifier,
-            ..crate::settings::Settings::load()
+            ..crate::storage::settings::Settings::load()
         };
         if let Err(error) = settings.save() {
             tracing::warn!(%error, "magnifier choice not kept");
@@ -650,7 +651,7 @@ impl Overlay {
             .is_some_and(|region| self.selection.rect() != Some(region))
         {
             self.remembered = None;
-            crate::region::forget();
+            crate::overlay::region::forget();
         }
     }
 
@@ -700,18 +701,18 @@ impl Overlay {
                     }
                 }
             }
-            Message::Weight(crate::controls::WeightEvent::Done)
-            | Message::Brightness(crate::controls::BrightnessEvent::Done)
-            | Message::Look(crate::controls::TextEvent::SizeDone) => self.sliding = false,
-            Message::Brightness(crate::controls::BrightnessEvent::Slide(brightness)) => {
+            Message::Weight(crate::annotate::controls::WeightEvent::Done)
+            | Message::Brightness(crate::annotate::controls::BrightnessEvent::Done)
+            | Message::Look(crate::annotate::controls::TextEvent::SizeDone) => self.sliding = false,
+            Message::Brightness(crate::annotate::controls::BrightnessEvent::Slide(brightness)) => {
                 self.history
                     .apply_gradually(Op::SetSpotlightBrightness(brightness), self.sliding);
                 self.sliding = true;
             }
-            Message::Weight(crate::controls::WeightEvent::Pick(weight)) => {
+            Message::Weight(crate::annotate::controls::WeightEvent::Pick(weight)) => {
                 self.repaint(|paint| paint.weight = weight);
             }
-            Message::Weight(crate::controls::WeightEvent::Slide(width)) => {
+            Message::Weight(crate::annotate::controls::WeightEvent::Slide(width)) => {
                 self.repaint_gradually(|paint| paint.weight = Weight::new(width), true);
             }
             Message::ToggleFill => {
@@ -746,7 +747,7 @@ impl Overlay {
         let now = self.document().style;
         if now != before {
             let recolor = self.swatches.recolor(before, now);
-            self.paint.color = crate::controls::restyled(self.paint.color, &recolor);
+            self.paint.color = crate::annotate::controls::restyled(self.paint.color, &recolor);
         }
     }
 
@@ -847,8 +848,8 @@ impl Overlay {
             if self.surfaces.len() == 1 {
                 self.desktop = self.screens[index].area;
                 // A remembered region on another screen stays remembered for when it fits.
-                self.remembered = crate::region::load()
-                    .and_then(|region| crate::region::within(region, self.desktop));
+                self.remembered = crate::overlay::region::load()
+                    .and_then(|region| crate::overlay::region::within(region, self.desktop));
                 self.selection = self.remembered.map(Selection::selected).unwrap_or_default();
             }
         }
@@ -1123,7 +1124,7 @@ impl Overlay {
         if action == Action::Edit {
             let handed = self
                 .project()
-                .and_then(|project| crate::save::save_handoff(&project));
+                .and_then(|project| crate::storage::save::save_handoff(&project));
             return match handed {
                 Ok(path) => self.close(Outcome::Edit(path)),
                 Err(error) => self.close(Outcome::Failed(error)),
@@ -1141,10 +1142,13 @@ impl Overlay {
             Err(error) => return self.close(Outcome::Failed(error)),
         };
         match action {
-            Action::Save => Task::perform(crate::save::save_and_copy(picture, None), |saved| {
-                Message::Finished(saved.map(|(path, copied)| Outcome::Saved { path, copied }))
-            }),
-            Action::Copy => Task::perform(crate::clipboard::copy(picture), |copied| {
+            Action::Save => Task::perform(
+                crate::storage::save::save_and_copy(picture, None),
+                |saved| {
+                    Message::Finished(saved.map(|(path, copied)| Outcome::Saved { path, copied }))
+                },
+            ),
+            Action::Copy => Task::perform(crate::desktop::clipboard::copy(picture), |copied| {
                 Message::Finished(copied.map(|()| Outcome::Copied))
             }),
             Action::Edit | Action::SaveAs => Task::none(),
@@ -1210,9 +1214,9 @@ impl Overlay {
 fn settled(message: &Message) -> bool {
     !matches!(
         message,
-        Message::Weight(crate::controls::WeightEvent::Slide(_))
-            | Message::Brightness(crate::controls::BrightnessEvent::Slide(_))
-            | Message::Look(crate::controls::TextEvent::Size(_))
+        Message::Weight(crate::annotate::controls::WeightEvent::Slide(_))
+            | Message::Brightness(crate::annotate::controls::BrightnessEvent::Slide(_))
+            | Message::Look(crate::annotate::controls::TextEvent::Size(_))
     )
 }
 

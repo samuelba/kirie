@@ -29,13 +29,13 @@ use kirie_ui::{Palette, Scheme};
 
 use self::closing::{Answer, Closing, Then};
 use self::viewport::{Viewport, Zoom};
-use crate::controls;
-use crate::drawing::Drawing;
-use crate::emoji_picker::EmojiPicker;
-use crate::picker::{self, Picker, Target};
-use crate::selection::{Release, Selection};
-use crate::swatches::Swatches;
-use crate::typing::{self, Typing};
+use crate::annotate::controls;
+use crate::annotate::drawing::Drawing;
+use crate::annotate::emoji_picker::EmojiPicker;
+use crate::annotate::picker::{self, Picker, Target};
+use crate::annotate::selection::{Release, Selection};
+use crate::annotate::swatches::Swatches;
+use crate::annotate::typing::{self, Typing};
 
 /// How close to a mark a click picks it, in screen pixels.
 const MARK_REACH: f64 = 6.0;
@@ -143,14 +143,14 @@ pub enum Message {
     /// Opens the color picker on a swatch, or to add one.
     EditColor(Target),
     Picker(picker::Event),
-    Weight(crate::controls::WeightEvent),
+    Weight(crate::annotate::controls::WeightEvent),
     ToggleFill,
     Brightness(controls::BrightnessEvent),
     Spot(kirie_annotate::SpotShape),
     Look(controls::TextEvent),
-    Emoji(crate::emoji_picker::Event),
+    Emoji(crate::annotate::emoji_picker::Event),
     /// Moves through or picks the emoji offered while typing.
-    Choose(crate::typing::Choice),
+    Choose(crate::annotate::typing::Choice),
     Frame(frame::Event),
     MarkList(mark_list::Event),
     ToggleScheme,
@@ -187,7 +187,7 @@ pub enum Message {
     SaveProject,
     /// Asks where to save, and as what.
     SaveAs,
-    SaveTo(PathBuf, crate::save::Format),
+    SaveTo(PathBuf, crate::storage::save::Format),
     Done(Result<String, String>),
     /// The image left the editor, saved (to the file) or copied, as this document had it.
     Exported(String, Option<PathBuf>, Box<Document>),
@@ -204,9 +204,9 @@ pub enum Message {
     Release(release_card::Event),
     OpenLink(&'static str),
     Opened(Result<Loaded, String>),
-    Dropped(crate::drops::Dropped),
+    Dropped(crate::desktop::drops::Dropped),
     ToastExpired(u64),
-    Ipc(crate::ipc::Request),
+    Ipc(crate::desktop::ipc::Request),
     /// The desktop switched between light and dark.
     SystemScheme(Scheme),
     /// Hides the window and opens the overlay; the capture comes back over D-Bus.
@@ -260,7 +260,7 @@ struct Cropping {
 #[derive(Debug, Default)]
 struct Drops {
     /// The device, once it is ready.
-    device: Option<crate::drops::Device>,
+    device: Option<crate::desktop::drops::Device>,
     /// The window the device was last made anew for.
     renewed_for: Option<window::Id>,
     /// Something that can be opened is dragged over the window.
@@ -325,7 +325,7 @@ pub struct Editor {
     /// Set once the user picks light or dark; until then the editor follows the desktop.
     scheme_chosen: bool,
     typesetter: RefCell<Typesetter>,
-    patches: RefCell<HashMap<crate::paint::PatchKey, image::Handle>>,
+    patches: RefCell<HashMap<crate::annotate::paint::PatchKey, image::Handle>>,
     pictures: RefCell<HashMap<u64, image::Handle>>,
     drops: Drops,
 }
@@ -405,7 +405,7 @@ impl Editor {
     fn open(&mut self, mut loaded: Loaded) {
         let handoff = loaded
             .path
-            .take_if(|path| crate::save::is_handoff(path))
+            .take_if(|path| crate::storage::save::is_handoff(path))
             .map(std::fs::remove_file)
             .is_some();
         let handle = image::Handle::from_rgba(
@@ -791,7 +791,7 @@ impl Editor {
             let bytes = tokio::task::spawn_blocking(move || kirie_annotate::marks::encode(marks))
                 .await
                 .map_err(|error| error.to_string())??;
-            crate::clipboard::offer_from(bytes, kirie_annotate::marks::MIME, device).await
+            crate::desktop::clipboard::offer_from(bytes, kirie_annotate::marks::MIME, device).await
         };
         Task::perform(offered, move |offered| {
             Message::Offered(match offered {
@@ -829,19 +829,21 @@ impl Editor {
     /// Taking a screenshot from the editor, and bringing its window to the front.
     fn windowing(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Ipc(crate::ipc::Request::Open(path, token)) => self
+            Message::Ipc(crate::desktop::ipc::Request::Open(path, token)) => self
                 .raise(token)
                 .chain(Task::perform(load_async(path), Message::Opened)),
-            Message::Ipc(crate::ipc::Request::Present(token)) => self.raise(token),
-            Message::Ipc(crate::ipc::Request::About(token)) => {
+            Message::Ipc(crate::desktop::ipc::Request::Present(token)) => self.raise(token),
+            Message::Ipc(crate::desktop::ipc::Request::About(token)) => {
                 self.about = true;
                 Task::batch([self.raise(token), self.check_on_about()])
             }
-            Message::Ipc(crate::ipc::Request::Settings(token)) => {
+            Message::Ipc(crate::desktop::ipc::Request::Settings(token)) => {
                 let _ = self.edit_settings(settings::Event::Open);
                 self.raise(token)
             }
-            Message::Ipc(crate::ipc::Request::Resume) if self.window.is_none() => self.raise(None),
+            Message::Ipc(crate::desktop::ipc::Request::Resume) if self.window.is_none() => {
+                self.raise(None)
+            }
             Message::Capture => self
                 .window
                 .map_or_else(Task::none, |id| placement(id).map(Message::Hide)),
@@ -987,15 +989,12 @@ impl Editor {
         match message {
             Message::Copy => self.export(Export::Copy),
             // The window is in front already, so the image opens in it as it is.
-            Message::Open => {
-                Task::perform(crate::dialog::open_image(), |picked| picked).then(|picked| {
-                    match picked {
-                        Ok(Some(path)) => Task::perform(load_async(path), Message::Opened),
-                        Ok(None) => Task::none(),
-                        Err(error) => Task::done(Message::Done(Err(error))),
-                    }
-                })
-            }
+            Message::Open => Task::perform(crate::desktop::dialog::open_image(), |picked| picked)
+                .then(|picked| match picked {
+                    Ok(Some(path)) => Task::perform(load_async(path), Message::Opened),
+                    Ok(None) => Task::none(),
+                    Err(error) => Task::done(Message::Done(Err(error))),
+                }),
             Message::Paste => Task::perform(
                 paste(self.drops.device.clone(), self.clip.clone()),
                 Message::Pasted,
@@ -1006,9 +1005,14 @@ impl Editor {
                 let name = self.suggested_name();
                 Task::perform(
                     async move {
-                        let folder = crate::save::screenshots_dir();
+                        let folder = crate::storage::save::screenshots_dir();
                         let _ = std::fs::create_dir_all(&folder);
-                        crate::dialog::save_as(&name, &folder, &crate::save::Format::ALL).await
+                        crate::desktop::dialog::save_as(
+                            &name,
+                            &folder,
+                            &crate::storage::save::Format::ALL,
+                        )
+                        .await
                     },
                     |picked| match picked {
                         Ok(Some((path, format))) => Message::SaveTo(path, format),
@@ -1029,20 +1033,20 @@ impl Editor {
                 }
                 Task::none()
             }
-            Message::Dropped(crate::drops::Dropped::Ready(device)) => {
+            Message::Dropped(crate::desktop::drops::Dropped::Ready(device)) => {
                 self.drops.device = Some(device);
                 Task::none()
             }
-            Message::Dropped(crate::drops::Dropped::Hovering(hovering)) => {
+            Message::Dropped(crate::desktop::drops::Dropped::Hovering(hovering)) => {
                 self.drops.hovered = hovering;
                 Task::none()
             }
-            Message::Dropped(crate::drops::Dropped::Files(paths)) => {
+            Message::Dropped(crate::desktop::drops::Dropped::Files(paths)) => {
                 paths.into_iter().next().map_or_else(Task::none, |path| {
                     Task::perform(load_async(path), Message::Opened)
                 })
             }
-            Message::Dropped(crate::drops::Dropped::Png(bytes)) => {
+            Message::Dropped(crate::desktop::drops::Dropped::Png(bytes)) => {
                 let decoded = ::image::load_from_memory(&bytes)
                     .map(|image| Loaded::image(image.to_rgba8(), None))
                     .map_err(|error| format!("cannot open the dropped image: {error}"));
@@ -1152,7 +1156,7 @@ impl Editor {
         let now = self.document().style;
         if now != before {
             let recolor = self.swatches.recolor(before, now);
-            self.paint.color = crate::controls::restyled(self.paint.color, &recolor);
+            self.paint.color = crate::annotate::controls::restyled(self.paint.color, &recolor);
         }
     }
 
@@ -1329,10 +1333,12 @@ impl Editor {
                     return self.check_on_about();
                 }
             }
-            Message::OpenLink(link) => crate::launch::open(link),
+            Message::OpenLink(link) => crate::desktop::launch::open(link),
             Message::ShowInFiles(path) => {
-                return Task::future(async move { crate::launch::show_in_files(&path).await })
-                    .discard();
+                return Task::future(
+                    async move { crate::desktop::launch::show_in_files(&path).await },
+                )
+                .discard();
             }
             _ => {}
         }
@@ -1381,7 +1387,10 @@ impl Editor {
         };
         let nothing = || Message::Done(Ok(String::new()));
         Task::perform(
-            crate::drops::clipboard(self.drops.device.clone(), &crate::drops::TEXT),
+            crate::desktop::drops::clipboard(
+                self.drops.device.clone(),
+                &crate::desktop::drops::TEXT,
+            ),
             |bytes| bytes.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
         )
         .then(move |text| match text {
@@ -1416,10 +1425,10 @@ impl Editor {
         let stem = self
             .path
             .as_deref()
-            .filter(|path| !crate::save::is_handoff(path))
+            .filter(|path| !crate::storage::save::is_handoff(path))
             .and_then(Path::file_stem)
             .map_or_else(
-                || crate::save::stem(&jiff::Zoned::now()),
+                || crate::storage::save::stem(&jiff::Zoned::now()),
                 |stem| stem.to_string_lossy().into_owned(),
             );
         format!("{stem}.png")
@@ -1436,21 +1445,27 @@ impl Editor {
             Ok((text, file)) => Message::Exported(text, file, kept),
             Err(error) => Message::Done(Err(error)),
         };
-        let saved = |path: PathBuf| (format!("Saved {}", crate::save::pretty(&path)), Some(path));
+        let saved = |path: PathBuf| {
+            (
+                format!("Saved {}", crate::storage::save::pretty(&path)),
+                Some(path),
+            )
+        };
         let project = || Project {
             image: image.clone(),
             document: self.document().clone(),
         };
         match export {
             Export::Project => {
-                return Task::perform(crate::save::save_project(project()), move |done| {
+                return Task::perform(crate::storage::save::save_project(project()), move |done| {
                     exported(done.map(saved))
                 });
             }
             Export::To(path, format) => {
-                return Task::perform(crate::save::save_as(project(), path, format), move |done| {
-                    exported(done.map(saved))
-                });
+                return Task::perform(
+                    crate::storage::save::save_as(project(), path, format),
+                    move |done| exported(done.map(saved)),
+                );
             }
             Export::Copy | Export::Save => {}
         }
@@ -1468,19 +1483,20 @@ impl Editor {
         };
         match export {
             Export::Copy => {
-                let copied = crate::clipboard::copy_from(picture, self.drops.device.clone());
+                let copied =
+                    crate::desktop::clipboard::copy_from(picture, self.drops.device.clone());
                 Task::perform(copied, move |copied| {
                     exported(copied.map(|()| ("Copied to the clipboard".to_owned(), None)))
                 })
             }
             Export::Save | Export::Project | Export::To(..) => {
-                let saved = crate::save::save_and_copy(picture, self.drops.device.clone());
+                let saved = crate::storage::save::save_and_copy(picture, self.drops.device.clone());
                 Task::perform(saved, move |done| {
                     exported(done.map(|(path, copied)| {
                         let text = if copied {
-                            format!("Saved {} and copied", crate::save::pretty(&path))
+                            format!("Saved {} and copied", crate::storage::save::pretty(&path))
                         } else {
-                            format!("Saved {}", crate::save::pretty(&path))
+                            format!("Saved {}", crate::storage::save::pretty(&path))
                         };
                         (text, Some(path))
                     }))
@@ -1540,8 +1556,8 @@ impl Editor {
             keys,
             releases,
             event::listen_with(focus),
-            Subscription::run(crate::ipc::requests).map(Message::Ipc),
-            Subscription::run(crate::appearance::changes).map(Message::SystemScheme),
+            Subscription::run(crate::desktop::ipc::requests).map(Message::Ipc),
+            Subscription::run(crate::desktop::appearance::changes).map(Message::SystemScheme),
             window::close_requests().map(|_| Message::CloseRequested),
         ])
     }
@@ -1558,18 +1574,18 @@ impl Editor {
 /// image on the clipboard, read through the window's data device, else through the clipboard
 /// protocol of wlroots compositors; else `clip`, marks that never got there.
 async fn paste(
-    device: Option<crate::drops::Device>,
+    device: Option<crate::desktop::drops::Device>,
     clip: Option<(Vec<Shape>, Offer)>,
 ) -> Result<Pasted, String> {
-    const KINDS: &[&str] = &[kirie_annotate::marks::MIME, crate::drops::PNG];
+    const KINDS: &[&str] = &[kirie_annotate::marks::MIME, crate::desktop::drops::PNG];
     let unsent = match clip {
         Some((marks, Offer::Pending)) => return Ok(Pasted::Marks(marks)),
         Some((marks, Offer::Failed)) => Some(marks),
         None => None,
     };
-    let found = match crate::drops::clipboard_kind(device, KINDS).await {
+    let found = match crate::desktop::drops::clipboard_kind(device, KINDS).await {
         Some(found) => Ok(found),
-        None => crate::clipboard::paste(KINDS).await,
+        None => crate::desktop::clipboard::paste(KINDS).await,
     };
     let (kind, bytes) = match found {
         Ok(found) => found,
@@ -1595,9 +1611,9 @@ async fn load_async(path: PathBuf) -> Result<Loaded, String> {
 
 /// Opens what is dropped on the editor's windows, from when window `id` is open.
 fn take_drops(id: window::Id) -> Task<Message> {
-    window::run(id, crate::drops::display).then(|display| {
+    window::run(id, crate::desktop::drops::display).then(|display| {
         display.map_or_else(Task::none, |display| {
-            Task::run(crate::drops::drops(display), Message::Dropped)
+            Task::run(crate::desktop::drops::drops(display), Message::Dropped)
         })
     })
 }
@@ -1635,7 +1651,7 @@ impl Editor {
 /// asked.
 fn activate(id: window::Id, token: String) -> Task<bool> {
     window::run(id, move |window| {
-        crate::activation::activate(window, &token)
+        crate::desktop::activation::activate(window, &token)
     })
 }
 
@@ -1662,7 +1678,7 @@ fn settings(placement: Placement) -> window::Settings {
 /// Runs the overlay in its own process, after the window has had time to hide.
 async fn capture() -> Result<(), String> {
     tokio::time::sleep(Duration::from_millis(350)).await;
-    let exe = crate::launch::exe().map_err(|error| error.to_string())?;
+    let exe = crate::desktop::launch::exe().map_err(|error| error.to_string())?;
     tokio::task::spawn_blocking(move || {
         std::process::Command::new(exe)
             .args(["capture", "--edit"])
@@ -1697,7 +1713,7 @@ enum Export {
     Save,
     Project,
     /// To a file the user chose.
-    To(PathBuf, crate::save::Format),
+    To(PathBuf, crate::storage::save::Format),
 }
 
 #[allow(clippy::needless_pass_by_value)]

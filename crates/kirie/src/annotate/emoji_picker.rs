@@ -109,11 +109,11 @@ impl EmojiPicker {
 
     /// The picker with the emoji used last time.
     pub fn load() -> Self {
-        let recent: Vec<String> = crate::store::state_path(FILE)
-            .and_then(|path| crate::store::read(&path))
+        let recent: Vec<String> = crate::storage::store::state_path(FILE)
+            .and_then(|path| crate::storage::store::read(&path))
             .unwrap_or_default();
-        let tone = crate::store::state_path(TONE_FILE)
-            .and_then(|path| crate::store::read(&path))
+        let tone = crate::storage::store::state_path(TONE_FILE)
+            .and_then(|path| crate::storage::store::read(&path))
             .filter(|tone| SKIN_TONES.contains(tone))
             .unwrap_or(SkinTone::Default);
         let mut recent: Vec<String> = recent
@@ -334,9 +334,9 @@ fn tone_sample(tone: SkinTone) -> &'static str {
 
 /// Keeps `value` in the state file `name` for the next session.
 fn keep<T: serde::Serialize>(name: &str, value: &T, what: &str) {
-    let saved = crate::store::state_path(name)
+    let saved = crate::storage::store::state_path(name)
         .ok_or_else(|| "cannot find the state folder".to_owned())
-        .and_then(|path| crate::store::save(&path, value));
+        .and_then(|path| crate::storage::store::save(&path, value));
     if let Err(error) = saved {
         tracing::warn!(%error, "{what} not saved");
     }

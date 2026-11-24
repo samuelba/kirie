@@ -9,9 +9,9 @@ use kirie_ui::{radius, space};
 use kirie_annotate::{Shape, Tool};
 
 use super::{HANDLE_REACH, MARK_REACH, Message, Overlay, Pointer, to_kurbo};
-use crate::loupe::{self, Lens};
-use crate::paint::{Captures, Marks, Painter, Part, draw_marquee, draw_picked};
-use crate::selection::Handle;
+use crate::annotate::paint::{Captures, Marks, Painter, Part, draw_marquee, draw_picked};
+use crate::annotate::selection::Handle;
+use crate::canvas::loupe::{self, Lens};
 
 const HANDLE_RADIUS: f32 = 4.5;
 const LABEL_SIZE: f32 = 13.0;
@@ -135,7 +135,7 @@ impl canvas::Program<Message> for Surface<'_> {
         }
         match self.overlay.tool {
             Some(Tool::Select) => {
-                return crate::cursor::select(
+                return crate::canvas::cursor::select(
                     self.overlay.document(),
                     &self.overlay.picked,
                     self.overlay.draft.as_ref(),
@@ -147,7 +147,7 @@ impl canvas::Program<Message> for Surface<'_> {
             Some(_) => return Interaction::Crosshair,
             None => {}
         }
-        crate::selection::interaction(self.overlay.selection.hit(at, HANDLE_REACH))
+        crate::annotate::selection::interaction(self.overlay.selection.hit(at, HANDLE_REACH))
     }
 }
 

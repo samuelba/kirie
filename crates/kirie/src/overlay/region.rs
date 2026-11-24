@@ -36,22 +36,22 @@ impl From<Stored> for Rectangle {
 
 /// The remembered region, if there is one.
 pub fn load() -> Option<Rectangle> {
-    let path = crate::store::state_path(FILE)?;
-    crate::store::read::<Stored>(&path).map(Rectangle::from)
+    let path = crate::storage::store::state_path(FILE)?;
+    crate::storage::store::read::<Stored>(&path).map(Rectangle::from)
 }
 
 pub fn remember(region: Rectangle) {
-    let saved = crate::store::state_path(FILE)
+    let saved = crate::storage::store::state_path(FILE)
         .ok_or_else(|| "cannot find the state folder".to_owned())
-        .and_then(|path| crate::store::save(&path, &Stored::from(region)));
+        .and_then(|path| crate::storage::store::save(&path, &Stored::from(region)));
     if let Err(error) = saved {
         tracing::warn!(%error, "region not remembered");
     }
 }
 
 pub fn forget() {
-    if let Some(path) = crate::store::state_path(FILE)
-        && let Err(error) = crate::store::remove(&path)
+    if let Some(path) = crate::storage::store::state_path(FILE)
+        && let Err(error) = crate::storage::store::remove(&path)
     {
         tracing::warn!(%error, "region not forgotten");
     }

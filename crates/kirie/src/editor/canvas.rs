@@ -7,11 +7,11 @@ use iced::{Color, Point, Rectangle, Renderer, Size, Theme, Vector};
 use kirie_annotate::{Draft, Shape, Tool};
 
 use super::{Editor, MARK_REACH, Message, Pointer, pixel};
-use crate::loupe::{self, Lens};
-use crate::paint::{
+use crate::annotate::paint::{
     ImageSource, Marks, Painter, Part, color_of, draw_listed, draw_marquee, draw_picked,
 };
-use crate::selection::Handle;
+use crate::annotate::selection::Handle;
+use crate::canvas::loupe::{self, Lens};
 
 /// The radius of a crop handle, in screen pixels.
 const CROP_HANDLE: f32 = 5.0;
@@ -254,14 +254,14 @@ impl Board<'_> {
         }
         if let Some(cropping) = &self.editor.cropping {
             let reach = super::HANDLE_REACH / scale(self.editor, bounds.size());
-            return crate::selection::interaction(
+            return crate::annotate::selection::interaction(
                 cropping.selection.hit(super::to_point(at), reach),
             );
         }
         match self.editor.tool {
             Tool::Select => {
                 let reach = MARK_REACH / f64::from(scale(self.editor, bounds.size()));
-                crate::cursor::select(
+                crate::canvas::cursor::select(
                     self.editor.document(),
                     &self.editor.picked,
                     self.editor.draft.as_ref(),

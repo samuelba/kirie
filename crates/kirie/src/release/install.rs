@@ -40,7 +40,7 @@ pub fn install_blocking(version: &Version, shown: bool) -> Result<Installed, Str
     sums.check(INSTALLER, &installer)?;
     let tarball = sums.hash(&tarball(version)?)?;
 
-    let extension = crate::extension::dir();
+    let extension = crate::desktop::extension::dir();
     let before = extension.as_deref().and_then(extension_code);
     // The script comes in on stdin, so it never sits in a shared temporary folder.
     let output = || {
@@ -129,7 +129,7 @@ fn extension_code(dir: &Path) -> Option<BTreeMap<PathBuf, Vec<u8>>> {
             if path.is_dir() {
                 collect(&path, root, files);
             } else if let Ok(relative) = path.strip_prefix(root)
-                && relative != Path::new(crate::extension::METADATA)
+                && relative != Path::new(crate::desktop::extension::METADATA)
                 && let Ok(content) = std::fs::read(&path)
             {
                 files.insert(relative.to_owned(), content);

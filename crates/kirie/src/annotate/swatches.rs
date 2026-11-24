@@ -162,7 +162,7 @@ impl Swatches {
 
     pub fn save(&self) -> Result<(), String> {
         let path = path().ok_or("cannot find the config folder")?;
-        crate::store::write(&path, &self.to_ron()?)
+        crate::storage::store::write(&path, &self.to_ron()?)
             .map_err(|error| format!("cannot save colors to {}: {error}", path.display()))
     }
 

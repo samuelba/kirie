@@ -163,7 +163,7 @@ impl Editor {
                 })
                 .into(),
             Face::Emoji(emoji) => text(emoji)
-                .font(crate::emoji_picker::FONT)
+                .font(crate::annotate::emoji_picker::FONT)
                 .size(14)
                 .line_height(1.0)
                 .into(),
