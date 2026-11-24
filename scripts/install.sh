@@ -286,7 +286,8 @@ cp "$src/kirie" "$bin_dir/.kirie.new"
 chmod 755 "$bin_dir/.kirie.new"
 mv -f "$bin_dir/.kirie.new" "$binary"
 
-# KWin only lets an app take screenshots when its desktop entry names the binary by full path.
+# KWin only lets an app take screenshots and list windows when its desktop entry names the
+# binary by full path.
 exec_path="$(desktop_exec "$binary")"
 mkdir -p "$data_dir/applications" "$data_dir/metainfo"
 sed "s|^Exec=kirie|Exec=$exec_path|" "$src/packaging/$app_id.desktop" \

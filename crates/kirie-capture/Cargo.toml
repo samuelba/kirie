@@ -22,6 +22,7 @@ tracing.workspace = true
 wayland-backend = "0.3"
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+wayland-protocols-plasma = { version = "0.3", features = ["client"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wayland-scanner = "0.31"
 

@@ -14,6 +14,7 @@ StartupWMClass=dev.samuelba.Kirie
 SingleMainWindow=true
 Actions=capture-region;
 X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2
+X-KDE-Wayland-Interfaces=org_kde_plasma_window_management,org_kde_plasma_virtual_desktop_management
 
 [Desktop Action capture-region]
 Name=Capture a Region

@@ -4,10 +4,12 @@
 
 mod cosmic;
 mod ext;
+mod plasma;
 mod shm;
 mod toplevels;
 mod wlr;
 
+pub use plasma::{Plasma, windows as plasma_windows};
 pub use toplevels::{Toplevels, toplevels};
 
 use wayland_client::globals::{GlobalList, GlobalListContents, registry_queue_init};
@@ -93,6 +95,7 @@ pub(crate) struct State {
     outputs: Vec<OutputState>,
     pending: Vec<Pending>,
     toplevels: toplevels::Listing,
+    plasma: plasma::Listing,
     /// A time to give up waiting before `ANSWER_TIMEOUT`, for answers Kirie can do without.
     give_up: Option<std::time::Instant>,
 }

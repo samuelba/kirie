@@ -1,5 +1,6 @@
 //! Where the windows on screen are, so the overlay can pick one. Wayland gives clients no way to
-//! ask, so this asks whoever knows: Kirie's GNOME Shell extension, COSMIC, sway or Hyprland.
+//! ask, so this asks whoever knows: Kirie's GNOME Shell extension, COSMIC, KDE Plasma, sway or
+//! Hyprland.
 
 use std::io::{Read as _, Write as _};
 use std::os::unix::net::UnixStream;
@@ -23,6 +24,9 @@ pub enum Lookup {
     /// Kirie's GNOME Shell extension, asked once the capture is done.
     Shell,
     Cosmic(Box<crate::wayland::Toplevels>),
+    /// KWin's windows, before Plasma's activity manager tells which ones the current activity
+    /// shows.
+    Plasma(crate::wayland::Plasma),
     Found(Vec<Window>),
 }
 
@@ -39,7 +43,11 @@ pub fn start() -> Lookup {
     } else {
         match crate::wayland::toplevels() {
             Ok(toplevels) => return Lookup::Cosmic(Box::new(toplevels)),
-            Err(crate::CaptureError::Unsupported) => Ok(Vec::new()),
+            Err(crate::CaptureError::Unsupported) => match crate::wayland::plasma_windows() {
+                Ok(plasma) => return Lookup::Plasma(plasma),
+                Err(crate::CaptureError::Unsupported) => Ok(Vec::new()),
+                Err(error) => Err(std::io::Error::other(error)),
+            },
             Err(error) => Err(std::io::Error::other(error)),
         }
     };
@@ -57,6 +65,14 @@ impl Lookup {
         match self {
             Lookup::Shell => crate::shell::windows().await.unwrap_or_default(),
             Lookup::Cosmic(toplevels) => toplevels.windows(frames),
+            Lookup::Plasma(plasma) => {
+                let activity = if plasma.uses_activities() {
+                    crate::activities::current().await
+                } else {
+                    None
+                };
+                plasma.visible(activity.as_deref())
+            }
             Lookup::Found(windows) => windows,
         }
     }
