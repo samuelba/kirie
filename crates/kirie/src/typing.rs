@@ -256,14 +256,15 @@ impl Typing {
     }
 }
 
-/// The emoji name being typed at the end of `before`: what follows a colon that starts a word.
+/// The emoji name being typed at the end of `before`: what follows a colon that starts a word
+/// or comes right after an emoji.
 fn name_before(before: &str) -> Option<&str> {
     let colon = before.rfind(':')?;
     let name = &before[colon + 1..];
     let starts_word = before[..colon]
         .chars()
         .next_back()
-        .is_none_or(char::is_whitespace);
+        .is_none_or(|c| c.is_whitespace() || is_emoji_part(c));
     let named = !name.is_empty()
         && name
             .chars()
@@ -740,6 +741,15 @@ mod tests {
         assert_eq!(typing.offer, None, "a space ends the name");
         typing.choose(Choice::Pick(0), &mut EmojiPicker::default());
         assert_eq!(typing.text(), "at 12:30 or http:sm :thu ");
+    }
+
+    #[test]
+    fn a_colon_right_after_an_emoji_starts_a_name() {
+        let mut typing = Typing::new(Point::ORIGIN);
+        typed(&mut typing, ":rocket::han");
+        assert_eq!(typing.offer.as_ref().unwrap().name, "han");
+        typed(&mut typing, "d:");
+        assert_eq!(typing.text(), "\u{1f680}\u{270b}");
     }
 
     #[test]
