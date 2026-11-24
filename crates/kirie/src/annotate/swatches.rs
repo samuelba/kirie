@@ -141,8 +141,13 @@ impl Swatches {
             .unwrap_or_default()
     }
 
+    /// Keeps the colors; tests keep nothing.
     pub fn save(&self) -> Result<(), String> {
-        let path = path().ok_or("cannot find the config folder")?;
+        let path = match path() {
+            Some(path) => path,
+            None if cfg!(test) => return Ok(()),
+            None => return Err("cannot find the config folder".to_owned()),
+        };
         crate::storage::store::write(&path, &self.to_ron()?)
             .map_err(|error| format!("cannot save colors to {}: {error}", path.display()))
     }
@@ -195,7 +200,11 @@ impl Stored {
     }
 }
 
+/// `~/.config/kirie/colors.ron`. Tests get none, so they never read or change the user's colors.
 fn path() -> Option<PathBuf> {
+    if cfg!(test) {
+        return None;
+    }
     directories::BaseDirs::new().map(|dirs| dirs.config_dir().join("kirie/colors.ron"))
 }
 
@@ -205,6 +214,15 @@ mod tests {
 
     const TEAL: Rgba = Rgba::rgb(0x14, 0xb8, 0xa6);
     const PINK: Rgba = Rgba::rgb(0xec, 0x48, 0x99);
+
+    #[test]
+    fn tests_never_touch_the_users_colors() {
+        assert_eq!(path(), None);
+        assert_eq!(Swatches::load(), Swatches::default());
+        let mut picked = Swatches::default();
+        picked.custom.push(TEAL);
+        assert_eq!(picked.save(), Ok(()));
+    }
 
     #[test]
     fn custom_colors_come_newest_first_without_repeats() {
