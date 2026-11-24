@@ -253,13 +253,18 @@ impl Editor {
                         crate::typing::text_box(
                             typing,
                             TEXT_INPUT,
+                            &self.emojis,
                             palette,
                             Message::TextEdit,
                             Message::TextDone,
                             Some(Message::PasteText),
+                            Message::Choose,
                         ),
                         column![
                             text("Enter to place").size(12).color(palette.muted),
+                            text(": or the smile for emoji")
+                                .size(12)
+                                .color(palette.muted),
                             text("Shift+Enter for a new line")
                                 .size(12)
                                 .color(palette.muted),
@@ -546,6 +551,19 @@ impl Editor {
         .into()
     }
 
+    /// The emoji the sticker tool places, or the picked stickers show.
+    fn sticker_section(&self) -> iced::widget::Column<'_, Message> {
+        let current = crate::marks::sticker_shown(self.document(), &self.picked)
+            .unwrap_or_else(|| self.emojis.chosen());
+        section(
+            self.palette,
+            "Sticker",
+            self.emojis
+                .view(current, self.palette, Length::Fill)
+                .map(Message::Emoji),
+        )
+    }
+
     /// The color, and the text look, the spotlight, or the weight, fill and shadow, of the
     /// picked mark or the next.
     fn paint_sections(&self) -> iced::widget::Column<'_, Message> {
@@ -568,6 +586,9 @@ impl Editor {
             colors = colors.push(picker::view(open, palette).map(Message::Picker));
         }
         let content = column![section(palette, "Color", colors.into())].spacing(space::L);
+        if self.stickering() {
+            return self.sticker_section();
+        }
         if self.texting() {
             let fallback = self.document().style.font();
             return content.push(section(

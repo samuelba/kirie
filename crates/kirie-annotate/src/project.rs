@@ -188,6 +188,29 @@ mod tests {
         assert_eq!(loaded, project);
     }
 
+    #[test]
+    fn stickers_and_emoji_round_trip() {
+        let mut project = sample();
+        project.document = project
+            .document
+            .apply(crate::document::Op::Add {
+                kind: crate::shape::Kind::Sticker {
+                    rect: kurbo::Rect::new(1.0, 1.0, 3.0, 3.0),
+                    emoji: "\u{1f469}\u{200d}\u{1f680}".into(),
+                },
+                paint: crate::shape::Paint::default(),
+            })
+            .apply(crate::document::Op::Add {
+                kind: crate::shape::Kind::Text {
+                    at: kurbo::Point::new(1.0, 1.0),
+                    text: "Done \u{2705}".into(),
+                },
+                paint: crate::shape::Paint::default(),
+            });
+        let loaded = load(Cursor::new(bytes(&project))).unwrap();
+        assert_eq!(loaded, project);
+    }
+
     fn version(bytes: Vec<u8>) -> u32 {
         let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
         let manifest: Manifest =

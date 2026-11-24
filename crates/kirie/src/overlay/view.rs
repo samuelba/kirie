@@ -15,7 +15,9 @@ use crate::picker::{self, Picker};
 
 pub const TEXT_INPUT: &str = "kirie-text";
 /// Room the toolbar takes; used to keep it on screen.
-const TOOLBAR: iced::Size = iced::Size::new(1072.0, 92.0);
+const TOOLBAR: iced::Size = iced::Size::new(1108.0, 92.0);
+/// How wide the emoji picker is.
+const EMOJI_WIDTH: f32 = 440.0;
 /// How much wider "Back to the editor" is than "Copy" on the primary button.
 const BACK_TO_EDITOR: f32 = 96.0;
 const GAP: f32 = 12.0;
@@ -64,10 +66,12 @@ impl Overlay {
                     pin(crate::typing::text_box(
                         typing,
                         TEXT_INPUT,
+                        &self.emojis,
                         self.palette,
                         Message::TextEdit,
                         Message::TextDone,
                         None,
+                        Message::Choose,
                     ))
                     .position(at),
                 );
@@ -164,6 +168,10 @@ impl Overlay {
             picker::HEIGHT
         } else {
             0.0
+        } + if self.stickering() {
+            crate::emoji_picker::HEIGHT + space::XS
+        } else {
+            0.0
         };
         let text = if self.texting() { TEXT_CONTROLS } else { 0.0 };
         let label = if self.primary == Action::Edit {
@@ -237,6 +245,15 @@ impl Overlay {
             panel = panel.push(
                 container(picker::view(open, palette).map(Message::Picker))
                     .padding([space::XS, 0.0]),
+            );
+        }
+        if self.stickering() {
+            let current = crate::marks::sticker_shown(self.document(), &self.picked)
+                .unwrap_or_else(|| self.emojis.chosen());
+            panel = panel.push(
+                self.emojis
+                    .view(current, palette, EMOJI_WIDTH)
+                    .map(Message::Emoji),
             );
         }
         let grip = mouse_area(
@@ -320,7 +337,8 @@ impl Overlay {
             .into()
     }
 
-    /// Style, color, and the text look, the spotlight, or the weight, fill and shadow.
+    /// Style, color, and the text look, the spotlight, or the weight, fill and shadow; stickers
+    /// take only the style and color.
     fn properties(&self) -> Element<'_, Message> {
         let palette = self.palette;
         let style = self.style();
@@ -335,6 +353,12 @@ impl Overlay {
             Message::PickColor,
             Message::EditColor,
         );
+        if self.stickering() {
+            return row![styles, divider(palette), colors]
+                .spacing(space::S)
+                .align_y(iced::Alignment::Center)
+                .into();
+        }
         let mut properties = row![styles, divider(palette), colors, divider(palette)]
             .spacing(space::S)
             .align_y(iced::Alignment::Center);

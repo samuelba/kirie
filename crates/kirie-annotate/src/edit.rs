@@ -58,6 +58,16 @@ pub fn grips(shape: &Shape, pixel: f64) -> Vec<(Grip, Point)> {
             .enumerate()
             .map(|(index, point)| (Grip::Corner(index_u8(index)), point))
             .collect(),
+        Kind::Sticker { rect, .. } => {
+            let rect = rect.abs();
+            let above = Point::new(rect.center().x, rect.y0 - ROTATE_OFFSET * pixel);
+            corners(rect)
+                .into_iter()
+                .enumerate()
+                .map(|(index, point)| (Grip::Corner(index_u8(index)), turn * point))
+                .chain([(Grip::Rotate, turn * above)])
+                .collect()
+        }
         Kind::Bubble { center, tail, .. } => vec![(Grip::Start, *center), (Grip::End, *tail)],
         Kind::Text { .. } | Kind::Counter { .. } => Vec::new(),
     }
@@ -91,7 +101,7 @@ pub fn pull_angle(shape: &Shape, grip: Grip) -> Option<f64> {
 pub const fn turns(kind: &Kind) -> bool {
     matches!(
         kind,
-        Kind::Rectangle { .. } | Kind::Ellipse { .. } | Kind::Redact { .. }
+        Kind::Rectangle { .. } | Kind::Ellipse { .. } | Kind::Redact { .. } | Kind::Sticker { .. }
     )
 }
 
@@ -163,9 +173,12 @@ pub fn drag(origin: &Shape, grip: Grip, to: Point, constrain: bool) -> Shape {
             };
             // Resize in the mark's own frame, then put it back so the far side stays put.
             let turn = origin.turn();
-            // A picture keeps its proportions from its corners, unless Shift frees them.
-            let keep = matches!(kind, Kind::Image { .. }) && matches!(grip, Grip::Corner(_));
-            let local = if keep {
+            // A picture keeps its proportions from its corners, unless Shift frees them; a
+            // sticker always keeps them.
+            let corner = matches!(grip, Grip::Corner(_));
+            let local = if corner && matches!(kind, Kind::Sticker { .. }) {
+                proportional(rect, grip, turn.inverse() * to, false)
+            } else if corner && matches!(kind, Kind::Image { .. }) {
                 proportional(rect, grip, turn.inverse() * to, constrain)
             } else {
                 resize(rect, grip, turn.inverse() * to, constrain)
@@ -189,6 +202,7 @@ fn rect_of(kind: &Kind) -> Option<Rect> {
         | Kind::Blur { rect }
         | Kind::Pixelate { rect }
         | Kind::Spotlight { rect }
+        | Kind::Sticker { rect, .. }
         | Kind::Image { rect, .. } => Some(rect.abs()),
         _ => None,
     }
@@ -205,6 +219,10 @@ fn with_rect(kind: &Kind, rect: Rect) -> Kind {
         Kind::Image { pixels, .. } => Kind::Image {
             rect,
             pixels: pixels.clone(),
+        },
+        Kind::Sticker { emoji, .. } => Kind::Sticker {
+            rect,
+            emoji: emoji.clone(),
         },
         other => other.clone(),
     }
@@ -470,6 +488,30 @@ mod tests {
         assert_eq!(free.kind.bounds(), Rect::new(0.0, 0.0, 80.0, 25.0));
         let edge = drag(&picture, Grip::Edge(1), Point::new(60.0, 99.0), false);
         assert_eq!(edge.kind.bounds(), Rect::new(0.0, 0.0, 60.0, 20.0));
+    }
+
+    #[test]
+    fn stickers_scale_from_their_corners_and_turn() {
+        let sticker = shape(Kind::Sticker {
+            rect: Rect::new(0.0, 0.0, 40.0, 40.0),
+            emoji: "\u{1f44d}".into(),
+        });
+        let found: Vec<Grip> = grips(&sticker, 1.0)
+            .into_iter()
+            .map(|(grip, _)| grip)
+            .collect();
+        assert_eq!(found.len(), 5, "{found:?}");
+        assert!(found.contains(&Grip::Rotate) && !found.contains(&Grip::Edge(1)));
+        for constrain in [false, true] {
+            let bigger = drag(&sticker, Grip::Corner(2), Point::new(80.0, 50.0), constrain);
+            assert_eq!(bigger.kind.bounds(), Rect::new(0.0, 0.0, 80.0, 80.0));
+        }
+        let turned = drag(&sticker, Grip::Rotate, Point::new(60.0, 20.0), false);
+        assert!((turned.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+        let Kind::Sticker { emoji, .. } = turned.kind else {
+            panic!()
+        };
+        assert_eq!(emoji, "\u{1f44d}");
     }
 
     #[test]

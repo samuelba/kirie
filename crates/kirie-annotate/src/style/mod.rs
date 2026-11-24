@@ -250,6 +250,7 @@ fn unturned(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Vec<Prim
             )]
         }
         Kind::Spotlight { .. } => Vec::new(),
+        Kind::Sticker { rect, emoji } => sticker(*rect, emoji, shape.paint.color),
         Kind::Image { rect, pixels } => vec![Primitive::Image {
             rect: rect.abs(),
             pixels: pixels.clone(),
@@ -284,6 +285,41 @@ fn unturned(shape: &Shape, style: StyleId, unit: f64, stage: &Stage) -> Vec<Prim
         }
         kind => styled(kind, shape.style.unwrap_or(style), &context),
     }
+}
+
+/// `emoji` as large as fits in `rect`, centered; any part without a color of its own takes
+/// `color`. Stickers look the same in every style.
+fn sticker(rect: Rect, emoji: &str, color: Rgba) -> Vec<Primitive> {
+    let mut outline = crate::text::emoji(emoji);
+    let ink = outline.bounding_box();
+    let rect = rect.abs();
+    if outline.is_empty() || ink.width() <= 0.0 || ink.height() <= 0.0 {
+        return Vec::new();
+    }
+    let scale = (rect.width() / ink.width()).min(rect.height() / ink.height());
+    outline.apply_affine(
+        kurbo::Affine::translate(rect.center().to_vec2())
+            * kurbo::Affine::scale(scale)
+            * kurbo::Affine::translate(-ink.center().to_vec2()),
+    );
+    let plain = (!outline.plain.is_empty()).then_some(Primitive::Fill {
+        path: outline.plain,
+        color,
+        rule: FillRule::NonZero,
+    });
+    plain
+        .into_iter()
+        .chain(
+            outline
+                .layers
+                .into_iter()
+                .map(|(path, own)| Primitive::Fill {
+                    path,
+                    color: own.unwrap_or(color),
+                    rule: FillRule::NonZero,
+                }),
+        )
+        .collect()
 }
 
 /// How far past a redaction its cover reaches, in pixels: enough to take in every pixel the
@@ -530,7 +566,49 @@ mod tests {
             Kind::Pixelate { rect },
             Kind::Redact { rect },
             Kind::Spotlight { rect },
+            Kind::Sticker {
+                rect,
+                emoji: "\u{1f44d}".into(),
+            },
         ]
+    }
+
+    #[test]
+    fn stickers_fill_their_box_and_turn() {
+        let rect = Rect::new(10.0, 10.0, 110.0, 60.0);
+        let mut shape = Shape {
+            id: ShapeId(1),
+            kind: Kind::Sticker {
+                rect,
+                emoji: "\u{1f600}".into(),
+            },
+            paint: Paint::default(),
+            style: None,
+            rotation: 0.0,
+        };
+        let ink = |shape: &Shape| {
+            primitives(shape, StyleId::Clean, 1.0, &Stage::default())
+                .iter()
+                .filter_map(reach)
+                .reduce(|a, b| a.union(b))
+                .unwrap()
+        };
+        let upright = ink(&shape);
+        assert!((upright.height() - 50.0).abs() < 0.5, "{upright:?}");
+        assert!((upright.center() - rect.center()).hypot() < 0.5);
+        assert!(upright.width() <= 100.0);
+        shape.rotation = std::f64::consts::FRAC_PI_2;
+        let turned = ink(&shape);
+        assert!(
+            (turned.width() - upright.height()).abs() < 0.5,
+            "{turned:?}"
+        );
+        for style in StyleId::ALL {
+            assert_eq!(
+                primitives(&shape, style, 1.0, &Stage::default()),
+                primitives(&shape, StyleId::Clean, 1.0, &Stage::default())
+            );
+        }
     }
 
     #[test]

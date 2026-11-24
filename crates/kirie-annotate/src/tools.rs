@@ -21,6 +21,8 @@ pub enum Tool {
     /// Words in a speech bubble pointing at something.
     Bubble,
     Counter,
+    /// An emoji placed like a sticker.
+    Sticker,
     Blur,
     Pixelate,
     Redact,
@@ -28,7 +30,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 14] = [
+    pub const ALL: [Tool; 15] = [
         Tool::Select,
         Tool::Arrow,
         Tool::Line,
@@ -39,6 +41,7 @@ impl Tool {
         Tool::Text,
         Tool::Bubble,
         Tool::Counter,
+        Tool::Sticker,
         Tool::Blur,
         Tool::Pixelate,
         Tool::Redact,
@@ -57,6 +60,7 @@ impl Tool {
             Tool::Text => "Text",
             Tool::Bubble => "Speech bubble",
             Tool::Counter => "Step number",
+            Tool::Sticker => "Sticker",
             Tool::Blur => "Blur",
             Tool::Pixelate => "Pixelate",
             Tool::Redact => "Redact",
@@ -77,6 +81,7 @@ impl Tool {
             Tool::Text => "Text (T)",
             Tool::Bubble => "Speech bubble (C)",
             Tool::Counter => "Step number (N)",
+            Tool::Sticker => "Sticker (K)",
             Tool::Blur => "Blur (B)",
             Tool::Pixelate => "Pixelate (X)",
             Tool::Redact => "Redact (D)",
@@ -97,6 +102,7 @@ impl Tool {
             Tool::Text => 't',
             Tool::Bubble => 'c',
             Tool::Counter => 'n',
+            Tool::Sticker => 'k',
             Tool::Blur => 'b',
             Tool::Pixelate => 'x',
             Tool::Redact => 'd',
@@ -137,6 +143,14 @@ pub enum Draft {
         /// Adds to the picked marks, as Shift held at the press asked.
         extend: bool,
     },
+    /// An emoji being placed: a square dragged from `start`, or one of `size` centered on a
+    /// click.
+    Sticker {
+        emoji: String,
+        start: Point,
+        end: Point,
+        size: f64,
+    },
     /// A grip of a picked mark being dragged.
     Editing {
         grip: crate::edit::Grip,
@@ -153,6 +167,8 @@ pub enum Press {
     Done(Op),
     /// Ask for text to place here.
     TypeAt(Point),
+    /// Place the chosen emoji here, with [`Draft::sticker`].
+    PlaceSticker(Point),
     /// Adds the mark to the picked ones, or takes it out.
     Toggle(ShapeId),
     Nothing,
@@ -160,6 +176,9 @@ pub enum Press {
 
 /// Where a clicked speech bubble's words go from the tip of its tail.
 const BUBBLE_OFFSET: Vec2 = Vec2::new(48.0, -56.0);
+
+/// How wide a sticker placed with a click is, in logical pixels.
+pub const STICKER_SIZE: f64 = 64.0;
 
 /// Drags shorter than this make no mark.
 const MIN_DRAG: f64 = 3.0;
@@ -212,6 +231,7 @@ pub fn press(
             }),
         },
         Tool::Text => Press::TypeAt(at),
+        Tool::Sticker => Press::PlaceSticker(at),
         Tool::Counter => Press::Done(Op::Add {
             kind: Kind::Counter {
                 at,
@@ -232,6 +252,16 @@ pub fn press(
 }
 
 impl Draft {
+    /// Starts placing `emoji` at `at`; a click without a drag makes it `size` across.
+    pub fn sticker(emoji: impl Into<String>, at: Point, size: f64) -> Draft {
+        Draft::Sticker {
+            emoji: emoji.into(),
+            start: at,
+            end: at,
+            size,
+        }
+    }
+
     /// Follows the pointer. `constrain` (Shift) snaps lines to 45° and boxes to squares, and
     /// straightens a highlighter.
     #[must_use]
@@ -271,6 +301,14 @@ impl Draft {
                 end: at,
                 extend,
             },
+            Draft::Sticker {
+                emoji, start, size, ..
+            } => Draft::Sticker {
+                emoji,
+                start,
+                end: constrained(Tool::Sticker, start, at),
+                size,
+            },
             Draft::Editing { grip, origin, .. } => {
                 let current = Box::new(crate::edit::drag(&origin, grip, at, constrain));
                 Draft::Editing {
@@ -302,6 +340,19 @@ impl Draft {
                     points: points.clone(),
                 }),
             },
+            Draft::Sticker {
+                emoji,
+                start,
+                end,
+                size,
+            } => Some(Kind::Sticker {
+                rect: if start.distance(*end) < MIN_DRAG {
+                    Rect::from_center_size(*start, (*size, *size))
+                } else {
+                    Rect::from_points(*start, *end)
+                },
+                emoji: emoji.clone(),
+            }),
             Draft::Moving { .. } | Draft::Editing { .. } | Draft::Marquee { .. } => None,
         }
     }
@@ -378,7 +429,12 @@ fn span_kind(tool: Tool, start: Point, end: Point) -> Option<Kind> {
             tail: start,
             text: "|".into(),
         },
-        Tool::Select | Tool::Pen | Tool::Highlighter | Tool::Text | Tool::Counter => {
+        Tool::Select
+        | Tool::Pen
+        | Tool::Highlighter
+        | Tool::Text
+        | Tool::Counter
+        | Tool::Sticker => {
             return None;
         }
     })
@@ -430,6 +486,30 @@ mod tests {
             assert!(tool.label().ends_with(&format!("({key})")));
         }
         assert_eq!(Tool::from_key('z'), None);
+    }
+
+    #[test]
+    fn stickers_are_squares_or_clicks() {
+        let at = Point::new(50.0, 50.0);
+        assert_eq!(
+            press(Tool::Sticker, at, &doc(), Paint::default(), 4.0, &[], false),
+            Press::PlaceSticker(at)
+        );
+        let clicked = Draft::sticker("\u{1f44d}", at, 64.0).drag(Point::new(51.0, 50.0), false);
+        let Some(Op::Add {
+            kind: Kind::Sticker { rect, emoji },
+            ..
+        }) = clicked.finish(Paint::default())
+        else {
+            panic!()
+        };
+        assert_eq!(rect, Rect::from_center_size(at, (64.0, 64.0)));
+        assert_eq!(emoji, "\u{1f44d}");
+        let dragged = Draft::sticker("x", at, 64.0).drag(Point::new(70.0, 10.0), false);
+        assert_eq!(
+            dragged.preview().map(|kind| kind.bounds()),
+            Some(Rect::new(50.0, 10.0, 90.0, 50.0))
+        );
     }
 
     #[test]

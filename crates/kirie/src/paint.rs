@@ -162,11 +162,16 @@ impl Painter<'_> {
                     .typesetter
                     .borrow_mut()
                     .outline(text, *font, *size, *at, *align, *centered);
-                let path = to_iced(&outline, transform);
                 if let Some(halo) = halo {
-                    frame.stroke(&path, stroke(*halo, size * 0.16 * scale));
+                    frame.stroke(
+                        &to_iced(&outline.silhouette(), transform),
+                        stroke(*halo, size * 0.16 * scale),
+                    );
                 }
-                frame.fill(&path, color_of(*color));
+                frame.fill(&to_iced(&outline.plain, transform), color_of(*color));
+                for (layer, own) in &outline.layers {
+                    frame.fill(&to_iced(layer, transform), color_of(own.unwrap_or(*color)));
+                }
             }
             Primitive::Image { rect, pixels } => {
                 let handle = self.picture(pixels);

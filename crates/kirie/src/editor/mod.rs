@@ -29,6 +29,7 @@ use self::closing::{Answer, Closing, Then};
 use self::viewport::{Viewport, Zoom};
 use crate::controls;
 use crate::drawing::Drawing;
+use crate::emoji_picker::EmojiPicker;
 use crate::picker::{self, Picker, Target};
 use crate::selection::{Release, Selection};
 use crate::swatches::Swatches;
@@ -145,6 +146,9 @@ pub enum Message {
     Brightness(controls::BrightnessEvent),
     Spot(kirie_annotate::SpotShape),
     Look(controls::TextEvent),
+    Emoji(crate::emoji_picker::Event),
+    /// Moves through or picks the emoji offered while typing.
+    Choose(crate::typing::Choice),
     Frame(frame::Event),
     ToggleScheme,
     TextEdit(iced::widget::text_editor::Action),
@@ -285,6 +289,7 @@ pub struct Editor {
     paint: Paint,
     swatches: Swatches,
     picker: Option<Picker>,
+    emojis: EmojiPicker,
     draft: Option<Draft>,
     /// The marks the select tool picked; a lone one shows its grips.
     picked: Vec<ShapeId>,
@@ -354,6 +359,7 @@ impl Editor {
             paint: drawing.paint_for(Some(Tool::Arrow), &swatches),
             swatches,
             picker: None,
+            emojis: EmojiPicker::load(),
             draft: None,
             picked: Vec::new(),
             clip: None,
@@ -565,7 +571,11 @@ impl Editor {
             | Message::Frame(_) => return self.restyle(message),
             Message::SystemScheme(scheme) => self.follow(Some(scheme)),
             Message::ToggleScheme => self.follow(None),
-            Message::TextEdit(_) | Message::TextDone | Message::PasteText => {
+            Message::TextEdit(_)
+            | Message::TextDone
+            | Message::PasteText
+            | Message::Choose(_)
+            | Message::Emoji(_) => {
                 return self.typed(message);
             }
             Message::Undo => self.travel(true),
@@ -636,6 +646,11 @@ impl Editor {
         if self.cropping.take().is_some() {
             self.viewport = Viewport::fitted();
             return Task::none();
+        }
+        if let Some(typing) = &mut self.typing
+            && typing.dismiss()
+        {
+            return iced::widget::operation::focus(view::TEXT_INPUT);
         }
         if self.picker.take().is_none()
             && self.typing.take().is_none()
@@ -1140,6 +1155,11 @@ impl Editor {
             })
     }
 
+    /// Whether the emoji picker shows: for the sticker tool or picked stickers.
+    fn stickering(&self) -> bool {
+        crate::marks::stickering(Some(self.tool), self.document(), &self.picked)
+    }
+
     /// Whether the spotlight controls apply: to the spotlight tool or picked spotlights.
     fn spotlighting(&self) -> bool {
         self.tool == Tool::Spotlight
@@ -1207,6 +1227,12 @@ impl Editor {
                     Press::TypeAt(at) => {
                         self.typing = Some(Typing::new(at));
                         return iced::widget::operation::focus(view::TEXT_INPUT);
+                    }
+                    Press::PlaceSticker(at) => {
+                        let size = kirie_annotate::tools::STICKER_SIZE * self.document().unit;
+                        let draft = Draft::sticker(self.emojis.chosen(), at, size);
+                        crate::marks::pressed(&draft, &mut self.picked);
+                        self.draft = Some(draft);
                     }
                     Press::Toggle(id) => crate::marks::toggle(&mut self.picked, id),
                     Press::Nothing => self.picked.clear(),
@@ -1280,11 +1306,27 @@ impl Editor {
         match message {
             Message::TextEdit(action) => {
                 if let Some(typing) = &mut self.typing {
-                    typing.content.perform(action);
+                    typing.act(action, self.emojis.tone());
+                }
+            }
+            Message::Choose(choice) => {
+                let refocus = self
+                    .typing
+                    .as_mut()
+                    .is_some_and(|typing| typing.choose(choice, &mut self.emojis));
+                if refocus {
+                    return iced::widget::operation::focus(view::TEXT_INPUT);
                 }
             }
             Message::TextDone => self.commit_text(),
             Message::PasteText => return self.paste_text(),
+            Message::Emoji(event) => {
+                if let Some(emoji) = self.emojis.update(event)
+                    && let Some(op) = crate::marks::restick(self.document(), &self.picked, &emoji)
+                {
+                    self.history.apply(op);
+                }
+            }
             _ => {}
         }
         Task::none()
@@ -1771,6 +1813,7 @@ pub fn run(loaded: Option<Loaded>, card: Option<Card>, token: Option<String>) ->
         Editor::view,
     )
     .antialiasing(true)
+    .font(kirie_annotate::text::EMOJI_FONT)
     .title(Editor::title)
     .theme(Editor::theme)
     .subscription(Editor::subscription)

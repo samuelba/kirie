@@ -14,6 +14,8 @@ const STEP: f64 = 12.0;
 const MOST: usize = 5000;
 /// How far out a pasted mark may reach, in image pixels; anything beyond is not a real mark.
 const FARTHEST: f64 = 1.0e6;
+/// The most characters a sticker's emoji takes: the longest emoji sequences have about ten.
+const LONGEST_EMOJI: usize = 16;
 /// The most bytes of marks read from the clipboard.
 pub const MAX_BYTES: usize = 256 * 1024 * 1024;
 /// The most pixels the image marks of one paste hold together.
@@ -114,6 +116,48 @@ pub fn all(document: &Document, picked: &[ShapeId], is: impl Fn(&Kind) -> bool) 
     shapes.peek().is_some() && shapes.all(|shape| is(&shape.kind))
 }
 
+/// Whether the sticker picker applies: to the sticker tool or picked stickers.
+pub fn stickering(
+    tool: Option<kirie_annotate::Tool>,
+    document: &Document,
+    picked: &[ShapeId],
+) -> bool {
+    tool == Some(kirie_annotate::Tool::Sticker)
+        || all(document, picked, |kind| {
+            matches!(kind, Kind::Sticker { .. })
+        })
+}
+
+/// The emoji the first picked sticker shows.
+pub fn sticker_shown<'a>(document: &'a Document, picked: &[ShapeId]) -> Option<&'a str> {
+    picked
+        .iter()
+        .filter_map(|id| document.shape(*id))
+        .find_map(|shape| match &shape.kind {
+            Kind::Sticker { emoji, .. } => Some(emoji.as_str()),
+            _ => None,
+        })
+}
+
+/// The edit that makes the picked stickers show `emoji`, if any of them shows another.
+pub fn restick(document: &Document, picked: &[ShapeId], emoji: &str) -> Option<Op> {
+    let ops: Vec<Op> = picked
+        .iter()
+        .filter_map(|id| document.shape(*id))
+        .filter_map(|shape| match &shape.kind {
+            Kind::Sticker { rect, emoji: shown } if shown != emoji => Some(Op::Replace {
+                id: shape.id,
+                kind: Kind::Sticker {
+                    rect: *rect,
+                    emoji: emoji.to_owned(),
+                },
+            }),
+            _ => None,
+        })
+        .collect();
+    (!ops.is_empty()).then_some(Op::Batch(ops))
+}
+
 /// Where the picked marks go among the others.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Restack {
@@ -204,6 +248,7 @@ fn sane(shape: Shape) -> Option<Shape> {
         Kind::Text { text, .. } | Kind::Bubble { text, .. } => text.chars().count() <= LONGEST,
         Kind::Pen { points } | Kind::Highlighter { points } => points.len() <= LONGEST,
         Kind::Image { .. } => bounds.width() > 0.0 && bounds.height() > 0.0,
+        Kind::Sticker { emoji, .. } => emoji.chars().count() <= LONGEST_EMOJI,
         _ => true,
     };
     if !near || !bounded || !shape.rotation.is_finite() {
@@ -602,5 +647,40 @@ mod tests {
         let mut picked = vec![ShapeId(1), ShapeId(9)];
         prune(&document, &mut picked);
         assert_eq!(picked, [ShapeId(1)]);
+    }
+
+    #[test]
+    fn picked_stickers_change_their_emoji() {
+        let sticker = |emoji: &str| Kind::Sticker {
+            rect: kurbo::Rect::new(0.0, 0.0, 40.0, 40.0),
+            emoji: emoji.into(),
+        };
+        let document = boxes()
+            .apply(Op::Add {
+                kind: sticker("a"),
+                paint: Paint::default(),
+            })
+            .apply(Op::Add {
+                kind: sticker("b"),
+                paint: Paint::default(),
+            });
+        let stickers: Vec<ShapeId> = document.shapes().skip(3).map(|shape| shape.id).collect();
+        assert!(stickering(None, &document, &stickers));
+        assert!(!stickering(None, &document, &[ShapeId(1), stickers[0]]));
+        assert!(stickering(
+            Some(kirie_annotate::Tool::Sticker),
+            &document,
+            &[]
+        ));
+        let changed = document.apply(restick(&document, &stickers, "b").unwrap());
+        for id in &stickers {
+            assert_eq!(changed.shape(*id).unwrap().kind, sticker("b"));
+        }
+        assert_eq!(restick(&changed, &stickers, "b"), None);
+        assert_eq!(restick(&document, &[ShapeId(1)], "b"), None);
+        let mut pasted = changed.shape(stickers[0]).unwrap().clone();
+        assert!(sane(pasted.clone()).is_some());
+        pasted.kind = sticker(&"x".repeat(LONGEST_EMOJI + 1));
+        assert!(sane(pasted).is_none());
     }
 }

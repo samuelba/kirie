@@ -282,6 +282,11 @@ pub enum Kind {
     Spotlight {
         rect: Rect,
     },
+    /// An emoji fitted into `rect`, like a sticker.
+    Sticker {
+        rect: Rect,
+        emoji: String,
+    },
     /// Another picture placed over this one, stretched over `rect`.
     Image {
         rect: Rect,
@@ -296,7 +301,8 @@ pub struct Shape {
     pub paint: Paint,
     /// Overrides the document's style for this mark.
     pub style: Option<StyleId>,
-    /// Turn in radians around the center of the mark's bounds; only boxes and ellipses turn.
+    /// Turn in radians around the center of the mark's bounds; only boxes, ellipses and stickers
+    /// turn.
     #[serde(default)]
     pub rotation: f64,
 }
@@ -337,6 +343,7 @@ impl Kind {
             | Kind::Pixelate { rect }
             | Kind::Redact { rect }
             | Kind::Spotlight { rect }
+            | Kind::Sticker { rect, .. }
             | Kind::Image { rect, .. } => rect.abs(),
             Kind::Pen { points } | Kind::Highlighter { points } => points_bounds(points),
             Kind::Text { at, .. } => Rect::from_origin_size(*at, (0.0, 0.0)),
@@ -367,6 +374,10 @@ impl Kind {
             Kind::Image { rect, pixels } => Kind::Image {
                 rect: *rect + by,
                 pixels: pixels.clone(),
+            },
+            Kind::Sticker { rect, emoji } => Kind::Sticker {
+                rect: *rect + by,
+                emoji: emoji.clone(),
             },
             Kind::Pen { points: p } => Kind::Pen { points: points(p) },
             Kind::Highlighter { points: p } => Kind::Highlighter { points: points(p) },
@@ -411,6 +422,10 @@ impl Kind {
             Kind::Image { rect: r, pixels } => Kind::Image {
                 rect: rect(r),
                 pixels: pixels.clone(),
+            },
+            Kind::Sticker { rect: r, emoji } => Kind::Sticker {
+                rect: rect(r),
+                emoji: emoji.clone(),
             },
             Kind::Pen { points: p } => Kind::Pen { points: points(p) },
             Kind::Highlighter { points: p } => Kind::Highlighter { points: points(p) },
@@ -642,6 +657,10 @@ mod tests {
             Kind::Pixelate { rect: unit() },
             Kind::Redact { rect: unit() },
             Kind::Spotlight { rect: unit() },
+            Kind::Sticker {
+                rect: unit(),
+                emoji: "x".into(),
+            },
         ];
         for kind in kinds {
             let moved = kind.translated(by);
@@ -689,6 +708,10 @@ mod tests {
                 center: Point::new(5.0, 0.0),
                 tail: Point::new(10.0, 5.0),
                 text: "a".into(),
+            },
+            Kind::Sticker {
+                rect: Rect::new(5.0, 0.0, 10.0, 5.0),
+                emoji: "a".into(),
             },
         ];
         for kind in kinds {

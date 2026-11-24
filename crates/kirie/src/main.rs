@@ -7,6 +7,7 @@ mod dialog;
 mod drawing;
 mod drops;
 mod editor;
+mod emoji_picker;
 mod extension;
 mod ipc;
 mod launch;

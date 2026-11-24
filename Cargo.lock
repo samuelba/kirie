@@ -822,6 +822,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "emojis"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "589871e639330783bc20ad89d32ac1b049e02c273d96c907ca27478c8bc674a2"
+dependencies = [
+ "phf",
+ "serde",
+]
+
+[[package]]
 name = "endi"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1962,7 +1972,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kirie"
-version = "0.3.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1997,14 +2007,16 @@ dependencies = [
 
 [[package]]
 name = "kirie-annotate"
-version = "0.3.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "cosmic-text",
+ "emojis",
  "image",
  "kurbo 0.11.3",
  "ron",
  "serde",
+ "swash",
  "thiserror 2.0.21",
  "tiny-skia",
  "zip",
@@ -2012,7 +2024,7 @@ dependencies = [
 
 [[package]]
 name = "kirie-capture"
-version = "0.3.0"
+version = "0.2.0"
 dependencies = [
  "futures-util",
  "image",
@@ -2032,7 +2044,7 @@ dependencies = [
 
 [[package]]
 name = "kirie-ui"
-version = "0.3.0"
+version = "0.2.0"
 dependencies = [
  "iced",
 ]
@@ -2880,6 +2892,24 @@ dependencies = [
  "fixedbitset",
  "hashbrown 0.15.5",
  "indexmap",
+]
+
+[[package]]
+name = "phf"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1562dc717473dbaa4c1f85a36410e03c047b2e7df7f45ee938fbef64ae7fadf"
+dependencies = [
+ "phf_shared",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e57fef6bc5981e38c2ce2d63bfa546861309f875b8a75f092d1d54ae2d64f266"
+dependencies = [
+ "siphasher",
 ]
 
 [[package]]

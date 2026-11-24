@@ -145,6 +145,28 @@ fn marks(x: f64) -> Vec<(Kind, Paint)> {
                 ..plain
             },
         ),
+        (
+            Kind::Text {
+                at: p(20.0, 680.0),
+                text: "Ship it \u{1f680}".into(),
+            },
+            plain,
+        ),
+        (
+            Kind::Bubble {
+                center: p(230.0, 690.0),
+                tail: p(180.0, 740.0),
+                text: "Nice \u{1f389}".into(),
+            },
+            plain,
+        ),
+        (
+            Kind::Sticker {
+                rect: Rect::new(x + 320.0, 660.0, x + 390.0, 730.0),
+                emoji: "\u{1f44d}".into(),
+            },
+            plain,
+        ),
     ]
 }
 
@@ -152,7 +174,7 @@ fn main() {
     let out = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "showcase.png".into());
-    let (width, height) = ((COLUMN * 3.0) as u32, 650);
+    let (width, height) = ((COLUMN * 3.0) as u32, 760);
     let mut image = backdrop(width, height);
     let mut typesetter = Typesetter::new();
     for (column, style) in StyleId::ALL.into_iter().enumerate() {
