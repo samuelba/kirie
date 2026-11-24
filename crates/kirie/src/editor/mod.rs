@@ -4,6 +4,7 @@ mod about;
 mod canvas;
 mod closing;
 mod demo;
+mod drop_zone;
 mod frame;
 mod mark_list;
 mod release_card;
@@ -253,6 +254,17 @@ struct Cropping {
     before: Selection,
 }
 
+/// The window's data device, for drops and the clipboard.
+#[derive(Debug, Default)]
+struct Drops {
+    /// The device, once it is ready.
+    device: Option<crate::drops::Device>,
+    /// The window the device was last made anew for.
+    renewed_for: Option<window::Id>,
+    /// Something that can be opened is dragged over the window.
+    hovered: bool,
+}
+
 #[derive(Debug, Clone)]
 struct Toast {
     id: u64,
@@ -313,10 +325,7 @@ pub struct Editor {
     typesetter: RefCell<Typesetter>,
     patches: RefCell<HashMap<crate::paint::PatchKey, image::Handle>>,
     pictures: RefCell<HashMap<u64, image::Handle>>,
-    /// The window's data device, for drops and the clipboard, once it is ready.
-    device: Option<crate::drops::Device>,
-    /// The window the data device was last made anew for.
-    renewed_for: Option<window::Id>,
+    drops: Drops,
 }
 
 impl std::fmt::Debug for Editor {
@@ -377,8 +386,7 @@ impl Editor {
             typesetter: RefCell::new(Typesetter::new()),
             patches: RefCell::new(HashMap::new()),
             pictures: RefCell::new(HashMap::new()),
-            device: None,
-            renewed_for: None,
+            drops: Drops::default(),
         };
         if let Some(loaded) = loaded {
             editor.open(loaded);
@@ -974,7 +982,7 @@ impl Editor {
                 })
             }
             Message::Paste => Task::perform(
-                paste(self.device.clone(), self.clip.clone()),
+                paste(self.drops.device.clone(), self.clip.clone()),
                 Message::Pasted,
             ),
             Message::Save => self.export(Export::Save),
@@ -998,16 +1006,20 @@ impl Editor {
             // Made anew before anything can be dragged from another window onto this one.
             // Once per window: iced's clipboard makes a device of its own when a window opens.
             Message::Unfocused => {
-                if self.renewed_for != self.window
-                    && let Some(device) = &self.device
+                if self.drops.renewed_for != self.window
+                    && let Some(device) = &self.drops.device
                 {
                     device.renew();
-                    self.renewed_for = self.window;
+                    self.drops.renewed_for = self.window;
                 }
                 Task::none()
             }
             Message::Dropped(crate::drops::Dropped::Ready(device)) => {
-                self.device = Some(device);
+                self.drops.device = Some(device);
+                Task::none()
+            }
+            Message::Dropped(crate::drops::Dropped::Hovering(hovering)) => {
+                self.drops.hovered = hovering;
                 Task::none()
             }
             Message::Dropped(crate::drops::Dropped::Files(paths)) => {
@@ -1350,7 +1362,7 @@ impl Editor {
         };
         let nothing = || Message::Done(Ok(String::new()));
         Task::perform(
-            crate::drops::clipboard(self.device.clone(), &crate::drops::TEXT),
+            crate::drops::clipboard(self.drops.device.clone(), &crate::drops::TEXT),
             |bytes| bytes.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
         )
         .then(move |text| match text {

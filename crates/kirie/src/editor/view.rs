@@ -43,10 +43,14 @@ impl Editor {
             .closing_dialog()
             .or_else(|| self.about_dialog())
             .or_else(|| self.settings_dialog());
-        match dialog {
-            Some(dialog) => stack![window, dialog].into(),
-            None => window.into(),
+        let mut layers = stack![window];
+        if let Some(dialog) = dialog {
+            layers = layers.push(dialog);
         }
+        if self.drops.hovered {
+            layers = layers.push(super::drop_zone::view(palette));
+        }
+        layers.into()
     }
 
     fn header(&self) -> Element<'_, Message> {
