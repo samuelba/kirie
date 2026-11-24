@@ -210,7 +210,7 @@ impl Editor {
         });
         let crop = icon_button(
             Icon::Crop,
-            "Crop (C)",
+            "Crop (Shift+C)",
             palette,
             self.cropping.is_some(),
             self.image.is_some().then_some(Message::Crop),

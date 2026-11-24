@@ -24,7 +24,13 @@ pub enum RenderError {
     },
     #[error("the image is empty")]
     Empty,
+    #[error("the finished image would be too large to make")]
+    TooLarge,
 }
+
+/// The most pixels a finished image may have.
+#[allow(clippy::cast_precision_loss)]
+const MAX_CANVAS_PIXELS: f64 = 4.0 * crate::pixels::MAX_PIXELS as f64;
 
 /// The finished image: what the document's canvas covers, the kept part of `base` in its
 /// frame, with every mark drawn on top.
@@ -44,6 +50,10 @@ pub fn render(
     let kept =
         Region::clamp(document.visible(), base.width(), base.height()).ok_or(RenderError::Empty)?;
     let canvas = document.canvas();
+    let area = canvas.area();
+    if !area.is_finite() || area > MAX_CANVAS_PIXELS {
+        return Err(RenderError::TooLarge);
+    }
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let mut pixmap =
         Pixmap::new(canvas.width() as u32, canvas.height() as u32).ok_or(RenderError::Empty)?;

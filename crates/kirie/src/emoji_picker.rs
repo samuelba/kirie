@@ -129,6 +129,13 @@ impl EmojiPicker {
         }
     }
 
+    /// Reads the recent emoji and skin tone again, keeping the tab and search shown.
+    pub fn reload(&mut self) {
+        let Self { recent, tone, .. } = Self::load();
+        self.recent = recent;
+        self.tone = tone;
+    }
+
     /// The emoji new stickers show: the one used last.
     pub fn chosen(&self) -> &str {
         self.recent
@@ -413,6 +420,16 @@ fn cell(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reloading_keeps_the_tab_and_search_shown() {
+        let mut picker = EmojiPicker::default();
+        picker.update(Event::Tab(Tab::Group(Group::Activities)));
+        picker.update(Event::Search("thu".into()));
+        picker.reload();
+        assert_eq!(picker.tab, Tab::Group(Group::Activities));
+        assert_eq!(picker.query, "thu");
+    }
 
     #[test]
     fn choosing_keeps_the_newest_first_and_once() {

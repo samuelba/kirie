@@ -144,7 +144,7 @@ used for the next screenshot, in `~/.local/state/kirie/drawing.ron`.
 screenshot from its header. The bin in the header (Ctrl+W) discards the image; Ctrl+Q closes
 the editor. Both ask first when there are unsaved changes. Zoom with Ctrl+scroll, Ctrl+plus and Ctrl+minus, or the zoom control
 in the status bar (Ctrl+0 fits the image, Ctrl+1 shows it at actual size); pan with the scroll
-wheel or the middle button. Press C, or the crop button under the tools, to keep only part of the image: drag the
+wheel or the middle button. Press Shift+C, or the crop button under the tools, to keep only part of the image: drag the
 frame and press Enter. **Frame** puts room around the picture, filled with a color or left
 transparent, with a soft shadow under the picture if you like, and can take in marks drawn
 beyond the picture's edges. **Save project** (Ctrl+Alt+S) keeps a `.kirie` file in `~/Pictures/Screenshots` whose marks you

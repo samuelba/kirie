@@ -1385,6 +1385,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_tool_key_picks_its_tool() {
+        let id = window::Id::unique();
+        for tool in Tool::ALL {
+            let letter = tool.key().to_string();
+            let pressed = Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Character(letter.as_str().into()),
+                modified_key: keyboard::Key::Character(letter.as_str().into()),
+                physical_key: keyboard::key::Physical::Unidentified(
+                    keyboard::key::NativeCode::Unidentified,
+                ),
+                location: keyboard::Location::Standard,
+                modifiers: keyboard::Modifiers::empty(),
+                text: None,
+                repeat: false,
+            });
+            assert!(
+                matches!(
+                    key(pressed, event::Status::Ignored, id),
+                    Some(Message::PickTool(Some(picked))) if picked == tool
+                ),
+                "{letter} picks {tool:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_flash_fades_from_its_first_tick() {
         let start = std::time::Instant::now();
         let first = Flash::new().at(start + FLASH * 5).unwrap();

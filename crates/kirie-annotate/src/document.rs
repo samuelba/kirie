@@ -10,6 +10,7 @@ use crate::shape::{Kind, Paint, Rgba, Shape, ShapeId};
 use crate::style::StyleId;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "StoredDocument")]
 pub struct Document {
     /// The image size in pixels; marks use the same coordinates.
     pub width: u32,
@@ -119,6 +120,104 @@ fn casts_shadows() -> bool {
     true
 }
 
+/// A document as a project file holds it, checked before it becomes a [`Document`]: the file
+/// may have been made or changed by anyone.
+#[derive(Deserialize)]
+struct StoredDocument {
+    width: u32,
+    height: u32,
+    unit: f64,
+    style: StyleId,
+    #[serde(default = "casts_shadows")]
+    shadow: bool,
+    #[serde(default = "usual_spotlight_brightness")]
+    spotlight_brightness: f64,
+    crop: Option<Rect>,
+    #[serde(default)]
+    frame: Frame,
+    shapes: Vec<Arc<Shape>>,
+    next_id: u64,
+}
+
+impl TryFrom<StoredDocument> for Document {
+    type Error = String;
+
+    fn try_from(stored: StoredDocument) -> Result<Self, String> {
+        let unit = if stored.unit.is_finite() {
+            stored
+                .unit
+                .clamp(*Self::UNIT_RANGE.start(), *Self::UNIT_RANGE.end())
+        } else {
+            1.0
+        };
+        let mut document = Document {
+            style: stored.style,
+            shadow: stored.shadow,
+            spotlight_brightness: Self::spotlight_brightness(stored.spotlight_brightness),
+            ..Document::new(stored.width, stored.height, unit)
+        };
+        document.crop = stored
+            .crop
+            .map(|rect| document.clamp(rect))
+            .filter(|rect| rect.area() >= 1.0);
+        document.frame = document.bounded(stored.frame);
+        let reach = document.reach();
+        let mut last = 0;
+        let mut seen = std::collections::HashSet::new();
+        for shape in &stored.shapes {
+            if !seen.insert(shape.id) {
+                return Err(format!("two marks share the id {}", shape.id.0));
+            }
+            if !lies_within(&shape.kind, reach) {
+                return Err(format!("mark {} lies too far from the picture", shape.id.0));
+            }
+            last = last.max(shape.id.0);
+        }
+        document.next_id = last.saturating_add(1).max(stored.next_id);
+        if document.next_id > u64::MAX / 2 {
+            return Err("the marks' ids are used up".to_owned());
+        }
+        document.shapes = stored
+            .shapes
+            .into_iter()
+            .map(|shape| {
+                if shape.rotation.is_finite() {
+                    shape
+                } else {
+                    Arc::new(Shape {
+                        rotation: 0.0,
+                        ..Shape::clone(&shape)
+                    })
+                }
+            })
+            .collect();
+        Ok(document)
+    }
+}
+
+/// Whether every point that places `kind` is a number within `area`.
+fn lies_within(kind: &Kind, area: Rect) -> bool {
+    let inside = |point: &Point| {
+        point.x >= area.x0 && point.x <= area.x1 && point.y >= area.y0 && point.y <= area.y1
+    };
+    match kind {
+        Kind::Arrow { from, to } | Kind::Line { from, to } => inside(from) && inside(to),
+        Kind::Bubble { center, tail, .. } => inside(center) && inside(tail),
+        Kind::Text { at, .. } | Kind::Counter { at, .. } => inside(at),
+        Kind::Pen { points } | Kind::Highlighter { points } => points.iter().all(inside),
+        Kind::Rectangle { rect }
+        | Kind::Ellipse { rect }
+        | Kind::Blur { rect }
+        | Kind::Pixelate { rect }
+        | Kind::Redact { rect }
+        | Kind::Spotlight { rect }
+        | Kind::Sticker { rect, .. }
+        | Kind::Image { rect, .. } => {
+            inside(&Point::new(rect.x0, rect.y0)) && inside(&Point::new(rect.x1, rect.y1))
+        }
+    }
+}
+
 fn usual_spotlight_brightness() -> f64 {
     Document::SPOTLIGHT_BRIGHTNESS
 }
@@ -126,6 +225,8 @@ fn usual_spotlight_brightness() -> f64 {
 impl Document {
     pub const SPOTLIGHT_BRIGHTNESS: f64 = 0.45;
     pub const SPOTLIGHT_BRIGHTNESS_RANGE: std::ops::RangeInclusive<f64> = 0.05..=0.9;
+    /// The image pixels per logical pixel a project may hold.
+    const UNIT_RANGE: std::ops::RangeInclusive<f64> = 0.25..=8.0;
 
     /// `brightness` kept within [`Self::SPOTLIGHT_BRIGHTNESS_RANGE`].
     pub fn spotlight_brightness(brightness: f64) -> f64 {
@@ -390,17 +491,7 @@ impl Document {
                     .map(|rect| self.clamp(rect))
                     .filter(|r| r.area() >= 1.0);
             }
-            Op::SetFrame(frame) => {
-                let most = Frame::MAX_MARGIN * self.unit;
-                next.frame = Frame {
-                    margin: if frame.margin.is_finite() {
-                        frame.margin.clamp(0.0, most)
-                    } else {
-                        0.0
-                    },
-                    ..frame
-                };
-            }
+            Op::SetFrame(frame) => next.frame = self.bounded(frame),
         }
         next
     }
@@ -455,6 +546,27 @@ impl Document {
     fn clamp(&self, rect: Rect) -> Rect {
         let image = Rect::new(0.0, 0.0, f64::from(self.width), f64::from(self.height));
         rect.abs().intersect(image)
+    }
+
+    /// `frame` with its margin no wider than [`Frame::MAX_MARGIN`].
+    fn bounded(&self, frame: Frame) -> Frame {
+        let most = Frame::MAX_MARGIN * self.unit;
+        Frame {
+            margin: if frame.margin.is_finite() {
+                frame.margin.clamp(0.0, most)
+            } else {
+                0.0
+            },
+            ..frame
+        }
+    }
+
+    /// Where a loaded project's marks may lie: around the image, as far again as its longer
+    /// side and the farthest a saved image takes marks in.
+    fn reach(&self) -> Rect {
+        let side = f64::from(self.width.max(self.height));
+        let room = side + Frame::MAX_OVERFLOW * self.unit;
+        Rect::new(0.0, 0.0, f64::from(self.width), f64::from(self.height)).inflate(room, room)
     }
 }
 
@@ -556,6 +668,144 @@ mod tests {
             },
             paint: Paint::default(),
         }
+    }
+
+    fn stored(document: &Document) -> StoredDocument {
+        StoredDocument {
+            width: document.width,
+            height: document.height,
+            unit: document.unit,
+            style: document.style,
+            shadow: document.shadow,
+            spotlight_brightness: document.spotlight_brightness,
+            crop: document.crop,
+            frame: document.frame,
+            shapes: document.shapes.clone(),
+            next_id: document.next_id,
+        }
+    }
+
+    fn marked(kind: Kind) -> Document {
+        Document::new(100, 50, 1.0).apply(Op::Add {
+            kind,
+            paint: Paint::default(),
+        })
+    }
+
+    #[test]
+    fn documents_round_trip_through_their_text() {
+        let document = Document::new(100, 100, 2.0)
+            .apply(line(1.0))
+            .apply(line(2.0));
+        let text = ron::to_string(&document).unwrap();
+        assert_eq!(ron::from_str::<Document>(&text).unwrap(), document);
+    }
+
+    #[test]
+    fn loading_brings_numbers_back_in_range() {
+        let document = marked(Kind::Rectangle {
+            rect: Rect::new(10.0, 10.0, 20.0, 20.0),
+        });
+        let mut wild = stored(&document);
+        wild.unit = 1e300;
+        wild.spotlight_brightness = f64::NAN;
+        wild.crop = Some(Rect::new(-1e9, -1e9, 1e9, 1e9));
+        wild.frame.margin = 1e12;
+        wild.shapes[0] = Arc::new(Shape {
+            rotation: f64::INFINITY,
+            ..Shape::clone(&wild.shapes[0])
+        });
+        let loaded = Document::try_from(wild).unwrap();
+        assert_eq!(loaded.unit, 8.0);
+        assert_eq!(loaded.spotlight_brightness, Document::SPOTLIGHT_BRIGHTNESS);
+        assert_eq!(loaded.crop, Some(Rect::new(0.0, 0.0, 100.0, 50.0)));
+        assert_eq!(loaded.frame.margin, Frame::MAX_MARGIN * 8.0);
+        assert_eq!(loaded.shapes[0].rotation, 0.0);
+
+        let mut tiny = stored(&document);
+        tiny.unit = 1e-300;
+        assert_eq!(Document::try_from(tiny).unwrap().unit, 0.25);
+    }
+
+    #[test]
+    fn loading_keeps_text_sizes_in_range() {
+        let document = Document::new(100, 50, 1.0).apply(Op::Add {
+            kind: Kind::Text {
+                at: Point::new(5.0, 5.0),
+                text: "hi".into(),
+            },
+            paint: Paint {
+                text: crate::shape::TextLook {
+                    size: 1e9,
+                    ..crate::shape::TextLook::default()
+                },
+                ..Paint::default()
+            },
+        });
+        let text = ron::to_string(&document).unwrap();
+        let loaded: Document = ron::from_str(&text).unwrap();
+        let size = loaded.shapes().next().unwrap().paint.text.size;
+        assert_eq!(size, crate::shape::TextLook::MAX_SIZE);
+    }
+
+    #[test]
+    fn loading_refuses_marks_that_share_an_id() {
+        let mut twice = stored(&marked(Kind::Line {
+            from: Point::new(1.0, 1.0),
+            to: Point::new(9.0, 9.0),
+        }));
+        twice.shapes.push(twice.shapes[0].clone());
+        let error = Document::try_from(twice).unwrap_err();
+        assert!(error.contains("share the id 1"), "{error}");
+    }
+
+    #[test]
+    fn loading_refuses_marks_far_away_or_not_numbers() {
+        let wild = [
+            Kind::Line {
+                from: Point::ORIGIN,
+                to: Point::new(1e300, 0.0),
+            },
+            Kind::Pen {
+                points: vec![
+                    Point::ORIGIN,
+                    Point::new(f64::NAN, 3.0),
+                    Point::new(4.0, 4.0),
+                ],
+            },
+            Kind::Rectangle {
+                rect: Rect::new(0.0, 0.0, f64::INFINITY, 10.0),
+            },
+            Kind::Text {
+                at: Point::new(-1e7, 0.0),
+                text: "far".into(),
+            },
+        ];
+        for kind in wild {
+            let error = Document::try_from(stored(&marked(kind.clone()))).unwrap_err();
+            assert!(error.contains("too far"), "{kind:?}: {error}");
+        }
+        let beside = marked(Kind::Line {
+            from: Point::new(-150.0, -50.0),
+            to: Point::new(250.0, 100.0),
+        });
+        assert!(Document::try_from(stored(&beside)).is_ok());
+    }
+
+    #[test]
+    fn loading_numbers_new_marks_after_the_last() {
+        let document = Document::new(100, 50, 1.0)
+            .apply(line(1.0))
+            .apply(line(2.0));
+        let mut stale = stored(&document);
+        stale.next_id = 1;
+        let loaded = Document::try_from(stale).unwrap().apply(line(3.0));
+        let ids: Vec<u64> = loaded.shapes().map(|shape| shape.id.0).collect();
+        assert_eq!(ids, [1, 2, 3]);
+
+        let mut used_up = stored(&document);
+        used_up.next_id = u64::MAX;
+        assert!(Document::try_from(used_up).is_err());
     }
 
     #[test]
