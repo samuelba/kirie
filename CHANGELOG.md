@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0](https://github.com/samuelba/kirie/compare/v0.2.0...v0.3.0) (2026-11-23)
+
+
+### Features
+
+* **annotate:** add a speech bubble tool (@samuelba) ([5ac023d](https://github.com/samuelba/kirie/commit/5ac023dbe14b33182e0f6085d5306c27c8cda97d))
+* **capture:** open captures taken without the overlay in the editor (@samuelba) ([50cf010](https://github.com/samuelba/kirie/commit/50cf010a05a6e6dac54caee63c56bf6959dbe029))
+* **editor:** set the mark actions apart in a Selection section (@samuelba) ([a5c7871](https://github.com/samuelba/kirie/commit/a5c7871ebb9589c04b47595e257beeb83bb00d18))
+* **overlay:** let M toggle the magnifier while picking a region (@samuelba) ([3747f09](https://github.com/samuelba/kirie/commit/3747f09f2a63503fd4cbc58440d408fe7125a8d9))
+* **update:** check for and install updates from the app (@samuelba) ([500aa39](https://github.com/samuelba/kirie/commit/500aa394cdd6e3ebcbfe27951f1dc2e0db0e8bec))
+
+
+### Bug Fixes
+
+* **editor:** keep the selection outline visible on red marks (@samuelba) ([099f592](https://github.com/samuelba/kirie/commit/099f5927f4b67e54ec5a43cd0c11822834774fa1))
+* **overlay:** soften the capture flash (@samuelba) ([fb54531](https://github.com/samuelba/kirie/commit/fb54531a7a40e837073effa432a6f07ba68afe03))
+
 ## [0.2.0](https://github.com/samuelba/kirie/compare/v0.1.1...v0.2.0) (2026-11-23)
 
 
