@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.5.0](https://github.com/samuelba/kirie/compare/v0.4.0...v0.5.0) (2026-11-24)
+
+
+### Features
+
+* **capture:** pick windows on KDE Plasma ([3ea0f7e](https://github.com/samuelba/kirie/commit/3ea0f7e2bdbfa7c13fcb6de6a42a26e54de755ec))
+* **capture:** pick windows on KDE Plasma ([433e175](https://github.com/samuelba/kirie/commit/433e1751a73f6edcee3734ab50e0ca7b5073bd6b))
+
+
+### Bug Fixes
+
+* **annotate:** check project files before trusting them ([581d214](https://github.com/samuelba/kirie/commit/581d214d847b50b3c7cac5c338aa2566140e0d6a))
+* **annotate:** check project files before trusting them ([6764e39](https://github.com/samuelba/kirie/commit/6764e390491a801d21096348a97d05e95fff02eb))
+* **annotate:** keep the words being typed when undoing or redoing ([120831f](https://github.com/samuelba/kirie/commit/120831fded359e52ac984a4e8ded54a959cf3dd5))
+* **annotate:** leave no undo step for a drag back to where it began ([72e58cf](https://github.com/samuelba/kirie/commit/72e58cf3a75f30966bf131af2ba41636c8ba6c70))
+* **annotate:** leave no undo step for a drag back to where it began ([cb471fa](https://github.com/samuelba/kirie/commit/cb471fad634dd6d1cfe4a39cbf0e084da56a200c))
+* **capture:** delete only a picture the portal wrote for this capture ([2190684](https://github.com/samuelba/kirie/commit/2190684a881ecb6cb18ff7e2aaee3e2801a772d8))
+* **capture:** stop waiting on a portal or extension that never answers ([da8d76f](https://github.com/samuelba/kirie/commit/da8d76fb87be4f88d2a0b3f65f2f79e35713a0f0))
+* **capture:** stop waiting on wlr-screencopy once the buffer size is known ([3c1a5f8](https://github.com/samuelba/kirie/commit/3c1a5f8d5b12908b3f3572b1798abe4a4f5f0d8d))
+* **clipboard:** reap the clipboard service and keep it out of Ctrl+C's reach ([1fab70e](https://github.com/samuelba/kirie/commit/1fab70e9d93ef4927e767962b54f66ceae811ee8))
+* **editor:** measure the double-click slip on screen, not on the image ([9ef3f58](https://github.com/samuelba/kirie/commit/9ef3f5825ef21067bfa89b30fdd596e3c200768b))
+* **editor:** move crop to Shift+C so C picks the speech bubble ([466c68d](https://github.com/samuelba/kirie/commit/466c68d32483e64a39a831f682eac137092a2261))
+* **editor:** reread colors and recent emoji the overlay saved ([088f14d](https://github.com/samuelba/kirie/commit/088f14ddbaad9cbd7e648e14bffc3d16748ad2ab))
+* **overlay:** show nothing for a surface without a screen instead of panicking ([cc1ca75](https://github.com/samuelba/kirie/commit/cc1ca7592818ad927db647577b19f70c746b3002))
+* **storage:** give every state file write its own temporary file ([ac8bedc](https://github.com/samuelba/kirie/commit/ac8bedc9b474fdff88e9391a5c62c8455da0b029))
+* **storage:** keep a copy of a settings or state file that cannot be read ([ad547e4](https://github.com/samuelba/kirie/commit/ad547e4644472d6881efc00546fa5794c9870ce1))
+* **storage:** stop saves from writing over each other ([bab73b9](https://github.com/samuelba/kirie/commit/bab73b98dff678f6c362a01ca89ad5d36142bbc2))
+* **update:** keep the installer from inheriting a way around its check ([c298b9e](https://github.com/samuelba/kirie/commit/c298b9ea83d94f9128c15ef6ca68f114183618a8))
+* **update:** say a download is too large instead of cutting it short ([0ea40e1](https://github.com/samuelba/kirie/commit/0ea40e1ddaf23ec0f4b843a6cd73dd4dc4ff49de))
+* **update:** say a download is too large instead of cutting it short ([6753093](https://github.com/samuelba/kirie/commit/6753093357f63bc2415aae1dd2412d396e9cd3ad))
+
 ## [0.4.0](https://github.com/samuelba/kirie/compare/v0.3.0...v0.4.0) (2026-11-24)
 
 
