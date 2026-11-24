@@ -135,29 +135,10 @@ impl Swatches {
 
     /// The saved colors, or the built-in ones when there are none or they cannot be read.
     pub fn load() -> Self {
-        let Some(path) = path() else {
-            return Self::default();
-        };
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Self::parse(&text).unwrap_or_else(|error| {
-                let backup = path.with_extension("ron.bak");
-                tracing::warn!(
-                    path = %path.display(),
-                    backup = %backup.display(),
-                    %error,
-                    "unreadable colors; keeping them aside and starting from the built-in ones"
-                );
-                if let Err(error) = std::fs::rename(&path, &backup) {
-                    tracing::warn!(%error, "cannot keep the unreadable colors aside");
-                }
-                Self::default()
-            }),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Self::default(),
-            Err(error) => {
-                tracing::warn!(path = %path.display(), %error, "cannot read the colors");
-                Self::default()
-            }
-        }
+        path()
+            .and_then(|path| crate::storage::store::read::<Stored>(&path))
+            .map(|stored| Self::from_stored(&stored))
+            .unwrap_or_default()
     }
 
     pub fn save(&self) -> Result<(), String> {
@@ -166,8 +147,12 @@ impl Swatches {
             .map_err(|error| format!("cannot save colors to {}: {error}", path.display()))
     }
 
+    #[cfg(test)]
     fn parse(text: &str) -> Result<Self, ron::error::SpannedError> {
-        let stored: Stored = ron::from_str(text)?;
+        ron::from_str(text).map(|stored| Self::from_stored(&stored))
+    }
+
+    fn from_stored(stored: &Stored) -> Self {
         let color = |hex: &String| Rgba::from_hex(hex.trim());
         let mut swatches = Self::default();
         for (style, kept) in StyleId::ALL.into_iter().zip(stored.by_style()) {
@@ -183,7 +168,7 @@ impl Swatches {
             }
         }
         swatches.custom.truncate(MAX_CUSTOM);
-        Ok(swatches)
+        swatches
     }
 
     fn to_ron(&self) -> Result<String, String> {

@@ -30,7 +30,7 @@ pub fn skip(version: &Version) {
 }
 
 fn skip_at(path: &Path, version: &Version) {
-    if let Err(error) = crate::storage::store::write(path, &version.to_string()) {
+    if let Err(error) = crate::storage::store::write(path, version.to_string()) {
         tracing::warn!(path = %path.display(), %error, "cannot remember the skipped release");
     }
 }
