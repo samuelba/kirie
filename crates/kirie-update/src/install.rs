@@ -56,10 +56,7 @@ pub fn install_blocking(
             Stdio::piped()
         }
     };
-    let mut child = Command::new("sh")
-        .args(["-s", "--", "--force"])
-        .env("KIRIE_VERSION", version.to_string())
-        .env("KIRIE_SHA256", tarball)
+    let mut child = installer_command(version, tarball)
         .stdin(Stdio::piped())
         .stdout(output())
         .stderr(output())
@@ -83,6 +80,20 @@ pub fn install_blocking(
     Ok(Installed {
         extension_changed: after.is_some() && before != after,
     })
+}
+
+/// `sh` reading `install.sh` from stdin to install `version`, whose tarball hashes to `tarball`.
+/// Variables that would make the script install from a folder, skipping the download and its
+/// check, or uninstall instead, are not passed on.
+fn installer_command(version: &Version, tarball: &str) -> Command {
+    let mut command = Command::new("sh");
+    command
+        .args(["-s", "--", "--force"])
+        .env("KIRIE_VERSION", version.to_string())
+        .env("KIRIE_SHA256", tarball)
+        .env_remove("KIRIE_FROM")
+        .env_remove("KIRIE_UNINSTALL");
+    command
 }
 
 fn fetch(url: &str, name: &str) -> Result<Vec<u8>, String> {
@@ -152,6 +163,7 @@ fn extension_code(dir: &Path) -> Option<BTreeMap<PathBuf, Vec<u8>>> {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
     use std::os::unix::process::ExitStatusExt as _;
 
     use super::*;
@@ -184,6 +196,17 @@ mod tests {
         assert_ne!(extension_code(&dir).unwrap(), before);
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(extension_code(&dir).is_none());
+    }
+
+    #[test]
+    fn the_installer_never_inherits_a_way_around_the_check() {
+        let command = installer_command(&Version::new(1, 2, 3), "abc");
+        let envs: BTreeMap<_, _> = command.get_envs().collect();
+        let env = |name: &str| envs.get(OsStr::new(name)).copied();
+        assert_eq!(env("KIRIE_FROM"), Some(None));
+        assert_eq!(env("KIRIE_UNINSTALL"), Some(None));
+        assert_eq!(env("KIRIE_VERSION"), Some(Some(OsStr::new("1.2.3"))));
+        assert_eq!(env("KIRIE_SHA256"), Some(Some(OsStr::new("abc"))));
     }
 
     #[test]
