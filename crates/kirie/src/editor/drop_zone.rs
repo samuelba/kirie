@@ -96,14 +96,15 @@ mod tests {
     use super::super::Editor;
     use super::Message;
     use crate::desktop::drops::Dropped;
+    use crate::editor::FileEvent;
 
     #[test]
     fn the_hint_shows_while_something_is_dragged_over() {
         let mut editor = Editor::boot(None).0;
         assert!(!editor.drops.hovered);
-        let _ = editor.update(Message::Dropped(Dropped::Hovering(true)));
+        let _ = editor.update(Message::File(FileEvent::Dropped(Dropped::Hovering(true))));
         assert!(editor.drops.hovered);
-        let _ = editor.update(Message::Dropped(Dropped::Hovering(false)));
+        let _ = editor.update(Message::File(FileEvent::Dropped(Dropped::Hovering(false))));
         assert!(!editor.drops.hovered);
     }
 }

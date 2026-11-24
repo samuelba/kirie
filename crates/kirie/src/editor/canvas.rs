@@ -6,7 +6,7 @@ use iced::widget::canvas::{self, Action, Event, Frame, Geometry, Path, Stroke};
 use iced::{Color, Point, Rectangle, Renderer, Size, Theme, Vector};
 use kirie_annotate::{Draft, Shape, Tool};
 
-use super::{Editor, MARK_REACH, Message, Pointer, pixel};
+use super::{Editor, MARK_REACH, Message, Pointer, ZoomEvent, pixel};
 use crate::annotate::paint::{
     ImageSource, Marks, Painter, Part, color_of, draw_listed, draw_marquee, draw_picked,
 };
@@ -75,11 +75,11 @@ impl canvas::Program<Message> for Board<'_> {
                     ScrollDelta::Pixels { x, y } => (x, y),
                 };
                 if self.editor.annotator.modifiers.command() {
-                    publish(Message::Zoom {
+                    publish(Message::Zoom(ZoomEvent::By {
                         factor: 2f32.powf(y / LINE / WHEEL_STEPS),
                         anchor: at,
                         canvas,
-                    })
+                    }))
                 } else if self.editor.annotator.modifiers.shift() {
                     publish(Message::Pan(Vector::new(y, x)))
                 } else {

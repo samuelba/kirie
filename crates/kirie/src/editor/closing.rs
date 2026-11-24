@@ -7,7 +7,7 @@ use kirie_ui::icon::Icon;
 use kirie_ui::space;
 use kirie_ui::widget::{floating, primary_button, secondary_button};
 
-use super::{Editor, Export, Loaded, Message};
+use super::{Editor, Export, FinishEvent, Loaded, Message};
 
 /// What the user chose when asked about unsaved changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,15 +135,27 @@ impl Editor {
             Closing::No => return None,
             Closing::Saving => text("Saving…").size(13).color(palette.muted).into(),
             Closing::Asking => row![
-                secondary_button("Don't save", palette, Message::Close(Answer::Discard),),
+                secondary_button(
+                    "Don't save",
+                    palette,
+                    Message::Finish(FinishEvent::Close(Answer::Discard)),
+                ),
                 Space::new().width(Length::Fill),
-                secondary_button("Cancel", palette, Message::Close(Answer::Cancel)),
-                secondary_button("Save project", palette, Message::Close(Answer::SaveProject)),
+                secondary_button(
+                    "Cancel",
+                    palette,
+                    Message::Finish(FinishEvent::Close(Answer::Cancel))
+                ),
+                secondary_button(
+                    "Save project",
+                    palette,
+                    Message::Finish(FinishEvent::Close(Answer::SaveProject))
+                ),
                 primary_button(
                     Icon::Save,
                     "Save image",
                     palette,
-                    Message::Close(Answer::SaveImage)
+                    Message::Finish(FinishEvent::Close(Answer::SaveImage))
                 ),
             ]
             .spacing(space::S)
@@ -217,11 +229,11 @@ mod tests {
         assert!(!editor.unsaved());
         mark(&mut editor);
         assert!(editor.unsaved());
-        let _ = editor.update(Message::Exported(
+        let _ = editor.update(Message::Finish(FinishEvent::Exported(
             "Saved".into(),
             None,
             Box::new(editor.document().clone()),
-        ));
+        )));
         assert!(!editor.unsaved());
         editor.annotator.history.undo();
         assert!(editor.unsaved(), "undoing a saved mark is a change too");
@@ -235,13 +247,13 @@ mod tests {
     fn closing_with_changes_asks_and_can_be_called_off() {
         let mut editor = editor();
         mark(&mut editor);
-        let _ = editor.update(Message::CloseRequested);
+        let _ = editor.update(Message::Finish(FinishEvent::CloseRequested));
         assert_eq!(editor.closing, Closing::Asking);
         assert!(editor.closing_dialog().is_some());
         let _ = editor.update(Message::Escape);
         assert_eq!(editor.closing, Closing::No);
-        let _ = editor.update(Message::CloseRequested);
-        let _ = editor.update(Message::Close(Answer::Cancel));
+        let _ = editor.update(Message::Finish(FinishEvent::CloseRequested));
+        let _ = editor.update(Message::Finish(FinishEvent::Close(Answer::Cancel)));
         assert_eq!(editor.closing, Closing::No);
         assert!(editor.closing_dialog().is_none());
     }
@@ -253,7 +265,7 @@ mod tests {
         let mut editor = editor();
         mark(&mut editor);
         editor.closing = Closing::Saving;
-        let _ = editor.update(Message::Done(Err("disk full".into())));
+        let _ = editor.update(Message::Finish(FinishEvent::Done(Err("disk full".into()))));
         assert_eq!(editor.closing, Closing::No);
         assert!(editor.unsaved());
     }
@@ -268,10 +280,10 @@ mod tests {
         let _ = editor.update(Message::Opened(Ok(other())));
         assert_eq!(editor.closing, Closing::Asking);
         assert_eq!(editor.document().width, 40, "nothing replaced yet");
-        let _ = editor.update(Message::Close(Answer::Cancel));
+        let _ = editor.update(Message::Finish(FinishEvent::Close(Answer::Cancel)));
         assert_eq!(editor.document().width, 40);
         let _ = editor.update(Message::Opened(Ok(other())));
-        let _ = editor.update(Message::Close(Answer::Discard));
+        let _ = editor.update(Message::Finish(FinishEvent::Close(Answer::Discard)));
         assert_eq!(editor.document().width, 8);
         assert_eq!(editor.closing, Closing::No);
         let _ = editor.update(Message::Opened(Ok(Loaded::image(
@@ -284,7 +296,7 @@ mod tests {
     #[test]
     fn discarding_an_untouched_image_empties_the_editor_at_once() {
         let mut editor = editor();
-        let _ = editor.update(Message::Discard);
+        let _ = editor.update(Message::Finish(FinishEvent::Discard));
         assert!(editor.image.is_none());
         assert_eq!(editor.closing, Closing::No);
         assert!(!editor.unsaved());
@@ -296,13 +308,13 @@ mod tests {
         let _inside = runtime.enter();
         let mut editor = editor();
         mark(&mut editor);
-        let _ = editor.update(Message::Discard);
+        let _ = editor.update(Message::Finish(FinishEvent::Discard));
         assert_eq!(editor.closing, Closing::Asking);
         assert!(editor.image.is_some(), "nothing discarded yet");
-        let _ = editor.update(Message::Close(Answer::Cancel));
+        let _ = editor.update(Message::Finish(FinishEvent::Close(Answer::Cancel)));
         assert!(editor.image.is_some());
-        let _ = editor.update(Message::Discard);
-        let _ = editor.update(Message::Close(Answer::Discard));
+        let _ = editor.update(Message::Finish(FinishEvent::Discard));
+        let _ = editor.update(Message::Finish(FinishEvent::Close(Answer::Discard)));
         assert!(editor.image.is_none());
         assert_eq!(editor.closing, Closing::No);
         assert_eq!(editor.document().shapes().len(), 0);
@@ -314,10 +326,14 @@ mod tests {
         let _inside = runtime.enter();
         let mut editor = editor();
         mark(&mut editor);
-        let _ = editor.update(Message::Discard);
+        let _ = editor.update(Message::Finish(FinishEvent::Discard));
         editor.closing = Closing::Saving;
         let saved = Box::new(editor.document().clone());
-        let _ = editor.update(Message::Exported("Saved".into(), None, saved));
+        let _ = editor.update(Message::Finish(FinishEvent::Exported(
+            "Saved".into(),
+            None,
+            saved,
+        )));
         assert!(editor.image.is_none());
         assert_eq!(editor.closing, Closing::No);
     }
@@ -327,7 +343,7 @@ mod tests {
         let mut editor = editor();
         mark(&mut editor);
         editor.closing = Closing::Saving;
-        let _ = editor.update(Message::CloseRequested);
+        let _ = editor.update(Message::Finish(FinishEvent::CloseRequested));
         assert_eq!(editor.closing, Closing::Saving);
     }
 }

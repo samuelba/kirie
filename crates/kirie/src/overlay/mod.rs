@@ -83,15 +83,21 @@ pub enum Message {
     ToggleMagnifier,
     Finished(Result<Outcome, String>),
     Resized(window::Id, Size),
-    /// The pointer over the toolbar's grip, in the grip's coordinates.
-    GripHover(Point),
-    ToolbarGrab,
-    /// The pointer while the toolbar is dragged, in the coordinates of a surface.
-    ToolbarMoved(window::Id, Point),
-    ToolbarDropped,
+    Toolbar(ToolbarEvent),
     Layer(LayerShellCustomActionWithId),
     /// Time passes while the flash fades.
     Flash(std::time::Instant),
+}
+
+/// Moving the toolbar by its grip.
+#[derive(Debug, Clone, Copy)]
+pub enum ToolbarEvent {
+    /// The pointer over the toolbar's grip, in the grip's coordinates.
+    Hover(Point),
+    Grab,
+    /// The pointer while the toolbar is dragged, in the coordinates of a surface.
+    Moved(window::Id, Point),
+    Dropped,
 }
 
 /// The flash over the screens as the overlay opens, like a camera's.
@@ -416,16 +422,13 @@ impl Overlay {
         match message {
             Message::Pointer(pointer) if self.toolbar_drag.is_some() => {
                 if let Pointer::Released(_) = pointer {
-                    self.drag_toolbar(&Message::ToolbarDropped);
+                    self.drag_toolbar(ToolbarEvent::Dropped);
                 }
                 Task::none()
             }
             Message::Pointer(pointer) => self.pointer(pointer),
-            Message::GripHover(_)
-            | Message::ToolbarGrab
-            | Message::ToolbarMoved(..)
-            | Message::ToolbarDropped => {
-                self.drag_toolbar(&message);
+            Message::Toolbar(event) => {
+                self.drag_toolbar(event);
                 Task::none()
             }
             Message::Modifiers(modifiers) => {
@@ -474,10 +477,10 @@ impl Overlay {
     }
 
     /// Moving the toolbar by its grip.
-    fn drag_toolbar(&mut self, message: &Message) {
-        match *message {
-            Message::GripHover(at) => self.grip_at = at,
-            Message::ToolbarGrab => {
+    fn drag_toolbar(&mut self, event: ToolbarEvent) {
+        match event {
+            ToolbarEvent::Hover(at) => self.grip_at = at,
+            ToolbarEvent::Grab => {
                 if let Some((at, _)) = self.toolbar_place() {
                     self.toolbar_at = Some(at);
                     self.toolbar_drag = Some(Vector::new(
@@ -486,7 +489,7 @@ impl Overlay {
                     ));
                 }
             }
-            Message::ToolbarMoved(id, at) => {
+            ToolbarEvent::Moved(id, at) => {
                 let surface = self
                     .surfaces
                     .get(&id)
@@ -496,11 +499,10 @@ impl Overlay {
                     self.toolbar_at = Some(desktop - held);
                 }
             }
-            Message::ToolbarDropped => {
+            ToolbarEvent::Dropped => {
                 self.toolbar_drag = None;
                 self.toolbar_at = self.toolbar_place().map(|(at, _)| at);
             }
-            _ => {}
         }
     }
 
@@ -570,7 +572,7 @@ impl Overlay {
 
     fn escape(&mut self) -> Task<Message> {
         if self.toolbar_drag.is_some() {
-            self.drag_toolbar(&Message::ToolbarDropped);
+            self.drag_toolbar(ToolbarEvent::Dropped);
             return Task::none();
         }
         // A save or copy on its way finishes first; leaving now would drop it half done.
@@ -880,10 +882,10 @@ fn surface_settings(output: &str) -> NewLayerShellSettings {
 fn dragging_toolbar(event: Event, _: event::Status, id: window::Id) -> Option<Message> {
     match event {
         Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
-            Some(Message::ToolbarMoved(id, position))
+            Some(Message::Toolbar(ToolbarEvent::Moved(id, position)))
         }
         Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
-            Some(Message::ToolbarDropped)
+            Some(Message::Toolbar(ToolbarEvent::Dropped))
         }
         _ => None,
     }

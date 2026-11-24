@@ -9,7 +9,7 @@ use kirie_ui::space;
 use kirie_ui::widget::{divider, floating, icon_button, primary_button, secondary_button};
 
 use super::annotate;
-use super::{Action, Message, Overlay, canvas};
+use super::{Action, Message, Overlay, ToolbarEvent, canvas};
 use crate::annotate::annotator::Change;
 use crate::annotate::controls;
 use crate::annotate::paint::Part;
@@ -294,8 +294,8 @@ impl Overlay {
             )
             .center_y(Length::Fill),
         )
-        .on_move(Message::GripHover)
-        .on_press(Message::ToolbarGrab)
+        .on_move(|at| Message::Toolbar(ToolbarEvent::Hover(at)))
+        .on_press(Message::Toolbar(ToolbarEvent::Grab))
         .interaction(if self.toolbar_drag.is_some() {
             mouse::Interaction::Grabbing
         } else {

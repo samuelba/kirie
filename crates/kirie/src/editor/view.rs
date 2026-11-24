@@ -13,7 +13,9 @@ use kirie_ui::{Palette, Scheme, space};
 use super::annotate;
 use super::canvas::{Backdrop, Board};
 use super::viewport::Zoom;
-use super::{Editor, Message};
+use super::{
+    CropEvent, Editor, FileEvent, FinishEvent, Message, OutsideEvent, WindowEvent, ZoomEvent,
+};
 use crate::annotate::annotator::Change;
 use crate::annotate::controls;
 use crate::annotate::paint::Part;
@@ -97,14 +99,14 @@ impl Editor {
             "Take a screenshot",
             palette,
             false,
-            Some(Message::Capture),
+            Some(Message::Window(WindowEvent::Capture)),
         );
         let open = icon_button(
             Icon::Open,
             "Open an image (Ctrl+O)",
             palette,
             false,
-            Some(Message::Open),
+            Some(Message::File(FileEvent::Open)),
         );
         let mut actions = row![open, capture, divider(palette), history]
             .spacing(space::S)
@@ -146,7 +148,7 @@ impl Editor {
                 "Discard the image (Ctrl+W)",
                 palette,
                 false,
-                Some(Message::Discard),
+                Some(Message::Finish(FinishEvent::Discard)),
             ))
             .push(icon_button(
                 Icon::Project,
@@ -154,23 +156,28 @@ impl Editor {
                      (Ctrl+Alt+S)",
                 palette,
                 false,
-                Some(Message::SaveProject),
+                Some(Message::File(FileEvent::SaveProject)),
             ))
             .push(icon_button(
                 Icon::SaveAs,
                 "Save as… (Ctrl+Shift+S)",
                 palette,
                 false,
-                Some(Message::SaveAs),
+                Some(Message::File(FileEvent::SaveAs)),
             ))
             .push(icon_button(
                 Icon::Save,
                 "Save to Pictures and copy (Ctrl+S or Shift+Enter)",
                 palette,
                 false,
-                Some(Message::Save),
+                Some(Message::File(FileEvent::Save)),
             ))
-            .push(primary_button(Icon::Copy, "Copy", palette, Message::Copy))
+            .push(primary_button(
+                Icon::Copy,
+                "Copy",
+                palette,
+                Message::File(FileEvent::Copy),
+            ))
             .spacing(space::S)
             .align_y(Alignment::Center)
             .into()
@@ -188,7 +195,7 @@ impl Editor {
             .align_y(Alignment::Center),
         )
         .padding([space::XS, space::S])
-        .on_press(Message::About(true))
+        .on_press(Message::Outside(OutsideEvent::About(true)))
         .style(move |_, status| button::Style {
             background: match status {
                 button::Status::Hovered => Some(Background::Color(palette.surface[1])),
@@ -221,7 +228,9 @@ impl Editor {
             "Crop (Shift+C)",
             palette,
             self.cropping.is_some(),
-            self.image.is_some().then_some(Message::Crop),
+            self.image
+                .is_some()
+                .then_some(Message::Crop(CropEvent::Start)),
         );
         container(
             column(tools)
@@ -303,7 +312,7 @@ impl Editor {
                 content = content.push(secondary_button(
                     "Show in Files",
                     palette,
-                    Message::ShowInFiles(file.clone()),
+                    Message::Outside(OutsideEvent::ShowInFiles(file.clone())),
                 ));
                 padding = Padding::from(space::S).left(space::L);
             }
@@ -348,9 +357,9 @@ impl Editor {
                         .size(12)
                         .color(palette.muted),
                 ],
-                secondary_button("Whole image", palette, Message::CropReset),
-                secondary_button("Cancel", palette, Message::CropCancel),
-                primary_button(Icon::Crop, "Crop", palette, Message::CropDone),
+                secondary_button("Whole image", palette, Message::Crop(CropEvent::Reset)),
+                secondary_button("Cancel", palette, Message::Crop(CropEvent::Cancel)),
+                primary_button(Icon::Crop, "Crop", palette, Message::Crop(CropEvent::Done)),
             ]
             .spacing(space::M)
             .align_y(Alignment::Center),
@@ -373,14 +382,14 @@ impl Editor {
                     Icon::Capture,
                     "Take a screenshot",
                     palette,
-                    Message::Capture
+                    Message::Window(WindowEvent::Capture)
                 ),
                 icon_button(
                     Icon::Open,
                     "Open an image (Ctrl+O)",
                     palette,
                     false,
-                    Some(Message::Open)
+                    Some(Message::File(FileEvent::Open))
                 ),
             ]
             .spacing(space::S)
@@ -399,14 +408,14 @@ impl Editor {
                 "Fit (Ctrl+0)",
                 palette,
                 self.viewport.is_fitted(),
-                Some(Message::ZoomFit)
+                Some(Message::Zoom(ZoomEvent::Fit))
             ),
             icon_button(
                 Icon::Image,
                 "Actual size (Ctrl+1)",
                 palette,
                 false,
-                Some(Message::ZoomActual)
+                Some(Message::Zoom(ZoomEvent::Actual))
             ),
             text("Ctrl+scroll to zoom").size(12).color(palette.muted),
         ]
@@ -555,17 +564,17 @@ impl Editor {
                 Icon::ZoomOut,
                 "Zoom out (Ctrl+-)",
                 palette,
-                Some(Message::ZoomOut)
+                Some(Message::Zoom(ZoomEvent::Out))
             ),
             // A fitted image is never enlarged, so "Fit 100%" is the longest label it shows.
             small_pick_list(levels, shown, "Fit 100%", palette, |choice| {
-                Message::ZoomTo(choice.zoom())
+                Message::Zoom(ZoomEvent::To(choice.zoom()))
             }),
             small_icon_button(
                 Icon::ZoomIn,
                 "Zoom in (Ctrl++)",
                 palette,
-                Some(Message::ZoomIn)
+                Some(Message::Zoom(ZoomEvent::In))
             ),
         ]
         .spacing(2)
