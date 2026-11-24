@@ -18,7 +18,8 @@ use std::collections::HashMap;
 use std::io::Read as _;
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::Duration;
 
 use iced::futures::Stream;
 use iced::futures::channel::mpsc;
@@ -61,6 +62,8 @@ pub enum Dropped {
 #[derive(Clone)]
 pub struct Device {
     shared: Arc<Mutex<Shared>>,
+    /// Signals that a reader has taken what the window offers, or that it offers nothing.
+    handed: Arc<Condvar>,
 }
 
 impl std::fmt::Debug for Device {
@@ -86,6 +89,8 @@ struct Shared {
     selection: Option<(WlDataOffer, Vec<String>)>,
     /// What the window offers on the clipboard, until something else is copied.
     own: Option<(WlDataSource, Copied)>,
+    /// A reader has taken all of what the window offers.
+    handed: bool,
     /// The serial of the window's latest input.
     serial: Option<u32>,
 }
@@ -206,7 +211,28 @@ impl Device {
             .flush()
             .map_err(|error| format!("cannot reach the compositor: {error}"))?;
         shared.own = Some((source, copied));
+        shared.handed = false;
         Ok(())
+    }
+
+    /// Waits up to `timeout` until a reader has taken what the window offers, as GNOME does at
+    /// once to keep it after the window closes; true when it has, or the window offers nothing.
+    pub fn wait_handed(&self, timeout: Duration) -> bool {
+        let (_shared, waited) = self
+            .handed
+            .wait_timeout_while(self.lock(), timeout, |shared| {
+                shared.own.is_some() && !shared.handed
+            })
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        !waited.timed_out()
+    }
+
+    fn handed(&self, source: &WlDataSource) {
+        let mut shared = self.lock();
+        if shared.own.as_ref().is_some_and(|(own, _)| own == source) {
+            shared.handed = true;
+        }
+        self.handed.notify_all();
     }
 }
 
@@ -280,8 +306,10 @@ fn listen(display: usize, sender: mpsc::UnboundedSender<Dropped>) -> Result<(), 
             seats: Vec::new(),
             selection: None,
             own: None,
+            handed: false,
             serial: None,
         })),
+        handed: Arc::new(Condvar::new()),
     };
     let mut state = State {
         connection,
@@ -541,6 +569,7 @@ impl Dispatch<WlDataSource, Arc<[u8]>> for State {
         match event {
             wl_data_source::Event::Send { fd, .. } => {
                 let bytes = Arc::clone(bytes);
+                let (device, source) = (state.device.clone(), source.clone());
                 // A reader as slow as it likes, even this window pasting, must not hold up
                 // the queue.
                 let spawned =
@@ -548,8 +577,11 @@ impl Dispatch<WlDataSource, Arc<[u8]>> for State {
                         .name("kirie-copy".into())
                         .spawn(move || {
                             use std::io::Write as _;
-                            if let Err(error) = std::fs::File::from(fd).write_all(&bytes) {
-                                tracing::debug!(%error, "cannot hand over the clipboard");
+                            match std::fs::File::from(fd).write_all(&bytes) {
+                                Ok(()) => device.handed(&source),
+                                Err(error) => {
+                                    tracing::debug!(%error, "cannot hand over the clipboard");
+                                }
                             }
                         });
                 if let Err(error) = spawned {
@@ -561,6 +593,8 @@ impl Dispatch<WlDataSource, Arc<[u8]>> for State {
                 if shared.own.as_ref().is_some_and(|(own, _)| own == source) {
                     shared.own = None;
                 }
+                drop(shared);
+                state.device.handed.notify_all();
                 source.destroy();
             }
             _ => {}
