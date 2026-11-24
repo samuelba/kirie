@@ -493,7 +493,8 @@ impl Overlay {
                 let surface = self
                     .surfaces
                     .get(&id)
-                    .map(|&index| self.screens[index].area);
+                    .and_then(|&index| self.screens.get(index))
+                    .map(|screen| screen.area);
                 if let (Some(held), Some(surface)) = (self.toolbar_drag, surface) {
                     let desktop = Point::new(at.x + surface.x, at.y + surface.y);
                     self.toolbar_at = Some(desktop - held);
@@ -547,10 +548,15 @@ impl Overlay {
 
     /// Shows the screen a fullscreen window landed on: the one with the window's size.
     fn place(&mut self, id: window::Id, size: Size) {
-        let Some(index) = self.screens.iter().position(|screen| {
-            (screen.area.width - size.width).abs() < 1.0
-                && (screen.area.height - size.height).abs() < 1.0
-        }) else {
+        let Some((index, area)) = self
+            .screens
+            .iter()
+            .map(|screen| screen.area)
+            .enumerate()
+            .find(|(_, area)| {
+                (area.width - size.width).abs() < 1.0 && (area.height - size.height).abs() < 1.0
+            })
+        else {
             return;
         };
         if self.surfaces.len() > 1 {
@@ -561,7 +567,7 @@ impl Overlay {
         {
             *shown = index;
             if self.surfaces.len() == 1 {
-                self.desktop = self.screens[index].area;
+                self.desktop = area;
                 // A remembered region on another screen stays remembered for when it fits.
                 self.remembered = crate::overlay::region::load()
                     .and_then(|region| crate::overlay::region::within(region, self.desktop));
@@ -971,6 +977,9 @@ pub fn run(
 ) -> Result<Outcome, String> {
     use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
 
+    if frames.is_empty() {
+        return Err("there is no screen to show".to_owned());
+    }
     let outcome = Arc::new(Mutex::new(Outcome::Canceled));
     let shared = outcome.clone();
     let start = Mutex::new(Some((frames, windows)));
@@ -1028,6 +1037,22 @@ fn annotate<T>(change: impl Fn(T) -> Change + Clone) -> impl Fn(T) -> Message + 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_screens_is_an_error_not_an_overlay() {
+        assert!(run(Vec::new(), Vec::new(), Action::Copy, Host::Window).is_err());
+    }
+
+    #[test]
+    fn a_surface_without_its_screen_shows_nothing() {
+        let outcome = Arc::new(Mutex::new(Outcome::Canceled));
+        let (mut overlay, _) =
+            Overlay::boot(Vec::new(), Vec::new(), Action::Copy, Host::Window, outcome);
+        for id in overlay.surfaces.keys().copied().collect::<Vec<_>>() {
+            let _ = overlay.view(id);
+            let _ = overlay.update(Message::Toolbar(ToolbarEvent::Moved(id, Point::ORIGIN)));
+        }
+    }
 
     #[test]
     fn every_tool_key_picks_its_tool() {

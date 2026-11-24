@@ -32,10 +32,13 @@ const ROOM_FOR_CUSTOM: usize = 4;
 
 impl Overlay {
     pub fn view(&self, id: window::Id) -> Element<'_, Message> {
-        let Some(&index) = self.surfaces.get(&id) else {
+        let Some((index, screen)) = self
+            .surfaces
+            .get(&id)
+            .and_then(|&index| Some((index, self.screens.get(index)?)))
+        else {
             return Space::new().into();
         };
-        let screen = &self.screens[index];
         let picture = stack![
             image(screen.handle.clone())
                 .width(Length::Fill)
