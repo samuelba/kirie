@@ -39,14 +39,7 @@ pub(super) fn capture(
     }
     state.pending = (0..frames.len()).map(|_| Pending::default()).collect();
     let announces_done = manager.version() >= BUFFER_DONE;
-    wait(state, queue, |pending| {
-        pending.finished.is_some()
-            || if announces_done {
-                pending.constraints_done
-            } else {
-                pending.size.is_some()
-            }
-    })?;
+    wait(state, queue, |pending| described(pending, announces_done))?;
 
     for (index, frame) in frames.iter().enumerate() {
         let pending = &mut state.pending[index];
@@ -80,6 +73,27 @@ pub(super) fn capture(
     Ok(())
 }
 
+/// Whether the compositor said all it will about a frame's buffer, or that the frame is over.
+/// Before version 3 it says nothing after the first buffer type, readable or not.
+fn described(pending: &Pending, announces_done: bool) -> bool {
+    pending.finished.is_some()
+        || if announces_done {
+            pending.constraints_done
+        } else {
+            pending.size.is_some()
+        }
+}
+
+/// Notes a buffer type offered for a frame. Every type has the same size; only readable ones
+/// are kept to copy into.
+fn offer(pending: &mut Pending, format: u32, size: (u32, u32), stride: u32) {
+    pending.size = Some(size);
+    if ShmFormat::from_wayland(format).is_some() {
+        pending.shm_formats.push(format);
+        pending.strides.push((format, stride));
+    }
+}
+
 impl Dispatch<ZwlrScreencopyFrameV1, usize> for State {
     fn event(
         state: &mut Self,
@@ -98,15 +112,7 @@ impl Dispatch<ZwlrScreencopyFrameV1, usize> for State {
                 width,
                 height,
                 stride,
-            } => {
-                let format: u32 = format.into();
-                // Every shm buffer type of a frame has the same size; only keep readable ones.
-                if ShmFormat::from_wayland(format).is_some() {
-                    pending.shm_formats.push(format);
-                    pending.size = Some((width, height));
-                    pending.strides.push((format, stride));
-                }
-            }
+            } => offer(pending, format.into(), (width, height), stride),
             zwlr_screencopy_frame_v1::Event::BufferDone => pending.constraints_done = true,
             zwlr_screencopy_frame_v1::Event::Flags {
                 flags: WEnum::Value(flags),
@@ -121,3 +127,31 @@ impl Dispatch<ZwlrScreencopyFrameV1, usize> for State {
 }
 
 delegate_noop!(State: ZwlrScreencopyManagerV1);
+
+#[cfg(test)]
+mod tests {
+    use wayland_client::protocol::wl_shm::Format;
+
+    use super::*;
+
+    #[test]
+    fn an_old_compositor_offering_only_an_unreadable_format_answers_at_once() {
+        let mut pending = Pending::default();
+        offer(&mut pending, Format::Xrgb2101010.into(), (1920, 1080), 7680);
+        assert!(described(&pending, false));
+        assert!(ShmFormat::pick(pending.shm_formats.iter().copied()).is_none());
+    }
+
+    #[test]
+    fn readable_formats_are_kept_with_their_stride() {
+        let mut pending = Pending::default();
+        offer(&mut pending, Format::Xrgb2101010.into(), (640, 480), 2560);
+        offer(&mut pending, Format::Xrgb8888.into(), (640, 480), 2560);
+        assert_eq!(pending.size, Some((640, 480)));
+        assert_eq!(pending.shm_formats, [u32::from(Format::Xrgb8888)]);
+        assert_eq!(pending.strides, [(u32::from(Format::Xrgb8888), 2560)]);
+        assert!(!described(&pending, true));
+        pending.constraints_done = true;
+        assert!(described(&pending, true));
+    }
+}
