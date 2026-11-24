@@ -623,10 +623,15 @@ impl History {
 
     /// Applies one move of an edit made in many, like dragging a slider, so they all undo in
     /// one step. A move `continuing` the same drag joins the step the drag began, unless
-    /// something else happened since, such as an undo; then it begins a step of its own.
+    /// something else happened since, such as an undo; then it begins a step of its own. A drag
+    /// back to where it began leaves no step, and its next move begins one anew.
     pub fn apply_gradually(&mut self, op: Op, continuing: bool) {
         if continuing && self.gradual {
             self.current = self.current.apply(op);
+            if self.past.last() == Some(&self.current) {
+                self.past.pop();
+                self.gradual = false;
+            }
         } else {
             self.gradual = self.apply(op);
         }
@@ -1255,6 +1260,33 @@ mod tests {
         history.undo();
         assert_eq!(history.current().shapes().len(), 1);
         assert!(!History::new(Document::new(1, 1, 1.0)).apply(Op::Clear));
+    }
+
+    #[test]
+    fn a_drag_back_to_where_it_began_leaves_no_step() {
+        let start = Document::SPOTLIGHT_BRIGHTNESS;
+        let dragged = |moves: &[f64]| {
+            let mut history = History::new(Document::new(10, 10, 1.0));
+            history.apply(line(1.0));
+            for (index, by) in moves.iter().enumerate() {
+                history.apply_gradually(Op::SetSpotlightBrightness(start + by), index > 0);
+            }
+            history.undo();
+            history
+        };
+        let back = dragged(&[0.2, 0.0]);
+        assert_eq!(
+            back.current().shapes().len(),
+            0,
+            "the undo takes back the line"
+        );
+        let on = dragged(&[0.2, 0.0, 0.3]);
+        assert_eq!(on.current().spotlight_brightness, start);
+        assert_eq!(
+            on.current().shapes().len(),
+            1,
+            "a drag that moves on after coming back undoes in one step"
+        );
     }
 
     #[test]
