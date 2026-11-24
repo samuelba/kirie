@@ -1,6 +1,7 @@
 //! Screen capture for Kirie: every screen at its native resolution, laid out in the
 //! compositor's logical coordinates.
 
+mod activities;
 mod bus;
 pub mod geometry;
 pub mod pixels;

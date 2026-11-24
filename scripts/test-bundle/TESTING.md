@@ -28,6 +28,9 @@ starts Plasma on X11 by default, so pick **Plasma (Wayland)** on the login scree
 ## KDE Plasma (Kubuntu 24.04)
 
 - [ ] `kirie capture` captures through KWin without a dialog (the desktop entry grants it).
+- [ ] Clicking a window in the overlay takes that window, including one partly behind another;
+      windows on other virtual desktops, minimized ones and the panels cannot be picked.
+- [ ] `kirie capture --window` takes the topmost window.
 - [ ] `kirie shortcuts install` explains how to add the shortcut; doing so works.
 
 ## When something fails
