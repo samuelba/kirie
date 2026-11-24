@@ -1036,9 +1036,8 @@ impl Editor {
         let effect = match pointer {
             Pointer::Pressed(at) => {
                 let reach = MARK_REACH / f64::from(scale.max(0.01));
-                #[allow(clippy::cast_possible_truncation)]
-                let click = Point::new(at.x as f32, at.y as f32);
-                self.annotator.press(self.tool, at, click, reach)
+                self.annotator
+                    .press(self.tool, at, on_screen(at, scale), reach)
             }
             Pointer::Moved(at) => {
                 self.annotator.drag(at);
@@ -1462,6 +1461,12 @@ fn to_point(at: kurbo::Point) -> Point {
     Point::new(at.x as f32, at.y as f32)
 }
 
+/// The image point `at` as far apart from others as the picture shows it at `scale`, so that a
+/// double click allows the same slip at every zoom.
+fn on_screen(at: kurbo::Point, scale: f32) -> Point {
+    to_point((at.to_vec2() * f64::from(scale)).to_point())
+}
+
 #[allow(clippy::cast_possible_truncation)]
 fn to_rectangle(rect: kurbo::Rect) -> iced::Rectangle {
     iced::Rectangle::new(
@@ -1665,6 +1670,24 @@ mod tests {
             focused,
             Some(Message::Window(WindowEvent::Focused))
         ));
+    }
+
+    #[test]
+    fn a_double_click_allows_the_same_slip_on_screen_at_every_zoom() {
+        let first = kurbo::Point::new(100.0, 100.0);
+        let second = kurbo::Point::new(108.0, 100.0);
+        for (scale, double) in [(0.25, true), (4.0, false)] {
+            let mut last = None;
+            assert!(!crate::annotate::typing::double_click(
+                &mut last,
+                on_screen(first, scale)
+            ));
+            assert_eq!(
+                crate::annotate::typing::double_click(&mut last, on_screen(second, scale)),
+                double,
+                "8 image px apart at {scale}x"
+            );
+        }
     }
 
     #[test]
