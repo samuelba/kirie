@@ -97,16 +97,26 @@ fn installer_command(version: &Version, tarball: &str) -> Command {
 }
 
 fn fetch(url: &str, name: &str) -> Result<Vec<u8>, String> {
-    let mut body = Vec::new();
-    AGENT
+    let response = AGENT
         .get(url)
         .call()
-        .map_err(|error| format!("cannot download {name}: {error}"))?
-        .into_body()
-        .into_reader()
-        .take(MAX_DOWNLOAD)
+        .map_err(|error| format!("cannot download {name}: {error}"))?;
+    read_capped(response.into_body().into_reader(), name)
+}
+
+/// All of `reader`, or an error when it holds more than [`MAX_DOWNLOAD`] bytes.
+fn read_capped(reader: impl std::io::Read, name: &str) -> Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    reader
+        .take(MAX_DOWNLOAD + 1)
         .read_to_end(&mut body)
         .map_err(|error| format!("cannot download {name}: {error}"))?;
+    if u64::try_from(body.len()).map_or(true, |length| length > MAX_DOWNLOAD) {
+        return Err(format!(
+            "{name} is larger than {} MB",
+            MAX_DOWNLOAD / 1024 / 1024
+        ));
+    }
     Ok(body)
 }
 
@@ -207,6 +217,15 @@ mod tests {
         assert_eq!(env("KIRIE_UNINSTALL"), Some(None));
         assert_eq!(env("KIRIE_VERSION"), Some(Some(OsStr::new("1.2.3"))));
         assert_eq!(env("KIRIE_SHA256"), Some(Some(OsStr::new("abc"))));
+    }
+
+    #[test]
+    fn downloads_past_the_limit_are_refused_not_cut() {
+        let bytes = |length| std::io::repeat(7).take(length);
+        let whole = read_capped(bytes(MAX_DOWNLOAD), "install.sh").unwrap();
+        assert_eq!(whole.len(), usize::try_from(MAX_DOWNLOAD).unwrap());
+        let error = read_capped(bytes(MAX_DOWNLOAD + 1), "install.sh").unwrap_err();
+        assert_eq!(error, "install.sh is larger than 16 MB");
     }
 
     #[test]
