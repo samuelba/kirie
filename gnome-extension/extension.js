@@ -262,7 +262,7 @@ export default class KirieExtension extends Extension {
         if (actor)
             Main.wm.skipNextEffect(actor);
         const place = () => {
-                const match = OVERLAY_TITLE.exec(window.get_title() ?? '');
+            const match = OVERLAY_TITLE.exec(window.get_title() ?? '');
             if (!match)
                 return false;
             const index = Number(match[1]);
@@ -274,11 +274,16 @@ export default class KirieExtension extends Extension {
             window.activate(global.get_current_time());
             return true;
         };
-        if (!place()) {
-            const id = window.connect('notify::title', () => {
-                if (place())
-                    window.disconnect(id);
-            });
-        }
+        // GNOME 51 leaves a window that is moved or made fullscreen before it is first shown
+        // stuck at its default size.
+        const shownId = window.connect('shown', () => {
+            window.disconnect(shownId);
+            if (!place()) {
+                const titleId = window.connect('notify::title', () => {
+                    if (place())
+                        window.disconnect(titleId);
+                });
+            }
+        });
     }
 }
