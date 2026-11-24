@@ -1793,7 +1793,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("1") if command => Some(Message::ZoomActual),
         keyboard::Key::Character("=" | "+") if command => Some(Message::ZoomIn),
         keyboard::Key::Character("-") if command => Some(Message::ZoomOut),
-        keyboard::Key::Character("c") if !command => Some(Message::Crop),
+        keyboard::Key::Character("c" | "C") if !command && modifiers.shift() => Some(Message::Crop),
         keyboard::Key::Character("m") if !command => {
             Some(Message::MarkList(mark_list::Event::Toggle))
         }
@@ -1852,21 +1852,22 @@ pub fn run(loaded: Option<Loaded>, card: Option<Card>, token: Option<String>) ->
 mod tests {
     use super::*;
 
+    fn press(key: &str, modifiers: keyboard::Modifiers) -> Event {
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            key: keyboard::Key::Character(key.into()),
+            modified_key: keyboard::Key::Character(key.into()),
+            physical_key: keyboard::key::Physical::Unidentified(
+                keyboard::key::NativeCode::Unidentified,
+            ),
+            location: keyboard::Location::Standard,
+            modifiers,
+            text: None,
+            repeat: false,
+        })
+    }
+
     #[test]
     fn ctrl_q_closes_the_editor_even_while_typing() {
-        let press = |key: &str, modifiers| {
-            Event::Keyboard(keyboard::Event::KeyPressed {
-                key: keyboard::Key::Character(key.into()),
-                modified_key: keyboard::Key::Character(key.into()),
-                physical_key: keyboard::key::Physical::Unidentified(
-                    keyboard::key::NativeCode::Unidentified,
-                ),
-                location: keyboard::Location::Standard,
-                modifiers,
-                text: None,
-                repeat: false,
-            })
-        };
         let id = window::Id::unique();
         let ctrl_q = || press("q", keyboard::Modifiers::CTRL);
         for listen in [key, typing_key, crop_key] {
@@ -1887,6 +1888,31 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn every_tool_key_picks_its_tool_and_shift_c_crops() {
+        let id = window::Id::unique();
+        for tool in Tool::ALL {
+            let letter = tool.key().to_string();
+            assert!(
+                matches!(
+                    key(press(&letter, keyboard::Modifiers::empty()), event::Status::Ignored, id),
+                    Some(Message::PickTool(picked)) if picked == tool
+                ),
+                "{letter} picks {tool:?}"
+            );
+        }
+        for written in ["c", "C"] {
+            assert!(matches!(
+                key(
+                    press(written, keyboard::Modifiers::SHIFT),
+                    event::Status::Ignored,
+                    id
+                ),
+                Some(Message::Crop)
+            ));
+        }
     }
 
     #[test]
