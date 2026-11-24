@@ -1373,20 +1373,48 @@ async fn capture() -> Result<(), String> {
     tokio::time::sleep(Duration::from_millis(350)).await;
     let exe = crate::desktop::launch::exe().map_err(|error| error.to_string())?;
     tokio::task::spawn_blocking(move || {
-        std::process::Command::new(exe)
+        let mut child = std::process::Command::new(exe)
             .args(["capture", "--edit"])
-            .status()
-            .map_err(|error| format!("cannot take a screenshot: {error}"))
-            .and_then(|status| {
-                if status.success() {
-                    Ok(())
-                } else {
-                    Err("the screenshot failed".to_owned())
-                }
-            })
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("cannot take a screenshot: {error}"))?;
+        let said = child.stderr.take().map(pass_on);
+        let status = child
+            .wait()
+            .map_err(|error| format!("cannot take a screenshot: {error}"))?;
+        if status.success() {
+            return Ok(());
+        }
+        Err(said
+            .and_then(|said| last_error(&said))
+            .unwrap_or_else(|| "the screenshot failed".to_owned()))
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// Passes what `stderr` says on to the editor's own, line by line, as they come.
+fn pass_on(stderr: impl std::io::Read + Send + 'static) -> std::sync::mpsc::Receiver<String> {
+    use std::io::BufRead as _;
+    let (sender, said) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stderr)
+            .lines()
+            .map_while(Result::ok)
+        {
+            eprintln!("{line}");
+            let _ = sender.send(line);
+        }
+    });
+    said
+}
+
+/// The error the capture ended with. Programs it started may keep its stderr open, so this
+/// stops once it has been quiet for a moment rather than at its end.
+fn last_error(said: &std::sync::mpsc::Receiver<String>) -> Option<String> {
+    std::iter::from_fn(|| said.recv_timeout(Duration::from_millis(200)).ok())
+        .filter_map(|line| line.strip_prefix("Error: ").map(str::to_owned))
+        .last()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1594,6 +1622,21 @@ fn annotate<T>(change: impl Fn(T) -> Change + Clone) -> impl Fn(T) -> Message + 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_capture_tells_its_error() {
+        let said = pass_on(std::io::Cursor::new(
+            "MESA: warning\nError: the clipboard cannot be reached here\n",
+        ));
+        assert_eq!(
+            last_error(&said).as_deref(),
+            Some("the clipboard cannot be reached here")
+        );
+        assert_eq!(
+            last_error(&pass_on(std::io::Cursor::new("MESA: warning\n"))),
+            None
+        );
+    }
 
     fn press(key: &str, modifiers: keyboard::Modifiers) -> Event {
         Event::Keyboard(keyboard::Event::KeyPressed {
