@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.0](https://github.com/samuelba/kirie/compare/v0.3.0...v0.4.0) (2026-11-24)
+
+
+### Features
+
+* **annotate:** add emoji to text and a sticker tool (@samuelba) ([a3507aa](https://github.com/samuelba/kirie/commit/a3507aaf51e3152b7612a1cde33ea0cdd9cc1cb5))
+* **editor:** list the marks to pick one that others cover (@samuelba) ([02f2804](https://github.com/samuelba/kirie/commit/02f280473ce31c7c69e9fe0966b4eaaa3001844e))
+* **editor:** show a drop zone while an image or project is dragged over (@samuelba) ([47305b7](https://github.com/samuelba/kirie/commit/47305b750f273b645178b00084953dabd3cf6921))
+
+
+### Bug Fixes
+
+* **annotate:** offer emoji names typed right after an emoji (@samuelba) ([ca364d6](https://github.com/samuelba/kirie/commit/ca364d6014f0778584eec91adc9ca08f156eb7d2))
+* **editor:** copy from the editor where no background process can hold the clipboard (@samuelba) ([869e68d](https://github.com/samuelba/kirie/commit/869e68d7b14404ba156b77759628575e5aa8f462))
+* **editor:** paste what the editor copied itself on GNOME (@samuelba) ([2907213](https://github.com/samuelba/kirie/commit/29072135df404b39eb8cdbc658fd060008273169))
+* **editor:** say a copied image stays on the clipboard after the editor closes (@samuelba) ([869e68d](https://github.com/samuelba/kirie/commit/869e68d7b14404ba156b77759628575e5aa8f462))
+
 ## [0.3.0](https://github.com/samuelba/kirie/compare/v0.2.0...v0.3.0) (2026-11-23)
 
 
