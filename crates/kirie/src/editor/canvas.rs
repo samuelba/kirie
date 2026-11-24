@@ -39,7 +39,7 @@ impl Board<'_> {
 
     /// Whether a press started a gesture whose moves and release matter.
     fn gesture(&self) -> bool {
-        self.editor.draft.is_some()
+        self.editor.annotator.draft.is_some()
             || self
                 .editor
                 .cropping
@@ -74,13 +74,13 @@ impl canvas::Program<Message> for Board<'_> {
                     ScrollDelta::Lines { x, y } => (x * LINE, y * LINE),
                     ScrollDelta::Pixels { x, y } => (x, y),
                 };
-                if self.editor.modifiers.command() {
+                if self.editor.annotator.modifiers.command() {
                     publish(Message::Zoom {
                         factor: 2f32.powf(y / LINE / WHEEL_STEPS),
                         anchor: at,
                         canvas,
                     })
-                } else if self.editor.modifiers.shift() {
+                } else if self.editor.annotator.modifiers.shift() {
                     publish(Message::Pan(Vector::new(y, x)))
                 } else {
                     publish(Message::Pan(Vector::new(x, y)))
@@ -163,7 +163,7 @@ impl canvas::Program<Message> for Board<'_> {
         } else if let Some(crop) = editor.crop() {
             draw_crop(&mut frame, crop, transform, bounds.size(), editor);
         }
-        if editor.sampling()
+        if editor.annotator.sampling()
             && let Some(local) = cursor.position_in(bounds)
         {
             let at = editor
@@ -216,7 +216,7 @@ impl Board<'_> {
         draw_picked(
             frame,
             picked,
-            &editor.picked,
+            &editor.annotator.picked,
             editor.document(),
             transform,
             pixel,
@@ -225,12 +225,12 @@ impl Board<'_> {
         if let Some(shape) = editor
             .mark_list
             .hovered()
-            .filter(|id| !editor.picked.contains(id))
+            .filter(|id| !editor.annotator.picked.contains(id))
             .and_then(|id| editor.document().shape(id))
         {
             draw_listed(frame, shape, editor.document(), transform, accent);
         }
-        if let Some(rect) = editor.draft.as_ref().and_then(Draft::marquee) {
+        if let Some(rect) = editor.annotator.draft.as_ref().and_then(Draft::marquee) {
             draw_marquee(frame, rect, transform, accent);
         }
     }
@@ -249,7 +249,7 @@ impl Board<'_> {
             .editor
             .viewport
             .image_point(local, self.content(), bounds.size());
-        if self.editor.sampling() {
+        if self.editor.annotator.sampling() {
             return Interaction::Crosshair;
         }
         if let Some(cropping) = &self.editor.cropping {
@@ -263,8 +263,8 @@ impl Board<'_> {
                 let reach = MARK_REACH / f64::from(scale(self.editor, bounds.size()));
                 crate::canvas::cursor::select(
                     self.editor.document(),
-                    &self.editor.picked,
-                    self.editor.draft.as_ref(),
+                    &self.editor.annotator.picked,
+                    self.editor.annotator.draft.as_ref(),
                     at,
                     reach,
                 )
@@ -294,30 +294,14 @@ impl Board<'_> {
             patches: &editor.patches,
             pictures: &editor.pictures,
         };
-        let preview = editor
-            .draft
-            .as_ref()
-            .and_then(Draft::preview)
-            .map(|kind| Shape {
-                id: document.next_id(),
-                kind,
-                paint: editor.paint,
-                style: None,
-                rotation: 0.0,
-            })
-            .or_else(|| {
-                editor
-                    .typing
-                    .as_ref()
-                    .map(|typing| typing.preview(document, editor.paint))
-            });
+        let preview = editor.annotator.preview();
         painter.draw_marks(
             frame,
             Marks {
                 document,
-                draft: editor.draft.as_ref(),
+                draft: editor.annotator.draft.as_ref(),
                 preview,
-                picked: &editor.picked,
+                picked: &editor.annotator.picked,
                 visible: document.visible(),
                 layer: Some(layer.unwrap_or(usize::MAX)),
             },

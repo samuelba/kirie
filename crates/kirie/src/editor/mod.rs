@@ -21,21 +21,16 @@ use ::image::RgbaImage;
 use iced::widget::image;
 use iced::{Event, Point, Size, Subscription, Task, Vector, event, keyboard, window};
 use kirie_annotate::project::{self, Project};
-use kirie_annotate::{
-    Document, Draft, History, Kind, Op, Paint, Press, Rgba, Shape, ShapeId, StyleId, Tool,
-    Typesetter, Weight,
-};
+use kirie_annotate::{Document, Draft, History, Op, Rgba, Shape, Tool, Typesetter};
 use kirie_ui::{Palette, Scheme};
 
 use self::closing::{Answer, Closing, Then};
 use self::viewport::{Viewport, Zoom};
-use crate::annotate::controls;
+use crate::annotate::annotator::{Annotator, Change, Effect};
 use crate::annotate::drawing::Drawing;
-use crate::annotate::emoji_picker::EmojiPicker;
-use crate::annotate::picker::{self, Picker, Target};
+use crate::annotate::picker;
 use crate::annotate::selection::{Release, Selection};
 use crate::annotate::swatches::Swatches;
-use crate::annotate::typing::{self, Typing};
 
 /// How close to a mark a click picks it, in screen pixels.
 const MARK_REACH: f64 = 6.0;
@@ -137,44 +132,23 @@ pub enum Message {
     Canvas(Size),
     Modifiers(keyboard::Modifiers),
     PickTool(Tool),
-    PickStyle(StyleId),
-    ToggleShadow,
-    PickColor(Rgba),
-    /// Opens the color picker on a swatch, or to add one.
-    EditColor(Target),
-    Picker(picker::Event),
-    Weight(crate::annotate::controls::WeightEvent),
-    ToggleFill,
-    Brightness(controls::BrightnessEvent),
-    Spot(kirie_annotate::SpotShape),
-    Look(controls::TextEvent),
-    Emoji(crate::annotate::emoji_picker::Event),
-    /// Moves through or picks the emoji offered while typing.
-    Choose(crate::annotate::typing::Choice),
+    /// An edit the overlay offers too.
+    Annotate(Change),
     Frame(frame::Event),
     MarkList(mark_list::Event),
     ToggleScheme,
-    TextEdit(iced::widget::text_editor::Action),
-    TextDone,
     /// Pastes the clipboard's text into the text being typed.
     PasteText,
     /// The window lost the keyboard.
     Unfocused,
     /// The window got the keyboard back, perhaps after the overlay ran in a process of its own.
     Focused,
-    Undo,
-    Redo,
-    Delete,
     /// Picks every mark with the select tool.
     SelectAll,
     /// Ctrl+C: copies the picked marks, else the picture.
     CopyKey,
     /// Copies the picked marks and deletes them.
     Cut,
-    /// Copies the picked marks a step aside.
-    Duplicate,
-    /// Moves the picked marks up or down among the others.
-    Restack(kirie_annotate::marks::Restack),
     /// Copied marks reached the clipboard, or did not; with what to tell.
     Offered(Result<String, String>),
     /// What was on the clipboard when Ctrl+V was pressed.
@@ -283,7 +257,7 @@ pub struct Editor {
     palette: Palette,
     image: Option<(RgbaImage, image::Handle)>,
     path: Option<PathBuf>,
-    history: History,
+    annotator: Annotator,
     /// The document as last opened, saved or copied, to tell unsaved changes.
     kept: Document,
     closing: Closing,
@@ -302,24 +276,11 @@ pub struct Editor {
     /// The image point under the pointer.
     hover: Option<kurbo::Point>,
     tool: Tool,
-    paint: Paint,
-    swatches: Swatches,
-    picker: Option<Picker>,
-    emojis: EmojiPicker,
-    draft: Option<Draft>,
-    /// The marks the select tool picked; a lone one shows its grips.
-    picked: Vec<ShapeId>,
     mark_list: mark_list::Shown,
     /// The marks copied last, while the clipboard is not known to hold them: Ctrl+V pastes them
     /// while they are on their way there, or, should they never get there, when it holds
     /// neither marks nor an image.
     clip: Option<(Vec<Shape>, Offer)>,
-    /// A slider is being dragged; its moves undo as one step.
-    sliding: bool,
-    typing: Option<Typing>,
-    /// The last press, to tell a double click.
-    last_click: Option<iced::advanced::mouse::Click>,
-    modifiers: keyboard::Modifiers,
     toast: Option<Toast>,
     toasts: u64,
     /// Set once the user picks light or dark; until then the editor follows the desktop.
@@ -349,6 +310,7 @@ impl Editor {
     fn boot_with(loaded: Option<Loaded>, token: Option<String>) -> (Self, Task<Message>) {
         let swatches = Swatches::load();
         let drawing = Drawing::load();
+        let paint = drawing.paint_for(Some(Tool::Arrow), &swatches);
         let blank = drawing.styled(Document::new(1, 1, 1.0));
         let placement = Placement::default();
         let (id, opened) = window::open(settings(placement));
@@ -358,7 +320,7 @@ impl Editor {
             palette: Palette::DARK,
             image: None,
             path: None,
-            history: History::new(blank.clone()),
+            annotator: Annotator::new(blank.clone(), paint, swatches),
             kept: blank,
             closing: Closing::No,
             about: false,
@@ -370,18 +332,8 @@ impl Editor {
             canvas: Size::ZERO,
             hover: None,
             tool: Tool::Arrow,
-            paint: drawing.paint_for(Some(Tool::Arrow), &swatches),
-            swatches,
-            picker: None,
-            emojis: EmojiPicker::load(),
-            draft: None,
-            picked: Vec::new(),
             mark_list: mark_list::Shown::Closed,
             clip: None,
-            sliding: false,
-            typing: None,
-            last_click: None,
-            modifiers: keyboard::Modifiers::default(),
             toast: None,
             toasts: 0,
             scheme_chosen: false,
@@ -427,22 +379,22 @@ impl Editor {
         } else {
             document
         };
-        self.paint = drawing.paint_for(Some(self.tool), &self.swatches);
+        self.annotator.paint = drawing.paint_for(Some(self.tool), &self.annotator.swatches);
         self.kept = document.clone();
-        self.history = History::new(document);
-        self.follow_style(drawing.style);
+        self.annotator.history = History::new(document);
+        self.annotator.follow_style(drawing.style);
         self.image = Some((loaded.image, handle));
         self.path = loaded.path;
         self.viewport = Viewport::fitted();
         self.cropping = None;
-        self.draft = None;
-        self.picked.clear();
+        self.annotator.draft = None;
+        self.annotator.picked.clear();
         if demo {
             self.tool = Tool::Select;
-            self.picked = demo::picked(self.document()).into_iter().collect();
+            self.annotator.picked = demo::picked(self.document()).into_iter().collect();
         }
-        self.typing = None;
-        self.sliding = false;
+        self.annotator.typing = None;
+        self.annotator.sliding = false;
         self.closing = Closing::No;
         self.then = Then::Exit;
         self.patches.borrow_mut().clear();
@@ -451,31 +403,31 @@ impl Editor {
     /// Reads the colors and recent emoji the overlay may have saved, so the editor's next save
     /// does not put back its older copy.
     fn reload_shared(&mut self) {
-        self.swatches = Swatches::load();
-        self.emojis.reload();
+        self.annotator.swatches = Swatches::load();
+        self.annotator.emojis.reload();
     }
 
     /// Puts the image away: the editor shows its empty page again.
     fn clear(&mut self) {
         let blank = Drawing::load().styled(Document::new(1, 1, 1.0));
         self.kept = blank.clone();
-        self.history = History::new(blank);
+        self.annotator.history = History::new(blank);
         self.image = None;
         self.path = None;
         self.viewport = Viewport::fitted();
         self.cropping = None;
         self.hover = None;
-        self.draft = None;
-        self.picked.clear();
-        self.typing = None;
-        self.sliding = false;
+        self.annotator.draft = None;
+        self.annotator.picked.clear();
+        self.annotator.typing = None;
+        self.annotator.sliding = false;
         self.closing = Closing::No;
         self.then = Then::Exit;
         self.patches.borrow_mut().clear();
     }
 
     fn document(&self) -> &Document {
-        self.history.current()
+        self.annotator.history.current()
     }
 
     fn image_size(&self) -> Size {
@@ -510,7 +462,7 @@ impl Editor {
     fn drafts(&self) -> Vec<Shape> {
         let document = self.document();
         let mut drafts = Vec::new();
-        match &self.draft {
+        match &self.annotator.draft {
             Some(Draft::Moving { ids, by, .. }) => {
                 drafts.extend(
                     ids.iter()
@@ -526,7 +478,7 @@ impl Editor {
                 drafts.extend(draft.preview().map(|kind| Shape {
                     id: document.next_id(),
                     kind,
-                    paint: self.paint,
+                    paint: self.annotator.paint,
                     style: None,
                     rotation: 0.0,
                 }));
@@ -534,9 +486,10 @@ impl Editor {
             None => {}
         }
         drafts.extend(
-            self.typing
+            self.annotator
+                .typing
                 .as_ref()
-                .map(|typing| typing.preview(document, self.paint)),
+                .map(|typing| typing.preview(document, self.annotator.paint)),
         );
         drafts
     }
@@ -565,36 +518,22 @@ impl Editor {
             | Message::ZoomTo(_) => self.zoom(&message),
             Message::Hover(at) => self.hover = at,
             Message::Canvas(size) => self.canvas = size,
-            Message::Modifiers(modifiers) => self.modifiers = modifiers,
+            Message::Modifiers(modifiers) => self.annotator.modifiers = modifiers,
             Message::PickTool(tool) => self.pick_tool(tool),
-            Message::PickStyle(_)
-            | Message::ToggleShadow
-            | Message::PickColor(_)
-            | Message::EditColor(_)
-            | Message::Picker(_)
-            | Message::Weight(_)
-            | Message::ToggleFill
-            | Message::Brightness(_)
-            | Message::Spot(_)
-            | Message::Look(_)
-            | Message::Frame(_) => return self.restyle(message),
+            Message::Annotate(change) => {
+                if matches!(change, Change::Undo | Change::Redo) {
+                    self.cropping = None;
+                }
+                let effect = self.annotator.update(change);
+                return self.annotated(effect);
+            }
+            Message::Frame(event) => self.frame(event),
             Message::SystemScheme(scheme) => self.follow(Some(scheme)),
             Message::ToggleScheme => self.follow(None),
-            Message::TextEdit(_)
-            | Message::TextDone
-            | Message::PasteText
-            | Message::Choose(_)
-            | Message::Emoji(_) => {
-                return self.typed(message);
-            }
-            Message::Undo => self.travel(true),
-            Message::Redo => self.travel(false),
-            Message::Delete
-            | Message::SelectAll
+            Message::PasteText => return self.paste_text(),
+            Message::SelectAll
             | Message::CopyKey
             | Message::Cut
-            | Message::Duplicate
-            | Message::Restack(_)
             | Message::Offered(_)
             | Message::Pasted(_)
             | Message::MarkList(_) => return self.edit_marks(message),
@@ -647,24 +586,53 @@ impl Editor {
 
     fn pick_tool(&mut self, tool: Tool) {
         self.keep_crop();
-        self.commit_text();
+        self.annotator.pick_tool(Some(tool));
         self.tool = tool;
-        self.paint.color = controls::tool_color(
-            Some(tool),
-            self.paint.color,
-            self.swatches.first(self.document().style),
-        );
-        self.draft = None;
-        if tool != Tool::Select {
-            self.picked.clear();
+    }
+
+    /// Acts on what an edit did: the text box takes the keyboard, the drawing options are kept
+    /// for the next time, and colors that could not be kept are told.
+    fn annotated(&mut self, effect: Effect) -> Task<Message> {
+        if effect.settled {
+            self.remember_drawing();
         }
+        let focus = if effect.focus {
+            iced::widget::operation::focus(view::TEXT_INPUT)
+        } else {
+            Task::none()
+        };
+        match effect.error {
+            Some(error) => Task::batch([focus, self.toast(Err(error))]),
+            None => focus,
+        }
+    }
+
+    /// Changes to the frame around the picture, kept for the next time unless a slider is
+    /// still dragged.
+    fn frame(&mut self, event: frame::Event) {
+        let document = self.document();
+        let op = Op::SetFrame(event.apply(document.frame, document.unit));
+        match event {
+            frame::Event::MarginDone => self.annotator.sliding = false,
+            frame::Event::Margin(_) => {
+                self.annotator.adjust(op, true);
+                return;
+            }
+            frame::Event::Background(_)
+            | frame::Event::ToggleShadow
+            | frame::Event::ToggleOverflow => {
+                self.annotator.history.apply(op);
+            }
+        }
+        self.remember_drawing();
     }
 
     /// Esc puts down what is open, one thing at a time: the eyedropper, the settings, the crop,
     /// the color picker, the text being typed, the mark being drawn, then the picked marks.
     fn escape(&mut self) -> Task<Message> {
-        if self.sampling() {
-            return self.edit_color(picker::Event::Eyedropper);
+        if self.annotator.sampling() {
+            let effect = self.annotator.edit_color(picker::Event::Eyedropper);
+            return self.annotated(effect);
         }
         if self.settings.take().is_some() {
             return Task::none();
@@ -673,45 +641,25 @@ impl Editor {
             self.viewport = Viewport::fitted();
             return Task::none();
         }
-        if let Some(typing) = &mut self.typing
-            && typing.dismiss()
-        {
-            return iced::widget::operation::focus(view::TEXT_INPUT);
+        match self.annotator.put_down() {
+            Some(effect) => self.annotated(effect),
+            None => Task::none(),
         }
-        if self.picker.take().is_none()
-            && self.typing.take().is_none()
-            && self.draft.take().is_none()
-        {
-            self.picked.clear();
-        }
-        Task::none()
     }
 
     /// Deleting, picking, copying and pasting marks, and the list of them.
     fn edit_marks(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::MarkList(event) => return self.mark_list_event(event),
-            Message::CopyKey if self.picked.is_empty() => return self.export(Export::Copy),
+            Message::CopyKey if self.annotator.picked.is_empty() => {
+                return self.export(Export::Copy);
+            }
             Message::CopyKey => return self.copy_marks(),
-            Message::Cut if !self.picked.is_empty() => {
+            Message::Cut if !self.annotator.picked.is_empty() => {
                 let copied = self.copy_marks();
-                let ids = std::mem::take(&mut self.picked);
-                self.history.apply(Op::Remove { ids });
+                let ids = std::mem::take(&mut self.annotator.picked);
+                self.annotator.history.apply(Op::Remove { ids });
                 return copied;
-            }
-            Message::Duplicate => {
-                if let Some((op, ids)) =
-                    kirie_annotate::marks::duplicate(self.document(), &self.picked)
-                {
-                    self.history.apply(op);
-                    self.picked = ids;
-                }
-            }
-            Message::Restack(to) => {
-                if let Some(op) = kirie_annotate::marks::restack(self.document(), &self.picked, to)
-                {
-                    self.history.apply(op);
-                }
             }
             Message::Pasted(Ok(Pasted::Marks(_))) if self.image.is_none() => {
                 return self.toast(Err("Open an image to paste the marks on".to_owned()));
@@ -720,8 +668,8 @@ impl Editor {
                 self.keep_crop();
                 let _ = self.update(Message::PickTool(Tool::Select));
                 if let Some((op, ids)) = kirie_annotate::marks::paste(self.document(), &clip) {
-                    self.history.apply(op);
-                    self.picked = ids;
+                    self.annotator.history.apply(op);
+                    self.annotator.picked = ids;
                 }
             }
             Message::Pasted(Ok(Pasted::Image(image))) if self.image.is_none() => {
@@ -732,8 +680,8 @@ impl Editor {
                 match kirie_annotate::marks::place_image(self.document(), image) {
                     Ok((op, id)) => {
                         let _ = self.update(Message::PickTool(Tool::Select));
-                        self.history.apply(op);
-                        self.picked = vec![id];
+                        self.annotator.history.apply(op);
+                        self.annotator.picked = vec![id];
                     }
                     Err(error) => return self.toast(Err(error)),
                 }
@@ -749,15 +697,11 @@ impl Editor {
                 }
                 return self.toast(Ok(copied));
             }
-            Message::Delete if !self.picked.is_empty() => {
-                let ids = std::mem::take(&mut self.picked);
-                self.history.apply(Op::Remove { ids });
-            }
             Message::SelectAll if self.image.is_some() && self.cropping.is_none() => {
                 let _ = self.update(Message::PickTool(Tool::Select));
                 let document = self.document();
                 let canvas = document.canvas();
-                self.picked = document
+                self.annotator.picked = document
                     .shapes()
                     .filter(|shape| {
                         let area = shape.turn().transform_rect_bbox(document.bounds(shape));
@@ -776,7 +720,7 @@ impl Editor {
 
     /// Puts the picked marks on the clipboard, for Ctrl+V here or in another Kirie.
     fn copy_marks(&mut self) -> Task<Message> {
-        let marks = kirie_annotate::marks::of(self.document(), &self.picked);
+        let marks = kirie_annotate::marks::of(self.document(), &self.annotator.picked);
         if marks.is_empty() {
             return Task::none();
         }
@@ -889,98 +833,13 @@ impl Editor {
         }
     }
 
-    /// Changes to the style, colors, weight, fill, text look and frame, kept for the next time.
-    fn restyle(&mut self, message: Message) -> Task<Message> {
-        let settled = settled(&message);
-        let task = self.change_style(message);
-        if settled {
-            self.remember_drawing();
-        }
-        task
-    }
-
-    fn change_style(&mut self, message: Message) -> Task<Message> {
-        match message {
-            Message::PickStyle(style) => {
-                let before = self.document().style;
-                let recolor = self.swatches.recolor(before, style);
-                self.history.apply(Op::SetStyle { style, recolor });
-                self.follow_style(before);
-            }
-            Message::ToggleShadow => {
-                let shadow = !self.document().shadow;
-                self.history.apply(Op::SetShadow(shadow));
-            }
-            Message::PickColor(color) => self.repaint(|paint| paint.color = color),
-            Message::EditColor(target) => {
-                self.picker = Some(Picker::new(
-                    target,
-                    self.document().style,
-                    &self.swatches,
-                    self.paint.color,
-                ));
-            }
-            Message::Picker(event) => return self.edit_color(event),
-            Message::Weight(controls::WeightEvent::Done)
-            | Message::Brightness(controls::BrightnessEvent::Done)
-            | Message::Look(controls::TextEvent::SizeDone)
-            | Message::Frame(frame::Event::MarginDone) => self.sliding = false,
-            Message::Frame(event) => {
-                let document = self.document();
-                let op = Op::SetFrame(event.apply(document.frame, document.unit));
-                if let frame::Event::Margin(_) = event {
-                    self.history.apply_gradually(op, self.sliding);
-                    self.sliding = true;
-                } else {
-                    self.history.apply(op);
-                }
-            }
-            Message::Brightness(controls::BrightnessEvent::Slide(brightness)) => {
-                self.history
-                    .apply_gradually(Op::SetSpotlightBrightness(brightness), self.sliding);
-                self.sliding = true;
-            }
-            Message::Weight(controls::WeightEvent::Pick(weight)) => {
-                self.repaint(|paint| paint.weight = weight);
-            }
-            Message::Weight(controls::WeightEvent::Slide(width)) => {
-                self.repaint_gradually(|paint| paint.weight = Weight::new(width), true);
-            }
-            Message::ToggleFill => self.repaint(|paint| paint.filled = !paint.filled),
-            Message::Spot(spot) => self.repaint(|paint| paint.spot = spot),
-            Message::Look(event) => {
-                self.repaint_gradually(
-                    |paint| paint.text = event.apply(paint.text),
-                    event.gradual(),
-                );
-            }
-            _ => {}
-        }
-        Task::none()
-    }
-
     /// Keeps the drawing options for the next image, and the next session.
     fn remember_drawing(&self) {
-        let drawing = Drawing::load().with_marks(self.paint, self.document());
+        let drawing = Drawing::load().with_marks(self.annotator.paint, self.document());
         if self.image.is_some() {
             drawing.with_frame(self.document()).save();
         } else {
             drawing.save();
-        }
-    }
-
-    fn edit_color(&mut self, event: picker::Event) -> Task<Message> {
-        let picker::Outcome::Changed { pick } =
-            picker::update(&mut self.picker, &mut self.swatches, event)
-        else {
-            return Task::none();
-        };
-        if let Some(color) = pick {
-            self.repaint(|paint| paint.color = color);
-        }
-        match self.swatches.save() {
-            Ok(()) => Task::none(),
-            Err(error) => self.toast(Err(error)),
         }
     }
 
@@ -1075,9 +934,9 @@ impl Editor {
         match message {
             Message::Crop if self.cropping.is_some() => self.keep_crop(),
             Message::Crop if self.image.is_some() => {
-                self.commit_text();
-                self.draft = None;
-                self.picked.clear();
+                self.annotator.commit_text();
+                self.annotator.draft = None;
+                self.annotator.picked.clear();
                 let selection = Selection::selected(to_rectangle(self.document().visible()));
                 self.cropping = Some(Cropping {
                     selection,
@@ -1107,7 +966,7 @@ impl Editor {
         };
         let crop = kept(rect, self.image_size());
         if crop != self.document().crop {
-            self.history.apply(Op::Crop(crop));
+            self.annotator.history.apply(Op::Crop(crop));
         }
     }
 
@@ -1137,81 +996,6 @@ impl Editor {
         }
     }
 
-    /// Undoes or redoes a step; the drawing color follows the style there.
-    fn travel(&mut self, undo: bool) {
-        self.cropping = None;
-        let before = self.document().style;
-        if undo {
-            self.history.undo();
-        } else {
-            self.history.redo();
-        }
-        kirie_annotate::marks::prune(self.history.current(), &mut self.picked);
-        self.follow_style(before);
-    }
-
-    /// Keeps drawing in the standard color drawn with before the style changed from `before`,
-    /// in the new style's shade of it.
-    fn follow_style(&mut self, before: StyleId) {
-        let now = self.document().style;
-        if now != before {
-            let recolor = self.swatches.recolor(before, now);
-            self.paint.color = crate::annotate::controls::restyled(self.paint.color, &recolor);
-        }
-    }
-
-    /// Changes the paint for new marks, and the picked mark's paint too.
-    fn repaint(&mut self, change: impl Fn(&mut Paint)) {
-        self.repaint_gradually(change, false);
-    }
-
-    /// Like [`Self::repaint`]; a `gradual` change joins the step the slider drag began.
-    fn repaint_gradually(&mut self, change: impl Fn(&mut Paint), gradual: bool) {
-        change(&mut self.paint);
-        let Some(op) = kirie_annotate::marks::repaint(self.document(), &self.picked, change) else {
-            return;
-        };
-        if gradual {
-            self.history.apply_gradually(op, self.sliding);
-        } else {
-            self.history.apply(op);
-        }
-        self.sliding = gradual;
-    }
-
-    /// The paint the controls show: the first picked mark's, else the one new marks get.
-    fn shown_paint(&self) -> Paint {
-        kirie_annotate::marks::shown_paint(self.document(), &self.picked, self.paint)
-    }
-
-    /// Whether the text controls apply: to words being typed, picked text marks and bubbles, or
-    /// the next.
-    fn texting(&self) -> bool {
-        matches!(self.tool, Tool::Text | Tool::Bubble)
-            || self.typing.is_some()
-            || kirie_annotate::marks::all(self.document(), &self.picked, |kind| {
-                matches!(kind, Kind::Text { .. } | Kind::Bubble { .. })
-            })
-    }
-
-    /// Whether the emoji picker shows: for the sticker tool or picked stickers.
-    fn stickering(&self) -> bool {
-        kirie_annotate::marks::stickering(Some(self.tool), self.document(), &self.picked)
-    }
-
-    /// Whether the spotlight controls apply: to the spotlight tool or picked spotlights.
-    fn spotlighting(&self) -> bool {
-        self.tool == Tool::Spotlight
-            || kirie_annotate::marks::all(self.document(), &self.picked, |kind| {
-                matches!(kind, Kind::Spotlight { .. })
-            })
-    }
-
-    /// Whether a press adds to the picked marks instead of picking anew.
-    fn extending(&self) -> bool {
-        self.modifiers.shift() || self.modifiers.command()
-    }
-
     fn pointer(&mut self, pointer: Pointer, scale: f32) -> Task<Message> {
         if self.image.is_none() {
             return Task::none();
@@ -1219,7 +1003,7 @@ impl Editor {
         if let Pointer::Moved(at) = pointer {
             self.hover = Some(at);
         }
-        if self.sampling() {
+        if self.annotator.sampling() {
             return match pointer {
                 Pointer::Pressed(at) => self.sample(at),
                 _ => Task::none(),
@@ -1229,84 +1013,20 @@ impl Editor {
             self.crop_pointer(pointer, scale);
             return Task::none();
         }
-        match pointer {
+        let effect = match pointer {
             Pointer::Pressed(at) => {
-                self.commit_text();
                 let reach = MARK_REACH / f64::from(scale.max(0.01));
                 #[allow(clippy::cast_possible_truncation)]
-                let double = typing::double_click(
-                    &mut self.last_click,
-                    Point::new(at.x as f32, at.y as f32),
-                );
-                let words = match self.tool {
-                    Tool::Text | Tool::Bubble => typing::words_at(self.document(), at, reach),
-                    Tool::Select if double => typing::words_at(self.document(), at, reach),
-                    _ => None,
-                };
-                if let Some(id) = words {
-                    return self.edit_text(id);
-                }
-                let extend = self.extending();
-                match kirie_annotate::tools::press(
-                    self.tool,
-                    at,
-                    self.document(),
-                    self.paint,
-                    reach,
-                    &self.picked,
-                    extend,
-                ) {
-                    Press::Draft(draft) => {
-                        kirie_annotate::marks::pressed(&draft, &mut self.picked);
-                        self.draft = Some(draft);
-                    }
-                    Press::Done(op) => {
-                        self.history.apply(op);
-                    }
-                    Press::TypeAt(at) => {
-                        self.typing = Some(Typing::new(at));
-                        return iced::widget::operation::focus(view::TEXT_INPUT);
-                    }
-                    Press::PlaceSticker(at) => {
-                        let size = kirie_annotate::tools::STICKER_SIZE * self.document().unit;
-                        let draft = Draft::sticker(self.emojis.chosen(), at, size);
-                        kirie_annotate::marks::pressed(&draft, &mut self.picked);
-                        self.draft = Some(draft);
-                    }
-                    Press::Toggle(id) => kirie_annotate::marks::toggle(&mut self.picked, id),
-                    Press::Nothing => self.picked.clear(),
-                }
+                let click = Point::new(at.x as f32, at.y as f32);
+                self.annotator.press(self.tool, at, click, reach)
             }
             Pointer::Moved(at) => {
-                if let Some(draft) = self.draft.take() {
-                    self.draft = Some(draft.drag(at, self.modifiers.shift()));
-                }
+                self.annotator.drag(at);
+                return Task::none();
             }
-            Pointer::Released(at) => {
-                if let Some(draft) = self.draft.take() {
-                    let draft = draft.drag(at, self.modifiers.shift());
-                    if let Some((center, tail)) = draft.bubble() {
-                        self.typing = Some(Typing::bubble(center, tail));
-                        return iced::widget::operation::focus(view::TEXT_INPUT);
-                    }
-                    let document = self.history.current();
-                    if let Some(op) = kirie_annotate::marks::release(
-                        draft,
-                        document,
-                        &mut self.picked,
-                        self.paint,
-                    ) {
-                        self.history.apply(op);
-                    }
-                }
-            }
-        }
-        Task::none()
-    }
-
-    /// Whether the eyedropper waits for a click on the image.
-    fn sampling(&self) -> bool {
-        self.picker.as_ref().is_some_and(Picker::sampling)
+            Pointer::Released(at) => self.annotator.release(at),
+        };
+        self.annotated(effect)
     }
 
     /// Hands the picker the image's color at `at`, if `at` is on the image.
@@ -1319,7 +1039,10 @@ impl Editor {
             Some(Rgba::rgb(red, green, blue))
         });
         match color {
-            Some(color) => self.edit_color(picker::Event::Sampled(color)),
+            Some(color) => {
+                let effect = self.annotator.edit_color(picker::Event::Sampled(color));
+                self.annotated(effect)
+            }
             None => Task::none(),
         }
     }
@@ -1345,45 +1068,13 @@ impl Editor {
         Task::none()
     }
 
-    /// Typing in the text box.
-    fn typed(&mut self, message: Message) -> Task<Message> {
-        match message {
-            Message::TextEdit(action) => {
-                if let Some(typing) = &mut self.typing {
-                    typing.act(action, self.emojis.tone());
-                }
-            }
-            Message::Choose(choice) => {
-                let refocus = self
-                    .typing
-                    .as_mut()
-                    .is_some_and(|typing| typing.choose(choice, &mut self.emojis));
-                if refocus {
-                    return iced::widget::operation::focus(view::TEXT_INPUT);
-                }
-            }
-            Message::TextDone => self.commit_text(),
-            Message::PasteText => return self.paste_text(),
-            Message::Emoji(event) => {
-                if let Some(emoji) = self.emojis.update(event)
-                    && let Some(op) =
-                        kirie_annotate::marks::restick(self.document(), &self.picked, &emoji)
-                {
-                    self.history.apply(op);
-                }
-            }
-            _ => {}
-        }
-        Task::none()
-    }
-
     /// Pastes text from the clipboard, read through the window's data device, else through
     /// iced's clipboard.
     fn paste_text(&self) -> Task<Message> {
         let paste = |text: String| {
-            Message::TextEdit(iced::widget::text_editor::Action::Edit(
+            Message::Annotate(Change::TextEdit(iced::widget::text_editor::Action::Edit(
                 iced::widget::text_editor::Edit::Paste(std::sync::Arc::new(text)),
-            ))
+            )))
         };
         let nothing = || Message::Done(Ok(String::new()));
         Task::perform(
@@ -1397,27 +1088,6 @@ impl Editor {
             Some(text) => Task::done(paste(text)),
             None => iced::clipboard::read().map(move |text| text.map_or_else(nothing, paste)),
         })
-    }
-
-    fn commit_text(&mut self) {
-        if let Some(op) = self
-            .typing
-            .take()
-            .and_then(|typing| typing.finish(self.paint))
-        {
-            self.history.apply(op);
-        }
-    }
-
-    /// Opens the words of a placed text mark for typing.
-    fn edit_text(&mut self, id: ShapeId) -> Task<Message> {
-        let Some(typing) = self.document().shape(id).and_then(Typing::edit) else {
-            return Task::none();
-        };
-        self.typing = Some(typing);
-        self.picked = vec![id];
-        self.draft = None;
-        iced::widget::operation::focus(view::TEXT_INPUT)
     }
 
     /// The name the save dialog suggests: the open file's, else one with the time.
@@ -1436,7 +1106,7 @@ impl Editor {
 
     fn export(&mut self, export: Export) -> Task<Message> {
         self.keep_crop();
-        self.commit_text();
+        self.annotator.commit_text();
         let Some((image, _)) = &self.image else {
             return Task::none();
         };
@@ -1534,8 +1204,8 @@ impl Editor {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let quiet = self.typing.is_some()
-            || self.picker.is_some()
+        let quiet = self.annotator.typing.is_some()
+            || self.annotator.picker.is_some()
             || self.closing != Closing::No
             || self.about
             || self.settings.is_some();
@@ -1696,17 +1366,6 @@ async fn capture() -> Result<(), String> {
     .map_err(|error| error.to_string())?
 }
 
-/// Whether a change is not one step of a slider drag, whose last step follows.
-fn settled(message: &Message) -> bool {
-    !matches!(
-        message,
-        Message::Weight(controls::WeightEvent::Slide(_))
-            | Message::Brightness(controls::BrightnessEvent::Slide(_))
-            | Message::Look(controls::TextEvent::Size(_))
-            | Message::Frame(frame::Event::Margin(_))
-    )
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Export {
     Copy,
@@ -1807,18 +1466,22 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         && let keyboard::Key::Character(written) = key.as_ref()
         && let Some(to) = kirie_annotate::marks::restack_key(written)
     {
-        return Some(Message::Restack(to));
+        return Some(Message::Annotate(Change::Restack(to)));
     }
     match key.as_ref() {
         keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
         keyboard::Key::Named(Named::Enter) if modifiers.shift() || command => Some(Message::Save),
-        keyboard::Key::Named(Named::Delete | Named::Backspace) => Some(Message::Delete),
-        keyboard::Key::Character("z") if command && modifiers.shift() => Some(Message::Redo),
-        keyboard::Key::Character("z") if command => Some(Message::Undo),
-        keyboard::Key::Character("y") if command => Some(Message::Redo),
+        keyboard::Key::Named(Named::Delete | Named::Backspace) => {
+            Some(Message::Annotate(Change::Delete))
+        }
+        keyboard::Key::Character("z") if command && modifiers.shift() => {
+            Some(Message::Annotate(Change::Redo))
+        }
+        keyboard::Key::Character("z") if command => Some(Message::Annotate(Change::Undo)),
+        keyboard::Key::Character("y") if command => Some(Message::Annotate(Change::Redo)),
         keyboard::Key::Character("c") if command => Some(Message::CopyKey),
         keyboard::Key::Character("x") if command => Some(Message::Cut),
-        keyboard::Key::Character("d") if command => Some(Message::Duplicate),
+        keyboard::Key::Character("d") if command => Some(Message::Annotate(Change::Duplicate)),
         keyboard::Key::Character("v") if command => Some(Message::Paste),
         keyboard::Key::Character("w") if command => Some(Message::Discard),
         keyboard::Key::Character("a") if command => Some(Message::SelectAll),
@@ -1884,6 +1547,11 @@ pub fn run(loaded: Option<Loaded>, card: Option<Card>, token: Option<String>) ->
     .theme(Editor::theme)
     .subscription(Editor::subscription)
     .run()
+}
+
+/// `change` as the message the views send for it.
+fn annotate<T>(change: impl Fn(T) -> Change + Clone) -> impl Fn(T) -> Message + Clone {
+    move |value| Message::Annotate(change(value))
 }
 
 #[cfg(test)]

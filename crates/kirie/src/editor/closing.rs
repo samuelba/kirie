@@ -53,7 +53,7 @@ impl Editor {
             return Task::none();
         }
         self.then = Then::Exit;
-        self.commit_text();
+        self.annotator.commit_text();
         if self.unsaved() {
             self.closing = Closing::Asking;
             Task::none()
@@ -64,7 +64,7 @@ impl Editor {
 
     /// Puts the image away, asking first about unsaved changes.
     pub(super) fn discard(&mut self) -> Task<Message> {
-        self.commit_text();
+        self.annotator.commit_text();
         if self.closing != Closing::No || self.image.is_none() {
             return Task::none();
         }
@@ -96,7 +96,7 @@ impl Editor {
 
     /// Opens `loaded` in place of the image, asking first about unsaved changes.
     pub(super) fn replace(&mut self, loaded: Loaded) -> Task<Message> {
-        self.commit_text();
+        self.annotator.commit_text();
         if self.closing != Closing::No {
             return Task::none();
         }
@@ -193,7 +193,7 @@ mod tests {
     }
 
     fn mark(editor: &mut Editor) {
-        editor.history.apply(Op::Add {
+        editor.annotator.history.apply(Op::Add {
             kind: Kind::Rectangle {
                 rect: kurbo::Rect::new(1.0, 1.0, 20.0, 20.0),
             },
@@ -223,7 +223,7 @@ mod tests {
             Box::new(editor.document().clone()),
         ));
         assert!(!editor.unsaved());
-        editor.history.undo();
+        editor.annotator.history.undo();
         assert!(editor.unsaved(), "undoing a saved mark is a change too");
         assert!(
             !Editor::boot(None).0.unsaved(),

@@ -68,18 +68,24 @@ impl Editor {
             }
             Event::Pick(id) if self.cropping.is_none() => {
                 self.pick_tool(Tool::Select);
-                let adding = self.modifiers.command() || self.modifiers.shift();
+                let adding = self.annotator.modifiers.command() || self.annotator.modifiers.shift();
                 if !adding {
-                    self.picked = vec![id];
-                } else if let Some(at) = self.picked.iter().position(|picked| *picked == id) {
-                    self.picked.remove(at);
+                    self.annotator.picked = vec![id];
+                } else if let Some(at) = self
+                    .annotator
+                    .picked
+                    .iter()
+                    .position(|picked| *picked == id)
+                {
+                    self.annotator.picked.remove(at);
                 } else {
-                    self.picked.push(id);
+                    self.annotator.picked.push(id);
                 }
             }
             Event::Edit(id) if self.cropping.is_none() => {
                 self.pick_tool(Tool::Select);
-                return self.edit_text(id);
+                let effect = self.annotator.edit_text(id);
+                return self.annotated(effect);
             }
             Event::Pick(_) | Event::Edit(_) => {}
         }
@@ -151,7 +157,7 @@ impl Editor {
 
     fn mark_row(&self, shape: &Shape) -> Element<'_, Message> {
         let palette = self.palette;
-        let picked = self.picked.contains(&shape.id);
+        let picked = self.annotator.picked.contains(&shape.id);
         let hovered = self.mark_list.hovered() == Some(shape.id);
         let (face, name) = describe(&shape.kind);
         let face: Element<'_, Message> = match face {
@@ -275,7 +281,7 @@ mod tests {
         let mut editor = Editor::boot(Some(Loaded::image(::image::RgbaImage::new(40, 30), None))).0;
         let rect = kurbo::Rect::new(1.0, 1.0, 20.0, 20.0);
         for kind in [Kind::Rectangle { rect }, Kind::Redact { rect }] {
-            editor.history.apply(Op::Add {
+            editor.annotator.history.apply(Op::Add {
                 kind,
                 paint: Paint::default(),
             });
@@ -290,12 +296,12 @@ mod tests {
         editor.tool = Tool::Arrow;
         let _ = editor.update(Message::MarkList(Event::Pick(below)));
         assert_eq!(editor.tool, Tool::Select);
-        assert_eq!(editor.picked, [below]);
-        editor.modifiers = iced::keyboard::Modifiers::CTRL;
+        assert_eq!(editor.annotator.picked, [below]);
+        editor.annotator.modifiers = iced::keyboard::Modifiers::CTRL;
         let _ = editor.update(Message::MarkList(Event::Pick(above)));
-        assert_eq!(editor.picked, [below, above]);
+        assert_eq!(editor.annotator.picked, [below, above]);
         let _ = editor.update(Message::MarkList(Event::Pick(below)));
-        assert_eq!(editor.picked, [above]);
+        assert_eq!(editor.annotator.picked, [above]);
     }
 
     #[test]

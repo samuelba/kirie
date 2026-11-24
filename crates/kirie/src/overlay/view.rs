@@ -8,7 +8,9 @@ use kirie_ui::icon::Icon;
 use kirie_ui::space;
 use kirie_ui::widget::{divider, floating, icon_button, primary_button, secondary_button};
 
+use super::annotate;
 use super::{Action, Message, Overlay, canvas};
+use crate::annotate::annotator::Change;
 use crate::annotate::controls;
 use crate::annotate::paint::Part;
 use crate::annotate::picker::{self, Picker};
@@ -53,11 +55,11 @@ impl Overlay {
                 .height(Length::Fill),
             )
         });
-        if let Some(typing) = &self.typing {
+        if let Some(typing) = &self.annotator.typing {
             // Under the words, so the box never hides what is typed.
             let words = self
                 .document()
-                .bounds(&typing.preview(self.document(), self.paint));
+                .bounds(&typing.preview(self.document(), self.annotator.paint));
             #[allow(clippy::cast_possible_truncation)]
             let desktop = Point::new(words.x0 as f32, (words.y1 + 8.0) as f32);
             if screen.area.contains(desktop) {
@@ -66,12 +68,12 @@ impl Overlay {
                     pin(crate::annotate::typing::text_box(
                         typing,
                         TEXT_INPUT,
-                        &self.emojis,
+                        &self.annotator.emojis,
                         self.palette,
-                        Message::TextEdit,
-                        Message::TextDone,
+                        annotate(Change::TextEdit),
+                        Message::Annotate(Change::TextDone),
                         None,
-                        Message::Choose,
+                        annotate(Change::Choose),
                     ))
                     .position(at),
                 );
@@ -163,17 +165,27 @@ impl Overlay {
 
     fn toolbar_size(&self) -> iced::Size {
         #[allow(clippy::cast_precision_loss)]
-        let extra = self.swatches.custom().len().saturating_sub(ROOM_FOR_CUSTOM) as f32 * SWATCH;
-        let picker = if self.picker.is_some() {
+        let extra = self
+            .annotator
+            .swatches
+            .custom()
+            .len()
+            .saturating_sub(ROOM_FOR_CUSTOM) as f32
+            * SWATCH;
+        let picker = if self.annotator.picker.is_some() {
             picker::HEIGHT
         } else {
             0.0
-        } + if self.stickering() {
+        } + if self.annotator.stickering(self.tool) {
             crate::annotate::emoji_picker::HEIGHT + space::XS
         } else {
             0.0
         };
-        let text = if self.texting() { TEXT_CONTROLS } else { 0.0 };
+        let text = if self.annotator.texting(self.tool) {
+            TEXT_CONTROLS
+        } else {
+            0.0
+        };
         let label = if self.primary == Action::Edit {
             BACK_TO_EDITOR
         } else {
@@ -183,6 +195,30 @@ impl Overlay {
             TOOLBAR.width + extra + text + label,
             TOOLBAR.height + picker,
         )
+    }
+
+    /// The color picker and the emoji picker, while they are open.
+    fn pickers(&self) -> iced::widget::Column<'_, Message> {
+        let annotator = &self.annotator;
+        let palette = self.palette;
+        let mut panel = column![].spacing(space::XS);
+        if let Some(open) = &annotator.picker {
+            panel = panel.push(
+                container(picker::view(open, palette).map(annotate(Change::Picker)))
+                    .padding([space::XS, 0.0]),
+            );
+        }
+        if annotator.stickering(self.tool) {
+            let current = kirie_annotate::marks::sticker_shown(self.document(), &annotator.picked)
+                .unwrap_or_else(|| annotator.emojis.chosen());
+            panel = panel.push(
+                annotator
+                    .emojis
+                    .view(current, palette, EMOJI_WIDTH)
+                    .map(annotate(Change::Emoji)),
+            );
+        }
+        panel
     }
 
     fn toolbar(&self) -> Element<'_, Message> {
@@ -204,14 +240,20 @@ impl Overlay {
                 "Undo",
                 palette,
                 false,
-                self.history.can_undo().then_some(Message::Undo)
+                self.annotator
+                    .history
+                    .can_undo()
+                    .then_some(Message::Annotate(Change::Undo))
             ),
             icon_button(
                 Icon::Redo,
                 "Redo",
                 palette,
                 false,
-                self.history.can_redo().then_some(Message::Redo)
+                self.annotator
+                    .history
+                    .can_redo()
+                    .then_some(Message::Annotate(Change::Redo))
             ),
         ]
         .spacing(2);
@@ -240,22 +282,7 @@ impl Overlay {
 
         let properties = self.properties();
 
-        let mut panel = column![].spacing(space::XS);
-        if let Some(open) = &self.picker {
-            panel = panel.push(
-                container(picker::view(open, palette).map(Message::Picker))
-                    .padding([space::XS, 0.0]),
-            );
-        }
-        if self.stickering() {
-            let current = kirie_annotate::marks::sticker_shown(self.document(), &self.picked)
-                .unwrap_or_else(|| self.emojis.chosen());
-            panel = panel.push(
-                self.emojis
-                    .view(current, palette, EMOJI_WIDTH)
-                    .map(Message::Emoji),
-            );
-        }
+        let panel = self.pickers();
         let grip = mouse_area(
             container(
                 svg(Icon::Grip.handle())
@@ -342,18 +369,18 @@ impl Overlay {
     fn properties(&self) -> Element<'_, Message> {
         let palette = self.palette;
         let style = self.style();
-        let paint = self.shown_paint();
-        let styles = controls::styles(style, palette, Message::PickStyle);
+        let paint = self.annotator.shown_paint();
+        let styles = controls::styles(style, palette, annotate(Change::PickStyle));
         let colors = controls::colors(
-            &self.swatches,
+            &self.annotator.swatches,
             style,
             paint,
             palette,
-            self.picker.as_ref().map(Picker::target),
-            Message::PickColor,
-            Message::EditColor,
+            self.annotator.picker.as_ref().map(Picker::target),
+            annotate(Change::PickColor),
+            annotate(Change::EditColor),
         );
-        if self.stickering() {
+        if self.annotator.stickering(self.tool) {
             return row![styles, divider(palette), colors]
                 .spacing(space::S)
                 .align_y(iced::Alignment::Center)
@@ -362,37 +389,45 @@ impl Overlay {
         let mut properties = row![styles, divider(palette), colors, divider(palette)]
             .spacing(space::S)
             .align_y(iced::Alignment::Center);
-        if self.texting() {
+        if self.annotator.texting(self.tool) {
             properties = properties
                 .push(controls::fonts(
                     paint.text,
                     style.font(),
                     palette,
-                    Message::Look,
+                    annotate(Change::Look),
                 ))
                 .push(divider(palette))
                 .push(controls::text_size(
                     paint.text,
                     palette,
                     96.0,
-                    Message::Look,
+                    annotate(Change::Look),
                 ))
-                .push(controls::text_layout(paint.text, palette, Message::Look));
-        } else if self.spotlighting() {
+                .push(controls::text_layout(
+                    paint.text,
+                    palette,
+                    annotate(Change::Look),
+                ));
+        } else if self.annotator.spotlighting(self.tool) {
             properties = properties
-                .push(controls::spot_shapes(paint, palette, Message::Spot))
+                .push(controls::spot_shapes(
+                    paint,
+                    palette,
+                    annotate(Change::Spot),
+                ))
                 .push(divider(palette))
                 .push(controls::spotlight_brightness(
                     self.document().spotlight_brightness,
                     palette,
                     96.0,
-                    Message::Brightness,
+                    annotate(Change::Brightness),
                 ));
         } else {
             properties = properties
                 .push({
                     let (presets, slider) =
-                        controls::weights(paint, palette, 72.0, Message::Weight);
+                        controls::weights(paint, palette, 72.0, annotate(Change::Weight));
                     row![presets, slider]
                         .spacing(space::S)
                         .align_y(iced::Alignment::Center)
@@ -405,13 +440,13 @@ impl Overlay {
                             "Fill shapes",
                             palette,
                             paint.filled,
-                            Some(Message::ToggleFill),
+                            Some(Message::Annotate(Change::ToggleFill)),
                         ),
                         controls::shadow(
                             style,
                             self.document().shadow,
                             palette,
-                            Message::ToggleShadow,
+                            Message::Annotate(Change::ToggleShadow),
                         ),
                     ]
                     .spacing(2),

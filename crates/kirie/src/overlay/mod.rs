@@ -16,18 +16,15 @@ use iced_layershell::actions::{LayerShellCustomAction, LayerShellCustomActionWit
 use iced_layershell::reexport::{
     Anchor, KeyboardInteractivity, Layer, NewLayerShellSettings, OutputOption,
 };
-use kirie_annotate::{
-    Document, Draft, History, Kind, Op, Paint, Press, StyleId, Tool, Typesetter, Weight,
-};
+use kirie_annotate::{Document, Kind, Op, StyleId, Tool, Typesetter};
 use kirie_capture::{Frame, geometry};
 use kirie_ui::Palette;
 
+use crate::annotate::annotator::{Annotator, Change, Effect};
 use crate::annotate::drawing::Drawing;
-use crate::annotate::emoji_picker::EmojiPicker;
-use crate::annotate::picker::{self, Picker, Target};
+use crate::annotate::picker;
 use crate::annotate::selection::{self, Release, Selection};
 use crate::annotate::swatches::Swatches;
-use crate::annotate::typing::{self, Typing};
 
 pub const NAMESPACE: &str = "kirie-overlay";
 /// How close to a handle a press grabs it, in logical pixels.
@@ -70,29 +67,8 @@ pub enum Message {
     Pointer(Pointer),
     Modifiers(keyboard::Modifiers),
     PickTool(Option<Tool>),
-    PickStyle(StyleId),
-    ToggleShadow,
-    PickColor(kirie_annotate::Rgba),
-    /// Opens the color picker on a swatch, or to add one.
-    EditColor(Target),
-    Picker(picker::Event),
-    Weight(crate::annotate::controls::WeightEvent),
-    ToggleFill,
-    Brightness(crate::annotate::controls::BrightnessEvent),
-    Spot(kirie_annotate::SpotShape),
-    Look(crate::annotate::controls::TextEvent),
-    Emoji(crate::annotate::emoji_picker::Event),
-    /// Moves through or picks the emoji offered while typing.
-    Choose(crate::annotate::typing::Choice),
-    TextEdit(iced::widget::text_editor::Action),
-    TextDone,
-    Undo,
-    Redo,
-    Delete,
-    /// Copies the picked marks a step aside.
-    Duplicate,
-    /// Moves the picked marks up or down among the others.
-    Restack(kirie_annotate::marks::Restack),
+    /// An edit the editor offers too.
+    Annotate(Change),
     Escape,
     Finish(Action),
     /// Enter: the action the overlay was opened for.
@@ -199,30 +175,17 @@ pub struct Overlay {
     /// The selection kept for the next screenshot, while it is unchanged.
     remembered: Option<Rectangle>,
     pointer: Option<Point>,
-    modifiers: keyboard::Modifiers,
     palette: Palette,
     tool: Option<Tool>,
-    paint: Paint,
-    swatches: Swatches,
-    picker: Option<Picker>,
-    emojis: EmojiPicker,
-    history: History,
-    draft: Option<Draft>,
+    annotator: Annotator,
     /// The tool the current pointer gesture draws with, if it draws at all.
     drawing: Option<Tool>,
-    /// The marks the select tool picked; a lone one shows its grips.
-    picked: Vec<kirie_annotate::ShapeId>,
-    /// A slider is being dragged; its moves undo as one step.
-    sliding: bool,
-    typing: Option<Typing>,
     /// Where the toolbar was dragged to, in desktop coordinates.
     toolbar_at: Option<Point>,
     /// While the toolbar is dragged: where it is held, from its top left.
     toolbar_drag: Option<Vector>,
     /// The pointer over the grip, from the grip's top left.
     grip_at: Point,
-    /// The last press, to tell a double click.
-    last_click: Option<iced::advanced::mouse::Click>,
     busy: bool,
     /// What Enter does.
     primary: Action,
@@ -343,6 +306,7 @@ impl Overlay {
             .map(|window| (area(window.rect), window.title))
             .collect();
         let swatches = Swatches::load();
+        let paint = drawing.paint_for(None, &swatches);
         let remembered = crate::overlay::region::load()
             .and_then(|region| crate::overlay::region::within(region, desktop));
         let overlay = Self {
@@ -354,23 +318,13 @@ impl Overlay {
             selection: remembered.map(Selection::selected).unwrap_or_default(),
             remembered,
             pointer: None,
-            modifiers: keyboard::Modifiers::default(),
             palette: Palette::DARK,
             tool: None,
-            paint: drawing.paint_for(None, &swatches),
-            swatches,
-            picker: None,
-            emojis: EmojiPicker::load(),
-            history: History::new(document),
-            draft: None,
+            annotator: Annotator::new(document, paint, swatches),
             drawing: None,
-            picked: Vec::new(),
-            sliding: false,
-            typing: None,
             toolbar_at: None,
             toolbar_drag: None,
             grip_at: Point::ORIGIN,
-            last_click: None,
             busy: false,
             primary,
             host,
@@ -433,25 +387,25 @@ impl Overlay {
                 text: "Kirie".into(),
             },
         ] {
-            self.history.apply(Op::Add {
+            self.annotator.history.apply(Op::Add {
                 kind,
-                paint: self.paint,
+                paint: self.annotator.paint,
             });
         }
         let first = self.document().shapes().next().cloned();
         if let Some(first) = first {
-            self.history.apply(Op::Reshape {
+            self.annotator.history.apply(Op::Reshape {
                 id: first.id,
                 kind: first.kind,
                 rotation: -0.12,
             });
-            self.picked = vec![first.id];
+            self.annotator.picked = vec![first.id];
         }
         self
     }
 
     fn document(&self) -> &Document {
-        self.history.current()
+        self.annotator.history.current()
     }
 
     fn style(&self) -> StyleId {
@@ -475,58 +429,17 @@ impl Overlay {
                 Task::none()
             }
             Message::Modifiers(modifiers) => {
-                self.modifiers = modifiers;
+                self.annotator.modifiers = modifiers;
                 Task::none()
             }
             Message::PickTool(tool) => {
-                self.commit_text();
-                if tool != Some(Tool::Select) {
-                    self.picked.clear();
-                }
+                self.annotator.pick_tool(tool);
                 self.tool = tool;
-                self.paint.color = crate::annotate::controls::tool_color(
-                    tool,
-                    self.paint.color,
-                    self.swatches.first(self.style()),
-                );
-                self.draft = None;
                 Task::none()
             }
-            Message::PickStyle(_)
-            | Message::ToggleShadow
-            | Message::PickColor(_)
-            | Message::EditColor(_)
-            | Message::Picker(_)
-            | Message::Weight(_)
-            | Message::ToggleFill
-            | Message::Brightness(_)
-            | Message::Spot(_)
-            | Message::Look(_) => {
-                self.restyle(message);
-                Task::none()
-            }
-            Message::TextEdit(action) => {
-                if let Some(typing) = &mut self.typing {
-                    typing.act(action, self.emojis.tone());
-                }
-                Task::none()
-            }
-            Message::Emoji(_) | Message::Choose(_) => self.emoji(message),
-            Message::TextDone => {
-                self.commit_text();
-                Task::none()
-            }
-            Message::Undo => {
-                self.travel(true);
-                Task::none()
-            }
-            Message::Redo => {
-                self.travel(false);
-                Task::none()
-            }
-            Message::Delete | Message::Duplicate | Message::Restack(_) => {
-                self.edit_marks(&message);
-                Task::none()
+            Message::Annotate(change) => {
+                let effect = self.annotator.update(change);
+                self.annotated(effect)
             }
             Message::Escape => self.escape(),
             Message::Nudge(by) => {
@@ -557,31 +470,6 @@ impl Overlay {
                 self.flash = self.flash.and_then(|flash| flash.at(now));
                 Task::none()
             }
-        }
-    }
-
-    /// Deleting, duplicating and restacking the picked marks.
-    fn edit_marks(&mut self, message: &Message) {
-        match message {
-            Message::Delete if !self.picked.is_empty() => {
-                let ids = std::mem::take(&mut self.picked);
-                self.history.apply(Op::Remove { ids });
-            }
-            Message::Duplicate => {
-                if let Some((op, ids)) =
-                    kirie_annotate::marks::duplicate(self.document(), &self.picked)
-                {
-                    self.history.apply(op);
-                    self.picked = ids;
-                }
-            }
-            Message::Restack(to) => {
-                if let Some(op) = kirie_annotate::marks::restack(self.document(), &self.picked, *to)
-                {
-                    self.history.apply(op);
-                }
-            }
-            _ => {}
         }
     }
 
@@ -655,181 +543,6 @@ impl Overlay {
         }
     }
 
-    /// Changes to the style, colors, weight, fill and text look, kept for the next time.
-    fn restyle(&mut self, message: Message) {
-        let settled = settled(&message);
-        self.change_style(message);
-        if settled {
-            Drawing::load()
-                .with_marks(self.paint, self.document())
-                .save();
-        }
-    }
-
-    fn change_style(&mut self, message: Message) {
-        match message {
-            Message::PickStyle(style) => {
-                let before = self.style();
-                let recolor = self.swatches.recolor(before, style);
-                self.history.apply(Op::SetStyle { style, recolor });
-                self.follow_style(before);
-            }
-            Message::ToggleShadow => {
-                let shadow = !self.document().shadow;
-                self.history.apply(Op::SetShadow(shadow));
-            }
-            Message::PickColor(color) => {
-                self.repaint(|paint| paint.color = color);
-            }
-            Message::EditColor(target) => {
-                self.picker = Some(Picker::new(
-                    target,
-                    self.style(),
-                    &self.swatches,
-                    self.paint.color,
-                ));
-            }
-            Message::Picker(event) => {
-                if let picker::Outcome::Changed { pick } =
-                    picker::update(&mut self.picker, &mut self.swatches, event)
-                {
-                    if let Some(color) = pick {
-                        self.repaint(|paint| paint.color = color);
-                    }
-                    if let Err(error) = self.swatches.save() {
-                        tracing::warn!(%error, "colors not saved");
-                    }
-                }
-            }
-            Message::Weight(crate::annotate::controls::WeightEvent::Done)
-            | Message::Brightness(crate::annotate::controls::BrightnessEvent::Done)
-            | Message::Look(crate::annotate::controls::TextEvent::SizeDone) => self.sliding = false,
-            Message::Brightness(crate::annotate::controls::BrightnessEvent::Slide(brightness)) => {
-                self.history
-                    .apply_gradually(Op::SetSpotlightBrightness(brightness), self.sliding);
-                self.sliding = true;
-            }
-            Message::Weight(crate::annotate::controls::WeightEvent::Pick(weight)) => {
-                self.repaint(|paint| paint.weight = weight);
-            }
-            Message::Weight(crate::annotate::controls::WeightEvent::Slide(width)) => {
-                self.repaint_gradually(|paint| paint.weight = Weight::new(width), true);
-            }
-            Message::ToggleFill => {
-                self.repaint(|paint| paint.filled = !paint.filled);
-            }
-            Message::Spot(spot) => self.repaint(|paint| paint.spot = spot),
-            Message::Look(event) => {
-                self.repaint_gradually(
-                    |paint| paint.text = event.apply(paint.text),
-                    event.gradual(),
-                );
-            }
-            _ => {}
-        }
-    }
-
-    /// Undoes or redoes a step; the drawing color follows the style there.
-    fn travel(&mut self, undo: bool) {
-        let before = self.document().style;
-        if undo {
-            self.history.undo();
-        } else {
-            self.history.redo();
-        }
-        kirie_annotate::marks::prune(self.history.current(), &mut self.picked);
-        self.follow_style(before);
-    }
-
-    /// Keeps drawing in the standard color drawn with before the style changed from `before`,
-    /// in the new style's shade of it.
-    fn follow_style(&mut self, before: StyleId) {
-        let now = self.document().style;
-        if now != before {
-            let recolor = self.swatches.recolor(before, now);
-            self.paint.color = crate::annotate::controls::restyled(self.paint.color, &recolor);
-        }
-    }
-
-    /// Changes the paint for new marks, and the picked mark's paint too.
-    fn repaint(&mut self, change: impl Fn(&mut Paint)) {
-        self.repaint_gradually(change, false);
-    }
-
-    /// Like [`Self::repaint`]; a `gradual` change joins the step the slider drag began.
-    fn repaint_gradually(&mut self, change: impl Fn(&mut Paint), gradual: bool) {
-        change(&mut self.paint);
-        let Some(op) = kirie_annotate::marks::repaint(self.document(), &self.picked, change) else {
-            return;
-        };
-        if gradual {
-            self.history.apply_gradually(op, self.sliding);
-        } else {
-            self.history.apply(op);
-        }
-        self.sliding = gradual;
-    }
-
-    /// The paint the controls show: the first picked mark's, else the one new marks get.
-    fn shown_paint(&self) -> Paint {
-        kirie_annotate::marks::shown_paint(self.document(), &self.picked, self.paint)
-    }
-
-    /// Whether the text controls apply: to words being typed, picked text marks and bubbles, or
-    /// the next.
-    fn texting(&self) -> bool {
-        matches!(self.tool, Some(Tool::Text | Tool::Bubble))
-            || self.typing.is_some()
-            || kirie_annotate::marks::all(self.document(), &self.picked, |kind| {
-                matches!(kind, Kind::Text { .. } | Kind::Bubble { .. })
-            })
-    }
-
-    /// An emoji picked for the stickers, or among those offered while typing.
-    fn emoji(&mut self, message: Message) -> Task<Message> {
-        match message {
-            Message::Emoji(event) => {
-                if let Some(emoji) = self.emojis.update(event)
-                    && let Some(op) =
-                        kirie_annotate::marks::restick(self.document(), &self.picked, &emoji)
-                {
-                    self.history.apply(op);
-                }
-                Task::none()
-            }
-            Message::Choose(choice) => {
-                let refocus = self
-                    .typing
-                    .as_mut()
-                    .is_some_and(|typing| typing.choose(choice, &mut self.emojis));
-                if refocus {
-                    iced::widget::operation::focus(view::TEXT_INPUT)
-                } else {
-                    Task::none()
-                }
-            }
-            _ => Task::none(),
-        }
-    }
-
-    /// Whether the emoji picker shows: for the sticker tool or picked stickers.
-    fn stickering(&self) -> bool {
-        kirie_annotate::marks::stickering(self.tool, self.document(), &self.picked)
-    }
-
-    /// Whether the spotlight controls apply: to the spotlight tool or picked spotlights.
-    fn spotlighting(&self) -> bool {
-        self.tool == Some(Tool::Spotlight)
-            || kirie_annotate::marks::all(self.document(), &self.picked, |kind| {
-                matches!(kind, Kind::Spotlight { .. })
-            })
-    }
-
-    /// Whether a press adds to the picked marks instead of picking anew.
-    fn extending(&self) -> bool {
-        self.modifiers.shift() || self.modifiers.command()
-    }
-
     /// Shows the screen a fullscreen window landed on: the one with the window's size.
     fn place(&mut self, id: window::Id, size: Size) {
         let Some(index) = self.screens.iter().position(|screen| {
@@ -864,21 +577,12 @@ impl Overlay {
         if self.busy {
             return Task::none();
         }
-        if self.sampling() {
-            self.change_style(Message::Picker(picker::Event::Eyedropper));
-            return Task::none();
+        if self.annotator.sampling() {
+            let effect = self.annotator.edit_color(picker::Event::Eyedropper);
+            return self.annotated(effect);
         }
-        if let Some(typing) = &mut self.typing
-            && typing.dismiss()
-        {
-            return iced::widget::operation::focus(view::TEXT_INPUT);
-        }
-        if self.picker.take().is_some()
-            || self.typing.take().is_some()
-            || self.draft.take().is_some()
-            || !std::mem::take(&mut self.picked).is_empty()
-        {
-            return Task::none();
+        if let Some(effect) = self.annotator.put_down() {
+            return self.annotated(effect);
         }
         if self.tool.take().is_some() {
             return Task::none();
@@ -891,7 +595,7 @@ impl Overlay {
             Pointer::Pressed(at) | Pointer::Moved(at) | Pointer::Released(at) => at,
         };
         self.pointer = Some(at);
-        if self.sampling() {
+        if self.annotator.sampling() {
             if let Pointer::Pressed(at) = pointer {
                 self.sample(at);
             }
@@ -918,11 +622,6 @@ impl Overlay {
         task
     }
 
-    /// Whether the eyedropper waits for a click on the screens.
-    fn sampling(&self) -> bool {
-        self.picker.as_ref().is_some_and(Picker::sampling)
-    }
-
     /// Hands the picker the frozen screens' color at `at`.
     fn sample(&mut self, at: Point) {
         let Some(capture) = self
@@ -942,9 +641,10 @@ impl Overlay {
         else {
             return;
         };
-        self.change_style(Message::Picker(picker::Event::Sampled(
-            kirie_annotate::Rgba::rgb(r, g, b),
-        )));
+        let effect = self
+            .annotator
+            .edit_color(picker::Event::Sampled(kirie_annotate::Rgba::rgb(r, g, b)));
+        let _ = self.annotated(effect);
     }
 
     /// The topmost window under `at`.
@@ -957,7 +657,7 @@ impl Overlay {
 
     /// Whether `at` is on a grip of the lone picked mark.
     fn on_grip(&self, at: kurbo::Point) -> bool {
-        let [id] = self.picked[..] else {
+        let [id] = self.annotator.picked[..] else {
             return false;
         };
         self.tool == Some(Tool::Select)
@@ -993,100 +693,33 @@ impl Overlay {
     }
 
     fn annotate(&mut self, tool: Tool, pointer: Pointer) -> Task<Message> {
-        match pointer {
-            Pointer::Pressed(at) => {
-                self.commit_text();
-                let double = typing::double_click(&mut self.last_click, at);
-                let words = match tool {
-                    Tool::Text | Tool::Bubble => {
-                        typing::words_at(self.document(), to_kurbo(at), MARK_REACH)
-                    }
-                    Tool::Select if double => {
-                        typing::words_at(self.document(), to_kurbo(at), MARK_REACH)
-                    }
-                    _ => None,
-                };
-                if let Some(id) = words {
-                    return self.edit_text(id);
-                }
-                let extend = self.extending();
-                let press = kirie_annotate::tools::press(
-                    tool,
-                    to_kurbo(at),
-                    self.document(),
-                    self.paint,
-                    MARK_REACH,
-                    &self.picked,
-                    extend,
-                );
-                match press {
-                    Press::Draft(draft) => {
-                        kirie_annotate::marks::pressed(&draft, &mut self.picked);
-                        self.draft = Some(draft);
-                    }
-                    Press::Done(op) => {
-                        self.history.apply(op);
-                    }
-                    Press::TypeAt(at) => {
-                        self.typing = Some(Typing::new(at));
-                        return iced::widget::operation::focus(view::TEXT_INPUT);
-                    }
-                    Press::PlaceSticker(at) => {
-                        let size = kirie_annotate::tools::STICKER_SIZE * self.document().unit;
-                        let draft = Draft::sticker(self.emojis.chosen(), at, size);
-                        kirie_annotate::marks::pressed(&draft, &mut self.picked);
-                        self.draft = Some(draft);
-                    }
-                    Press::Toggle(id) => kirie_annotate::marks::toggle(&mut self.picked, id),
-                    Press::Nothing => self.picked.clear(),
-                }
-            }
+        let effect = match pointer {
+            Pointer::Pressed(at) => self.annotator.press(tool, to_kurbo(at), at, MARK_REACH),
             Pointer::Moved(at) => {
-                if let Some(draft) = self.draft.take() {
-                    self.draft = Some(draft.drag(to_kurbo(at), self.modifiers.shift()));
-                }
+                self.annotator.drag(to_kurbo(at));
+                return Task::none();
             }
-            Pointer::Released(at) => {
-                if let Some(draft) = self.draft.take() {
-                    let draft = draft.drag(to_kurbo(at), self.modifiers.shift());
-                    if let Some((center, tail)) = draft.bubble() {
-                        self.typing = Some(Typing::bubble(center, tail));
-                        return iced::widget::operation::focus(view::TEXT_INPUT);
-                    }
-                    let document = self.history.current();
-                    if let Some(op) = kirie_annotate::marks::release(
-                        draft,
-                        document,
-                        &mut self.picked,
-                        self.paint,
-                    ) {
-                        self.history.apply(op);
-                    }
-                }
-            }
-        }
-        Task::none()
-    }
-
-    fn commit_text(&mut self) {
-        if let Some(op) = self
-            .typing
-            .take()
-            .and_then(|typing| typing.finish(self.paint))
-        {
-            self.history.apply(op);
-        }
-    }
-
-    /// Opens the words of a placed text mark for typing.
-    fn edit_text(&mut self, id: kirie_annotate::ShapeId) -> Task<Message> {
-        let Some(typing) = self.document().shape(id).and_then(Typing::edit) else {
-            return Task::none();
+            Pointer::Released(at) => self.annotator.release(to_kurbo(at)),
         };
-        self.typing = Some(typing);
-        self.picked = vec![id];
-        self.draft = None;
-        iced::widget::operation::focus(view::TEXT_INPUT)
+        self.annotated(effect)
+    }
+
+    /// Acts on what an edit did: the text box takes the keyboard, the drawing options are kept
+    /// for the next time, and colors that could not be kept are logged.
+    fn annotated(&mut self, effect: Effect) -> Task<Message> {
+        if effect.settled {
+            Drawing::load()
+                .with_marks(self.annotator.paint, self.document())
+                .save();
+        }
+        if let Some(error) = effect.error {
+            tracing::warn!(%error, "colors not saved");
+        }
+        if effect.focus {
+            iced::widget::operation::focus(view::TEXT_INPUT)
+        } else {
+            Task::none()
+        }
     }
 
     /// The selection's pixels at the highest scale of the screens it covers, and the marks
@@ -1116,7 +749,7 @@ impl Overlay {
     }
 
     fn finish(&mut self, action: Action) -> Task<Message> {
-        self.commit_text();
+        self.annotator.commit_text();
         if self.busy || self.selection.rect().is_none() {
             return Task::none();
         }
@@ -1170,7 +803,7 @@ impl Overlay {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let keys = if self.typing.is_some() || self.picker.is_some() {
+        let keys = if self.annotator.typing.is_some() || self.annotator.picker.is_some() {
             event::listen_with(typing_key)
         } else {
             event::listen_with(key)
@@ -1208,16 +841,6 @@ impl Overlay {
     pub fn theme(&self, _: window::Id) -> iced::Theme {
         iced::Theme::Dark
     }
-}
-
-/// Whether a change is not one step of a slider drag, whose last step follows.
-fn settled(message: &Message) -> bool {
-    !matches!(
-        message,
-        Message::Weight(crate::annotate::controls::WeightEvent::Slide(_))
-            | Message::Brightness(crate::annotate::controls::BrightnessEvent::Slide(_))
-            | Message::Look(crate::annotate::controls::TextEvent::Size(_))
-    )
 }
 
 /// How long the closed overlay windows get to reach the compositor before the process ends.
@@ -1298,7 +921,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         && let keyboard::Key::Character(written) = key.as_ref()
         && let Some(to) = kirie_annotate::marks::restack_key(written)
     {
-        return Some(Message::Restack(to));
+        return Some(Message::Annotate(Change::Restack(to)));
     }
     match key.as_ref() {
         keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
@@ -1306,14 +929,18 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
             Some(Message::Finish(Action::Save))
         }
         keyboard::Key::Named(Named::Enter) => Some(Message::Accept),
-        keyboard::Key::Named(Named::Delete | Named::Backspace) => Some(Message::Delete),
+        keyboard::Key::Named(Named::Delete | Named::Backspace) => {
+            Some(Message::Annotate(Change::Delete))
+        }
         keyboard::Key::Named(Named::ArrowLeft) => Some(Message::Nudge(Vector::new(-step, 0.0))),
         keyboard::Key::Named(Named::ArrowRight) => Some(Message::Nudge(Vector::new(step, 0.0))),
         keyboard::Key::Named(Named::ArrowUp) => Some(Message::Nudge(Vector::new(0.0, -step))),
         keyboard::Key::Named(Named::ArrowDown) => Some(Message::Nudge(Vector::new(0.0, step))),
-        keyboard::Key::Character("z") if command && modifiers.shift() => Some(Message::Redo),
-        keyboard::Key::Character("z") if command => Some(Message::Undo),
-        keyboard::Key::Character("y") if command => Some(Message::Redo),
+        keyboard::Key::Character("z") if command && modifiers.shift() => {
+            Some(Message::Annotate(Change::Redo))
+        }
+        keyboard::Key::Character("z") if command => Some(Message::Annotate(Change::Undo)),
+        keyboard::Key::Character("y") if command => Some(Message::Annotate(Change::Redo)),
         keyboard::Key::Character("a") if command => Some(Message::SelectAll),
         keyboard::Key::Character("s") if command && modifiers.shift() => {
             Some(Message::Finish(Action::SaveAs))
@@ -1321,7 +948,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("s") if command => Some(Message::Finish(Action::Save)),
         keyboard::Key::Character("c") if command => Some(Message::Finish(Action::Copy)),
         keyboard::Key::Character("e") if command => Some(Message::Finish(Action::Edit)),
-        keyboard::Key::Character("d") if command => Some(Message::Duplicate),
+        keyboard::Key::Character("d") if command => Some(Message::Annotate(Change::Duplicate)),
         keyboard::Key::Character("m" | "M") if !command => Some(Message::ToggleMagnifier),
         keyboard::Key::Character(c) if !command => c
             .chars()
@@ -1389,6 +1016,11 @@ pub fn run(
         .lock()
         .map(|outcome| outcome.clone())
         .unwrap_or_default())
+}
+
+/// `change` as the message the views send for it.
+fn annotate<T>(change: impl Fn(T) -> Change + Clone) -> impl Fn(T) -> Message + Clone {
+    move |value| Message::Annotate(change(value))
 }
 
 #[cfg(test)]

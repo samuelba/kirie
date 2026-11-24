@@ -1,5 +1,6 @@
 //! The annotation controls and drawing shared by the overlay and the editor.
 
+pub mod annotator;
 pub mod controls;
 pub mod drawing;
 pub mod emoji_picker;
