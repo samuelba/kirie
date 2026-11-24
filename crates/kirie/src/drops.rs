@@ -9,6 +9,10 @@
 //! clipboard iced keeps makes one too. So the editor [renews](Device::renew) its device each
 //! time its window loses the keyboard, before anything can be dragged onto it, and reads the
 //! clipboard through that device as well ([`Device::read`]).
+//!
+//! Where no other program may take the clipboard, as on GNOME, the window offers what is copied
+//! itself ([`Device::offer`]), which needs the serial of its latest input: the device listens to
+//! the pointer and keyboard for it.
 
 use std::collections::HashMap;
 use std::io::Read as _;
@@ -22,8 +26,11 @@ use wayland_client::backend::{Backend, ObjectId};
 use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
 use wayland_client::protocol::wl_data_device_manager::{DndAction, WlDataDeviceManager};
 use wayland_client::protocol::wl_data_offer::{self, WlDataOffer};
+use wayland_client::protocol::wl_data_source::{self, WlDataSource};
+use wayland_client::protocol::wl_keyboard::{self, WlKeyboard};
+use wayland_client::protocol::wl_pointer::{self, WlPointer};
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
-use wayland_client::protocol::wl_seat::WlSeat;
+use wayland_client::protocol::wl_seat::{self, Capability, WlSeat};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum, event_created_child};
 
 const URI_LIST: &str = "text/uri-list";
@@ -74,9 +81,36 @@ struct Shared {
     connection: Connection,
     handle: QueueHandle<State>,
     manager: Option<WlDataDeviceManager>,
-    seats: Vec<(WlSeat, Option<WlDataDevice>)>,
+    seats: Vec<Seat>,
     /// What is on the clipboard, with the types it is offered as.
     selection: Option<(WlDataOffer, Vec<String>)>,
+    /// What the window offers on the clipboard, until something else is copied.
+    own: Option<(WlDataSource, Copied)>,
+    /// The serial of the window's latest input.
+    serial: Option<u32>,
+}
+
+/// Bytes the window put on the clipboard, as `kind`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Copied {
+    kind: String,
+    bytes: Arc<[u8]>,
+}
+
+impl Copied {
+    /// The bytes with their kind, if that is one of `kinds`.
+    fn as_one_of(&self, kinds: &[&str]) -> Option<(String, Vec<u8>)> {
+        kinds
+            .contains(&self.kind.as_str())
+            .then(|| (self.kind.clone(), self.bytes.to_vec()))
+    }
+}
+
+struct Seat {
+    proxy: WlSeat,
+    device: Option<WlDataDevice>,
+    pointer: Option<WlPointer>,
+    keyboard: Option<WlKeyboard>,
 }
 
 impl Shared {
@@ -85,9 +119,9 @@ impl Shared {
         let Some(manager) = &self.manager else {
             return;
         };
-        for (seat, device) in &mut self.seats {
-            if device.is_none() {
-                *device = Some(manager.get_data_device(seat, &self.handle, ()));
+        for seat in &mut self.seats {
+            if seat.device.is_none() {
+                seat.device = Some(manager.get_data_device(&seat.proxy, &self.handle, ()));
             }
         }
     }
@@ -116,8 +150,8 @@ impl Device {
     pub fn renew(&self) {
         let mut shared = self.lock();
         shared.forget_selection();
-        for (_, device) in &mut shared.seats {
-            *device = None;
+        for seat in &mut shared.seats {
+            seat.device = None;
         }
         shared.attach();
         if let Err(error) = shared.connection.flush() {
@@ -128,9 +162,15 @@ impl Device {
     /// The clipboard's content as the first of `kinds` it is offered as, with that kind; `None`
     /// when this device does not see the clipboard or it holds none of them. Blocks until the
     /// source has sent it all.
+    ///
+    /// What the window copied itself is read straight from it: GNOME tells this device of it
+    /// only once the device is the client's newest.
     pub fn read(&self, kinds: &[&str]) -> Option<std::io::Result<(String, Vec<u8>)>> {
         let (connection, offer, kind) = {
             let shared = self.lock();
+            if let Some((_, copied)) = &shared.own {
+                return copied.as_one_of(kinds).map(Ok);
+            }
             let (offer, types) = shared.selection.as_ref()?;
             let kind = kinds
                 .iter()
@@ -138,6 +178,35 @@ impl Device {
             (shared.connection.clone(), offer.clone(), (*kind).to_owned())
         };
         Some(receive(&connection, &offer, &kind).map(|bytes| (kind, bytes)))
+    }
+
+    /// Puts `bytes` on the clipboard as `kind`, offered by the window for as long as it is open.
+    /// The window must have the keyboard.
+    pub fn offer(&self, bytes: Vec<u8>, kind: &str) -> Result<(), String> {
+        let mut shared = self.lock();
+        let manager = shared
+            .manager
+            .as_ref()
+            .ok_or("the compositor has no clipboard")?;
+        let serial = shared.serial.ok_or("the window has had no input yet")?;
+        let device = shared
+            .seats
+            .iter()
+            .find_map(|seat| seat.device.as_ref())
+            .ok_or("the window has no seat")?;
+        let copied = Copied {
+            kind: kind.to_owned(),
+            bytes: Arc::from(bytes),
+        };
+        let source = manager.create_data_source(&shared.handle, Arc::clone(&copied.bytes));
+        source.offer(copied.kind.clone());
+        device.set_selection(Some(&source), serial);
+        shared
+            .connection
+            .flush()
+            .map_err(|error| format!("cannot reach the compositor: {error}"))?;
+        shared.own = Some((source, copied));
+        Ok(())
     }
 }
 
@@ -210,6 +279,8 @@ fn listen(display: usize, sender: mpsc::UnboundedSender<Dropped>) -> Result<(), 
             manager: None,
             seats: Vec::new(),
             selection: None,
+            own: None,
+            serial: None,
         })),
     };
     let mut state = State {
@@ -384,9 +455,12 @@ impl Dispatch<WlRegistry, ()> for State {
             "wl_data_device_manager" => {
                 shared.manager = Some(registry.bind(name, version.min(3), handle, ()));
             }
-            "wl_seat" => shared
-                .seats
-                .push((registry.bind(name, 1, handle, ()), None)),
+            "wl_seat" => shared.seats.push(Seat {
+                proxy: registry.bind(name, 1, handle, ()),
+                device: None,
+                pointer: None,
+                keyboard: None,
+            }),
             _ => return,
         }
         shared.attach();
@@ -395,13 +469,102 @@ impl Dispatch<WlRegistry, ()> for State {
 
 impl Dispatch<WlSeat, ()> for State {
     fn event(
-        _: &mut Self,
-        _: &WlSeat,
-        _: <WlSeat as Proxy>::Event,
+        state: &mut Self,
+        seat: &WlSeat,
+        event: wl_seat::Event,
+        (): &(),
+        _: &Connection,
+        handle: &QueueHandle<Self>,
+    ) {
+        let wl_seat::Event::Capabilities {
+            capabilities: WEnum::Value(capabilities),
+        } = event
+        else {
+            return;
+        };
+        let mut shared = state.device.lock();
+        let Some(found) = shared.seats.iter_mut().find(|found| found.proxy == *seat) else {
+            return;
+        };
+        if capabilities.contains(Capability::Pointer) && found.pointer.is_none() {
+            found.pointer = Some(seat.get_pointer(handle, ()));
+        }
+        if capabilities.contains(Capability::Keyboard) && found.keyboard.is_none() {
+            found.keyboard = Some(seat.get_keyboard(handle, ()));
+        }
+    }
+}
+
+impl Dispatch<WlPointer, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &WlPointer,
+        event: wl_pointer::Event,
         (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        if let wl_pointer::Event::Enter { serial, .. } | wl_pointer::Event::Button { serial, .. } =
+            event
+        {
+            state.device.lock().serial = Some(serial);
+        }
+    }
+}
+
+impl Dispatch<WlKeyboard, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &WlKeyboard,
+        event: wl_keyboard::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_keyboard::Event::Enter { serial, .. } | wl_keyboard::Event::Key { serial, .. } =
+            event
+        {
+            state.device.lock().serial = Some(serial);
+        }
+    }
+}
+
+impl Dispatch<WlDataSource, Arc<[u8]>> for State {
+    fn event(
+        state: &mut Self,
+        source: &WlDataSource,
+        event: wl_data_source::Event,
+        bytes: &Arc<[u8]>,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_data_source::Event::Send { fd, .. } => {
+                let bytes = Arc::clone(bytes);
+                // A reader as slow as it likes, even this window pasting, must not hold up
+                // the queue.
+                let spawned =
+                    std::thread::Builder::new()
+                        .name("kirie-copy".into())
+                        .spawn(move || {
+                            use std::io::Write as _;
+                            if let Err(error) = std::fs::File::from(fd).write_all(&bytes) {
+                                tracing::debug!(%error, "cannot hand over the clipboard");
+                            }
+                        });
+                if let Err(error) = spawned {
+                    tracing::warn!(%error, "cannot hand over the clipboard");
+                }
+            }
+            wl_data_source::Event::Cancelled => {
+                let mut shared = state.device.lock();
+                if shared.own.as_ref().is_some_and(|(own, _)| own == source) {
+                    shared.own = None;
+                }
+                source.destroy();
+            }
+            _ => {}
+        }
     }
 }
 
@@ -536,6 +699,19 @@ mod tests {
         drop(write);
         let bytes = read_all(std::fs::File::from(read)).unwrap();
         assert_eq!(bytes, b"file:///tmp/a.png\r\n");
+    }
+
+    #[test]
+    fn own_copies_paste_only_as_a_wanted_kind() {
+        let copied = Copied {
+            kind: PNG.to_owned(),
+            bytes: Arc::from(&b"png"[..]),
+        };
+        assert_eq!(
+            copied.as_one_of(&[crate::marks::MIME, PNG]),
+            Some((PNG.to_owned(), b"png".to_vec()))
+        );
+        assert_eq!(copied.as_one_of(&TEXT), None);
     }
 
     #[test]

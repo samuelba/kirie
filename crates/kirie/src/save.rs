@@ -227,13 +227,17 @@ pub async fn save(image: RgbaImage) -> Result<PathBuf, String> {
 }
 
 /// Writes `image` into the screenshots folder and puts it on the clipboard too: the file, and
-/// whether the copy worked. Only the save must work.
-pub async fn save_and_copy(image: RgbaImage) -> Result<(PathBuf, bool), String> {
+/// whether the copy worked. Only the save must work. Where no background process can hold the
+/// clipboard, the window of `device` does.
+pub async fn save_and_copy(
+    image: RgbaImage,
+    device: Option<crate::drops::Device>,
+) -> Result<(PathBuf, bool), String> {
     let path = save(image.clone()).await?;
     if !crate::settings::Settings::load().copy_on_save {
         return Ok((path, false));
     }
-    let copied = crate::clipboard::copy(image)
+    let copied = crate::clipboard::copy_from(image, device)
         .await
         .inspect_err(|error| tracing::warn!(%error, "saved, but not copied"))
         .is_ok();

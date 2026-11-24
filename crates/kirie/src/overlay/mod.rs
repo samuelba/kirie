@@ -1134,7 +1134,7 @@ impl Overlay {
             Err(error) => return self.close(Outcome::Failed(error)),
         };
         match action {
-            Action::Save => Task::perform(crate::save::save_and_copy(picture), |saved| {
+            Action::Save => Task::perform(crate::save::save_and_copy(picture, None), |saved| {
                 Message::Finished(saved.map(|(path, copied)| Outcome::Saved { path, copied }))
             }),
             Action::Copy => Task::perform(crate::clipboard::copy(picture), |copied| {
