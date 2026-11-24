@@ -8,13 +8,15 @@ use std::process::{Command, Stdio};
 
 use semver::Version;
 
-use super::verify::Sums;
-use super::{AGENT, off_the_runtime, releases_url};
+use crate::verify::Sums;
+use crate::{AGENT, off_the_runtime, releases_url};
 
 /// Downloads larger than this are refused.
 const MAX_DOWNLOAD: u64 = 16 * 1024 * 1024;
 const INSTALLER: &str = "install.sh";
 const SUMS: &str = "SHA256SUMS";
+/// The GNOME Shell extension's metadata, whose version changes with every release.
+const METADATA: &str = "metadata.json";
 
 /// What an update changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,14 +25,19 @@ pub struct Installed {
     pub extension_changed: bool,
 }
 
-/// Downloads `install.sh` from the release and runs it for that version.
-pub async fn install(version: Version) -> Result<Installed, String> {
-    off_the_runtime(move || install_blocking(&version, false)).await
+/// Downloads `install.sh` from the release and runs it for that version. `extension` is the
+/// GNOME Shell extension's folder, watched for whether the update changed its code.
+pub async fn install(version: Version, extension: Option<PathBuf>) -> Result<Installed, String> {
+    off_the_runtime(move || install_blocking(&version, extension.as_deref(), false)).await
 }
 
 /// Like [`install`]; `shown` lets the installer print to the terminal instead of keeping what it
 /// says for the error.
-pub fn install_blocking(version: &Version, shown: bool) -> Result<Installed, String> {
+pub fn install_blocking(
+    version: &Version,
+    extension: Option<&Path>,
+    shown: bool,
+) -> Result<Installed, String> {
     let base = format!("{}/download/v{version}", releases_url());
     let download = |name: &str| fetch(&format!("{base}/{name}"), name);
     let text =
@@ -40,8 +47,7 @@ pub fn install_blocking(version: &Version, shown: bool) -> Result<Installed, Str
     sums.check(INSTALLER, &installer)?;
     let tarball = sums.hash(&tarball(version)?)?;
 
-    let extension = crate::desktop::extension::dir();
-    let before = extension.as_deref().and_then(extension_code);
+    let before = extension.and_then(extension_code);
     // The script comes in on stdin, so it never sits in a shared temporary folder.
     let output = || {
         if shown {
@@ -73,7 +79,7 @@ pub fn install_blocking(version: &Version, shown: bool) -> Result<Installed, Str
     if !output.status.success() {
         return Err(failure_reason(&stderr, output.status));
     }
-    let after = extension.as_deref().and_then(extension_code);
+    let after = extension.and_then(extension_code);
     Ok(Installed {
         extension_changed: after.is_some() && before != after,
     })
@@ -129,7 +135,7 @@ fn extension_code(dir: &Path) -> Option<BTreeMap<PathBuf, Vec<u8>>> {
             if path.is_dir() {
                 collect(&path, root, files);
             } else if let Ok(relative) = path.strip_prefix(root)
-                && relative != Path::new(crate::desktop::extension::METADATA)
+                && relative != Path::new(METADATA)
                 && let Ok(content) = std::fs::read(&path)
             {
                 files.insert(relative.to_owned(), content);

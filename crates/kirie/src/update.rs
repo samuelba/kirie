@@ -1,11 +1,14 @@
 //! `kirie self-update`: installs the latest release after checking that its checksums are signed
 //! by the release key, the same way the install script does when minisign is installed.
 
-use crate::release::{self, InstallKind};
+use kirie_update::{self as release, InstallKind};
 
 pub fn run() -> anyhow::Result<()> {
     anyhow::ensure!(
-        matches!(release::install_kind(), InstallKind::Script { .. }),
+        matches!(
+            release::install_kind(crate::desktop::launch::exe().ok().as_deref()),
+            InstallKind::Script { .. }
+        ),
         "Kirie was not installed with the install script; update it the way it was installed"
     );
     let Some(latest) = release::check_blocking().map_err(anyhow::Error::msg)? else {
@@ -18,6 +21,11 @@ pub fn run() -> anyhow::Result<()> {
         latest.version
     );
     // The installer tells how it went, and whether to log out for the GNOME Shell extension.
-    release::install_blocking(&latest.version, true).map_err(anyhow::Error::msg)?;
+    release::install_blocking(
+        &latest.version,
+        crate::desktop::extension::dir().as_deref(),
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
     Ok(())
 }

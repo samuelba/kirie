@@ -107,15 +107,15 @@ async fn serve() -> anyhow::Result<()> {
                     restart_failed = !restart(&connection, binary).await;
                 }
                 let now = SystemTime::now();
-                if crate::release::due(last_check, now) {
+                if kirie_update::due(last_check, now) {
                     last_check = Some(now);
                     look_for_release(found_sender.clone());
                 }
-                offer(&connection, newest.clone().filter(crate::release::wanted)).await;
+                offer(&connection, newest.clone().filter(crate::storage::updates::wanted)).await;
             }
             Some(update) = found.next() => {
                 newest = update;
-                offer(&connection, newest.clone().filter(crate::release::wanted)).await;
+                offer(&connection, newest.clone().filter(crate::storage::updates::wanted)).await;
             }
             changed = watchers.next() => {
                 let Some(changed) = changed else { return Ok(()) };
@@ -175,7 +175,7 @@ fn look_for_release(found: UnboundedSender<Option<Version>>) {
         return;
     }
     tokio::spawn(async move {
-        match crate::release::check().await {
+        match kirie_update::check().await {
             Ok(release) => {
                 let _ = found.unbounded_send(release.map(|release| release.version));
             }

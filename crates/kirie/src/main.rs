@@ -3,7 +3,6 @@ mod canvas;
 mod desktop;
 mod editor;
 mod overlay;
-mod release;
 mod script;
 mod storage;
 mod update;

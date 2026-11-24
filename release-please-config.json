@@ -18,6 +18,7 @@
         { "type": "toml", "path": "Cargo.lock", "jsonpath": "$.package[?(@.name.value=='kirie-capture')].version" },
         { "type": "toml", "path": "Cargo.lock", "jsonpath": "$.package[?(@.name.value=='kirie-ui')].version" },
         { "type": "toml", "path": "Cargo.lock", "jsonpath": "$.package[?(@.name.value=='kirie-annotate')].version" },
+        { "type": "toml", "path": "Cargo.lock", "jsonpath": "$.package[?(@.name.value=='kirie-update')].version" },
         { "type": "json", "path": "gnome-extension/metadata.json", "jsonpath": "$['version-name']" }
       ]
     }

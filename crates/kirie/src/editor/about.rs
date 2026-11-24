@@ -39,7 +39,7 @@ impl Editor {
             column![
                 svg(svg::Handle::from_memory(APP_ICON)).width(72).height(72),
                 text("Kirie").size(22),
-                text(format!("Version {}", crate::release::CURRENT_VERSION))
+                text(format!("Version {}", kirie_update::CURRENT_VERSION))
                     .size(13)
                     .color(palette.muted),
                 updates,
