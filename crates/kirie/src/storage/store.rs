@@ -1,6 +1,8 @@
 //! Small RON files Kirie keeps between runs, always written whole.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -53,9 +55,49 @@ pub fn write(path: &Path, text: &str) -> std::io::Result<()> {
     if let Some(folder) = path.parent() {
         std::fs::create_dir_all(folder)?;
     }
-    let partial = path.with_extension("ron.partial");
-    std::fs::write(&partial, text)?;
-    std::fs::rename(&partial, path)
+    let partial = write_beside(path, text)?;
+    std::fs::rename(&partial, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&partial);
+    })
+}
+
+/// Numbers the temporary files of this process.
+static WRITES: AtomicU32 = AtomicU32::new(0);
+
+/// Writes `text` to a new hidden file next to `path`, flushed to disk, and returns where. Each
+/// write gets its own file, so the editor, the overlay and the tray never write into one
+/// another's.
+pub fn write_beside(path: &Path, text: &str) -> std::io::Result<PathBuf> {
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "the path names no file")
+    })?;
+    let mut tries = 0;
+    // A name already taken is left over from an earlier Kirie with the same process id.
+    let (partial, mut file) = loop {
+        let write = WRITES.fetch_add(1, Ordering::Relaxed);
+        let partial = path.with_file_name(format!(
+            ".{}.kirie-{}-{write}",
+            name.to_string_lossy(),
+            std::process::id()
+        ));
+        match std::fs::File::create_new(&partial) {
+            Ok(file) => break (partial, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && tries < 8 => {
+                tries += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    match file
+        .write_all(text.as_bytes())
+        .and_then(|()| file.sync_all())
+    {
+        Ok(()) => Ok(partial),
+        Err(error) => {
+            let _ = std::fs::remove_file(&partial);
+            Err(error)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -73,7 +115,49 @@ mod tests {
         write(&path, "one").unwrap();
         write(&path, "two").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "two");
-        assert!(!path.with_extension("ron.partial").exists());
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1
+        );
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn leftover_temporary_files_are_skipped_and_kept() {
+        let folder = folder("leftover");
+        let path = folder.join("settings.ron");
+        std::fs::create_dir_all(&folder).unwrap();
+        let next = WRITES.load(Ordering::Relaxed);
+        for write in next..next + 3 {
+            let name = format!(".settings.ron.kirie-{}-{write}", std::process::id());
+            std::fs::write(folder.join(name), "crashed").unwrap();
+        }
+        write(&path, "saved").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "saved");
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 4);
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn writers_at_once_each_leave_a_whole_file() {
+        let folder = folder("at-once");
+        let path = folder.join("settings.ron");
+        let texts: Vec<String> = (0..8)
+            .map(|writer| writer.to_string().repeat(64 * 1024))
+            .collect();
+        std::thread::scope(|scope| {
+            for text in &texts {
+                let path = &path;
+                scope.spawn(move || {
+                    for _ in 0..20 {
+                        write(path, text).unwrap();
+                    }
+                });
+            }
+        });
+        let left = std::fs::read_to_string(&path).unwrap();
+        assert!(texts.contains(&left));
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 1);
         std::fs::remove_dir_all(folder).unwrap();
     }
 

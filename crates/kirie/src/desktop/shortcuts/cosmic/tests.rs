@@ -197,7 +197,7 @@ fn replacing_stops_when_the_file_changed_meanwhile() {
     assert_eq!(std::fs::read_to_string(&path).expect("read"), "{}");
     replace(&path, "new", Some("{}")).expect("unchanged file is replaced");
     assert_eq!(std::fs::read_to_string(&path).expect("read"), "new");
-    assert!(!dir.join(".custom.kirie-tmp").exists());
+    assert_eq!(std::fs::read_dir(&dir).expect("dir").count(), 1);
     std::fs::remove_dir_all(&dir).expect("clean up");
 }
 
