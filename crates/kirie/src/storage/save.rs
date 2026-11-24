@@ -75,7 +75,7 @@ impl Format {
 
 /// The folder screenshots are saved to, as set in the settings.
 pub fn screenshots_dir() -> PathBuf {
-    crate::settings::Settings::load().folder()
+    crate::storage::settings::Settings::load().folder()
 }
 
 /// `~/Pictures/Screenshots`, or the home folder's `Screenshots` without a pictures folder.
@@ -98,7 +98,7 @@ pub fn file_name(dir: &Path, now: &jiff::Zoned, taken: impl Fn(&Path) -> bool) -
 
 /// The name of a screenshot taken `now`, without extension, as the settings name it.
 pub fn stem(now: &jiff::Zoned) -> String {
-    crate::settings::Settings::load().stem(now)
+    crate::storage::settings::Settings::load().stem(now)
 }
 
 /// `Kirie_2026-11-22_10-30-15`: the name a capture handed to the editor gets, whatever the
@@ -231,13 +231,13 @@ pub async fn save(image: RgbaImage) -> Result<PathBuf, String> {
 /// clipboard, the window of `device` does.
 pub async fn save_and_copy(
     image: RgbaImage,
-    device: Option<crate::drops::Device>,
+    device: Option<crate::desktop::drops::Device>,
 ) -> Result<(PathBuf, bool), String> {
     let path = save(image.clone()).await?;
-    if !crate::settings::Settings::load().copy_on_save {
+    if !crate::storage::settings::Settings::load().copy_on_save {
         return Ok((path, false));
     }
-    let copied = crate::clipboard::copy_from(image, device)
+    let copied = crate::desktop::clipboard::copy_from(image, device)
         .await
         .inspect_err(|error| tracing::warn!(%error, "saved, but not copied"))
         .is_ok();

@@ -10,8 +10,8 @@ use kirie_ui::icon::Icon;
 use kirie_ui::widget::{icon_button, pill};
 use kirie_ui::{Palette, radius, space};
 
-use crate::paint::color_of;
-use crate::swatches::{Slot, Swatches};
+use crate::annotate::paint::color_of;
+use crate::annotate::swatches::{Slot, Swatches};
 
 pub const WIDTH: f32 = 216.0;
 /// The room the picker takes, for placing what holds it.

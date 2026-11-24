@@ -7,7 +7,7 @@ use kirie_ui::space;
 use kirie_ui::widget::{floating, primary_button, secondary_button};
 
 use super::view::APP_ICON;
-use super::{Editor, Message};
+use super::{Editor, Message, OutsideEvent};
 
 pub const WEBSITE: &str = "https://samuelba.dev/kirie";
 pub const SOURCE: &str = env!("CARGO_PKG_REPOSITORY");
@@ -28,10 +28,23 @@ impl Editor {
             updates = updates.push(secondary_button(label, palette, Message::Release(event)));
         }
         let links = row![
-            secondary_button("Website", palette, Message::OpenLink(WEBSITE)),
-            secondary_button("Source code", palette, Message::OpenLink(SOURCE)),
+            secondary_button(
+                "Website",
+                palette,
+                Message::Outside(OutsideEvent::OpenLink(WEBSITE))
+            ),
+            secondary_button(
+                "Source code",
+                palette,
+                Message::Outside(OutsideEvent::OpenLink(SOURCE))
+            ),
             Space::new().width(Length::Fill),
-            primary_button(Icon::Done, "Close", palette, Message::About(false)),
+            primary_button(
+                Icon::Done,
+                "Close",
+                palette,
+                Message::Outside(OutsideEvent::About(false))
+            ),
         ]
         .spacing(space::S)
         .align_y(Alignment::Center);
@@ -39,7 +52,7 @@ impl Editor {
             column![
                 svg(svg::Handle::from_memory(APP_ICON)).width(72).height(72),
                 text("Kirie").size(22),
-                text(format!("Version {}", crate::release::CURRENT_VERSION))
+                text(format!("Version {}", kirie_update::CURRENT_VERSION))
                     .size(13)
                     .color(palette.muted),
                 updates,
@@ -72,7 +85,7 @@ mod tests {
     fn the_about_card_opens_and_closes_with_escape() {
         let mut editor = Editor::boot(None).0;
         assert!(editor.about_dialog().is_none());
-        let _ = editor.update(Message::About(true));
+        let _ = editor.update(Message::Outside(OutsideEvent::About(true)));
         assert!(editor.about_dialog().is_some());
         let _ = editor.update(Message::Escape);
         assert!(editor.about_dialog().is_none());

@@ -18,7 +18,7 @@ use kirie_annotate::{Document, Kind, Op, Paint, Shape, ShapeId};
 use kirie_ui::icon::Icon;
 use kirie_ui::{Palette, radius, space};
 
-use crate::emoji_picker::{self, EmojiPicker};
+use crate::annotate::emoji_picker::{self, EmojiPicker};
 
 /// The most emoji offered for a name typed after a colon.
 const OFFERED: usize = 6;

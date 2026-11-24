@@ -4,7 +4,7 @@
 use kirie_annotate::{Document, Frame, Paint, StyleId, TextLook, Tool};
 use serde::{Deserialize, Serialize};
 
-use crate::swatches::Swatches;
+use crate::annotate::swatches::Swatches;
 
 const FILE: &str = "drawing.ron";
 
@@ -35,16 +35,16 @@ impl Default for Drawing {
 impl Drawing {
     /// The options last saved, or the usual ones.
     pub fn load() -> Self {
-        crate::store::state_path(FILE)
-            .and_then(|path| crate::store::read::<Self>(&path))
+        crate::storage::store::state_path(FILE)
+            .and_then(|path| crate::storage::store::read::<Self>(&path))
             .map(Self::checked)
             .unwrap_or_default()
     }
 
     pub fn save(&self) {
-        let saved = crate::store::state_path(FILE)
+        let saved = crate::storage::store::state_path(FILE)
             .ok_or_else(|| "cannot find the state folder".to_owned())
-            .and_then(|path| crate::store::save(&path, self));
+            .and_then(|path| crate::storage::store::save(&path, self));
         if let Err(error) = saved {
             tracing::warn!(%error, "drawing options not saved");
         }
@@ -80,7 +80,11 @@ impl Drawing {
     /// The paint to draw with `tool`: the highlighter keeps its own color.
     pub fn paint_for(&self, tool: Option<Tool>, swatches: &Swatches) -> Paint {
         Paint {
-            color: crate::controls::tool_color(tool, self.paint.color, swatches.first(self.style)),
+            color: crate::annotate::controls::tool_color(
+                tool,
+                self.paint.color,
+                swatches.first(self.style),
+            ),
             ..self.paint
         }
     }

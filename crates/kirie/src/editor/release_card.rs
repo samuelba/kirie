@@ -9,7 +9,8 @@ use kirie_ui::space;
 use kirie_ui::widget::{floating, primary_button, secondary_button, small_icon_button};
 
 use super::{Editor, Message};
-use crate::release::{self, CURRENT_VERSION, InstallKind, Installed, Release};
+use crate::storage::updates;
+use kirie_update::{self as release, CURRENT_VERSION, InstallKind, Installed, Release};
 
 const CARD_WIDTH: f32 = 340.0;
 /// How often an open editor looks at the clock to tell whether a look for a release is due.
@@ -43,12 +44,12 @@ pub struct Updates {
 impl Updates {
     pub fn new() -> Self {
         Self {
-            check: crate::settings::Settings::load().check_updates,
+            check: crate::storage::settings::Settings::load().check_updates,
             last_check: None,
             release: None,
             card: Card::Hidden,
             lookup: Lookup::Idle,
-            install: release::install_kind(),
+            install: release::install_kind(crate::desktop::launch::exe().ok().as_deref()),
         }
     }
 
@@ -114,12 +115,12 @@ impl Editor {
             }
             Event::OpenRelease => {
                 if let Some(release) = &self.updates.release {
-                    crate::launch::open(&release.url);
+                    crate::desktop::launch::open(&release.url);
                 }
             }
             Event::Skip => {
                 if let Some(release) = &self.updates.release {
-                    release::skip(&release.version);
+                    updates::skip(&release.version);
                 }
                 self.updates.card = Card::Hidden;
             }
@@ -185,7 +186,7 @@ impl Editor {
         };
         tracing::info!(version = %found.version, "a newer release is available");
         self.updates.lookup = Lookup::Idle;
-        let skipped = release::is_skipped(&found.version);
+        let skipped = updates::is_skipped(&found.version);
         self.updates.card =
             card_after_check(&self.updates.card, &self.updates.install, &found, skipped);
         self.updates.release = Some(found);
@@ -196,16 +197,17 @@ impl Editor {
             return Task::none();
         };
         if !matches!(self.updates.install, InstallKind::Script { .. }) {
-            crate::launch::open(&release.url);
+            crate::desktop::launch::open(&release.url);
             return Task::none();
         }
         if matches!(self.updates.card, Card::Updating | Card::Installed(_)) {
             return Task::none();
         }
         self.updates.card = Card::Updating;
-        Task::perform(release::install(release.version.clone()), |result| {
-            Message::Release(Event::Updated(result))
-        })
+        Task::perform(
+            release::install(release.version.clone(), crate::desktop::extension::dir()),
+            |result| Message::Release(Event::Updated(result)),
+        )
     }
 
     /// What the about card says about updates under the version, with its button.

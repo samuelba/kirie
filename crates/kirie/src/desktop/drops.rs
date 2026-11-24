@@ -708,7 +708,7 @@ mod tests {
             bytes: Arc::from(&b"png"[..]),
         };
         assert_eq!(
-            copied.as_one_of(&[crate::marks::MIME, PNG]),
+            copied.as_one_of(&[kirie_annotate::marks::MIME, PNG]),
             Some((PNG.to_owned(), b"png".to_vec()))
         );
         assert_eq!(copied.as_one_of(&TEXT), None);

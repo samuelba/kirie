@@ -113,4 +113,4 @@ jobs:
           [ -f packaging/minisign.pub ] || exit 0
           key="$(sed -n 2p packaging/minisign.pub)"
           grep -qx "public_key=\"$key\"" scripts/install.sh
-          grep -q "const RELEASE_KEY: &str = \"$key\";" crates/kirie/src/release/verify.rs
+          grep -q "const RELEASE_KEY: &str = \"$key\";" crates/kirie-update/src/verify.rs

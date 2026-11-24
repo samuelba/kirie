@@ -10,9 +10,9 @@ use kirie_ui::icon::Icon;
 use kirie_ui::widget::{icon_button, pill, swatch, swatch_button, value_slider};
 use kirie_ui::{Palette, space};
 
-use crate::paint::color_of;
-use crate::picker::Target;
-use crate::swatches::{Slot, Swatches};
+use crate::annotate::paint::color_of;
+use crate::annotate::picker::Target;
+use crate::annotate::swatches::{Slot, Swatches};
 
 pub fn tool_icon(tool: Tool) -> Icon {
     match tool {

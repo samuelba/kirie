@@ -1984,17 +1984,15 @@ dependencies = [
  "kirie-annotate",
  "kirie-capture",
  "kirie-ui",
+ "kirie-update",
  "kurbo 0.11.3",
- "minisign-verify",
  "ron",
  "rustix 1.1.6",
  "semver",
  "serde",
- "sha2",
  "tokio",
  "tracing",
  "tracing-subscriber",
- "ureq",
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
@@ -2047,6 +2045,20 @@ name = "kirie-ui"
 version = "0.4.0"
 dependencies = [
  "iced",
+]
+
+[[package]]
+name = "kirie-update"
+version = "0.4.0"
+dependencies = [
+ "directories",
+ "minisign-verify",
+ "semver",
+ "serde",
+ "sha2",
+ "tokio",
+ "tracing",
+ "ureq",
 ]
 
 [[package]]

@@ -7,7 +7,7 @@ use kirie_ui::icon::Icon;
 use kirie_ui::widget::{icon_button, swatch, value_slider};
 use kirie_ui::{Palette, space};
 
-use crate::paint::color_of;
+use crate::annotate::paint::color_of;
 
 /// What the room around the picture can be filled with; none leaves it transparent.
 const BACKGROUNDS: [Option<Rgba>; 5] = [

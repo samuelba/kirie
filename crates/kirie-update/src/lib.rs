@@ -19,7 +19,6 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const USER_AGENT: &str = concat!("kirie/", env!("CARGO_PKG_VERSION"));
 /// The marker `install.sh` writes: `method=script` and `version=<installed version>`.
 const MARKER: &str = "kirie/install-method";
-const SKIPPED_FILE: &str = "update-skipped";
 /// How often a running editor or tray icon looks for a newer release.
 pub const CHECK_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -45,12 +44,6 @@ pub struct Release {
 struct Latest {
     tag_name: String,
     html_url: String,
-}
-
-/// Whether the user wants to hear about `version`: Kirie may look for releases and this one
-/// was not skipped.
-pub fn wanted(version: &Version) -> bool {
-    crate::settings::Settings::load().check_updates && !is_skipped(version)
 }
 
 /// Asks GitHub for the latest release; `None` when the running build is up to date.
@@ -127,28 +120,6 @@ fn newer_than(current: &str, latest: Latest) -> Result<Option<Release>, String> 
     }))
 }
 
-/// Whether the user chose to skip exactly this version.
-pub fn is_skipped(version: &Version) -> bool {
-    crate::store::state_path(SKIPPED_FILE).is_some_and(|path| skipped_at(&path, version))
-}
-
-fn skipped_at(path: &Path, version: &Version) -> bool {
-    std::fs::read_to_string(path).is_ok_and(|skipped| skipped.trim() == version.to_string())
-}
-
-/// Remembers that the user does not want to hear about `version` again.
-pub fn skip(version: &Version) {
-    if let Some(path) = crate::store::state_path(SKIPPED_FILE) {
-        skip_at(&path, version);
-    }
-}
-
-fn skip_at(path: &Path, version: &Version) {
-    if let Err(error) = crate::store::write(path, &version.to_string()) {
-        tracing::warn!(path = %path.display(), %error, "cannot remember the skipped release");
-    }
-}
-
 /// How the running binary was installed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstallKind {
@@ -159,9 +130,9 @@ pub enum InstallKind {
     Other,
 }
 
-/// How the running binary was installed. `install.sh` puts it in `XDG_BIN_HOME` or
+/// How the binary at `running` was installed. `install.sh` puts it in `XDG_BIN_HOME` or
 /// `~/.local/bin`, as `directories` finds those.
-pub fn install_kind() -> InstallKind {
+pub fn install_kind(running: Option<&Path>) -> InstallKind {
     let Some(dirs) = directories::BaseDirs::new() else {
         return InstallKind::Other;
     };
@@ -169,11 +140,7 @@ pub fn install_kind() -> InstallKind {
         return InstallKind::Other;
     };
     let marker = std::fs::read_to_string(dirs.data_dir().join(MARKER)).ok();
-    kind_of(
-        marker.as_deref(),
-        crate::launch::exe().ok().as_deref(),
-        &script_binary(bin_dir),
-    )
+    kind_of(marker.as_deref(), running, &script_binary(bin_dir))
 }
 
 /// Where `install.sh` put the binary, with links resolved as the running binary's path has them.
@@ -249,18 +216,6 @@ mod tests {
         if let Some(release) = check_blocking().unwrap() {
             assert!(release.url.starts_with(REPOSITORY));
         }
-    }
-
-    #[test]
-    fn a_skipped_version_stays_skipped_until_a_newer_one() {
-        let dir = std::env::temp_dir().join(format!("kirie-release-{}", std::process::id()));
-        let path = dir.join("state").join(SKIPPED_FILE);
-        let v030 = Version::new(0, 3, 0);
-        assert!(!skipped_at(&path, &v030));
-        skip_at(&path, &v030);
-        assert!(skipped_at(&path, &v030));
-        assert!(!skipped_at(&path, &Version::new(0, 4, 0)));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

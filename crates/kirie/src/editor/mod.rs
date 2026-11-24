@@ -21,21 +21,16 @@ use ::image::RgbaImage;
 use iced::widget::image;
 use iced::{Event, Point, Size, Subscription, Task, Vector, event, keyboard, window};
 use kirie_annotate::project::{self, Project};
-use kirie_annotate::{
-    Document, Draft, History, Kind, Op, Paint, Press, Rgba, Shape, ShapeId, StyleId, Tool,
-    Typesetter, Weight,
-};
+use kirie_annotate::{Document, Draft, History, Op, Rgba, Shape, Tool, Typesetter};
 use kirie_ui::{Palette, Scheme};
 
 use self::closing::{Answer, Closing, Then};
 use self::viewport::{Viewport, Zoom};
-use crate::controls;
-use crate::drawing::Drawing;
-use crate::emoji_picker::EmojiPicker;
-use crate::picker::{self, Picker, Target};
-use crate::selection::{Release, Selection};
-use crate::swatches::Swatches;
-use crate::typing::{self, Typing};
+use crate::annotate::annotator::{Annotator, Change, Effect};
+use crate::annotate::drawing::Drawing;
+use crate::annotate::picker;
+use crate::annotate::selection::{Release, Selection};
+use crate::annotate::swatches::Swatches;
 
 /// How close to a mark a click picks it, in screen pixels.
 const MARK_REACH: f64 = 6.0;
@@ -114,72 +109,82 @@ pub enum Message {
     /// A pointer event in image coordinates, with the current canvas pixels per image pixel.
     Pointer(Pointer, f32),
     Pan(Vector),
-    Zoom {
-        factor: f32,
-        anchor: Point,
-        canvas: Size,
-    },
-    ZoomFit,
-    ZoomActual,
-    /// Zooms to the next level in, or out, around the middle of the canvas.
-    ZoomIn,
-    ZoomOut,
-    ZoomTo(Zoom),
-    /// Starts cropping, or keeps the crop when already cropping.
-    Crop,
-    CropDone,
-    /// Keeps the whole image.
-    CropReset,
-    CropCancel,
+    Zoom(ZoomEvent),
+    Crop(CropEvent),
     /// The image point under the pointer, if it is over the canvas.
     Hover(Option<kurbo::Point>),
     /// The canvas has a new size.
     Canvas(Size),
     Modifiers(keyboard::Modifiers),
     PickTool(Tool),
-    PickStyle(StyleId),
-    ToggleShadow,
-    PickColor(Rgba),
-    /// Opens the color picker on a swatch, or to add one.
-    EditColor(Target),
-    Picker(picker::Event),
-    Weight(crate::controls::WeightEvent),
-    ToggleFill,
-    Brightness(controls::BrightnessEvent),
-    Spot(kirie_annotate::SpotShape),
-    Look(controls::TextEvent),
-    Emoji(crate::emoji_picker::Event),
-    /// Moves through or picks the emoji offered while typing.
-    Choose(crate::typing::Choice),
+    /// An edit the overlay offers too.
+    Annotate(Change),
     Frame(frame::Event),
+    Marks(MarksEvent),
     MarkList(mark_list::Event),
     ToggleScheme,
-    TextEdit(iced::widget::text_editor::Action),
-    TextDone,
     /// Pastes the clipboard's text into the text being typed.
     PasteText,
-    /// The window lost the keyboard.
-    Unfocused,
-    /// The window got the keyboard back, perhaps after the overlay ran in a process of its own.
-    Focused,
-    Undo,
-    Redo,
-    Delete,
+    Escape,
+    File(FileEvent),
+    Finish(FinishEvent),
+    Outside(OutsideEvent),
+    Settings(settings::Event),
+    /// Looking for a newer release, and installing it.
+    Release(release_card::Event),
+    Opened(Result<Loaded, String>),
+    ToastExpired(u64),
+    Window(WindowEvent),
+    /// The desktop switched between light and dark.
+    SystemScheme(Scheme),
+}
+
+/// Zooming the canvas.
+#[derive(Debug, Clone, Copy)]
+pub enum ZoomEvent {
+    /// Zooms by `factor` around `anchor`, a point on a canvas of size `canvas`.
+    By {
+        factor: f32,
+        anchor: Point,
+        canvas: Size,
+    },
+    Fit,
+    Actual,
+    /// Zooms to the next level in, or out, around the middle of the canvas.
+    In,
+    Out,
+    To(Zoom),
+}
+
+/// Cropping the image.
+#[derive(Debug, Clone, Copy)]
+pub enum CropEvent {
+    /// Starts cropping, or keeps the crop when already cropping.
+    Start,
+    Done,
+    /// Keeps the whole image.
+    Reset,
+    Cancel,
+}
+
+/// Picking, copying and pasting marks.
+#[derive(Debug, Clone)]
+pub enum MarksEvent {
     /// Picks every mark with the select tool.
     SelectAll,
     /// Ctrl+C: copies the picked marks, else the picture.
     CopyKey,
     /// Copies the picked marks and deletes them.
     Cut,
-    /// Copies the picked marks a step aside.
-    Duplicate,
-    /// Moves the picked marks up or down among the others.
-    Restack(crate::marks::Restack),
     /// Copied marks reached the clipboard, or did not; with what to tell.
     Offered(Result<String, String>),
     /// What was on the clipboard when Ctrl+V was pressed.
     Pasted(Result<Pasted, String>),
-    Escape,
+}
+
+/// Copying, saving, opening and pasting pictures, and what is dropped on the window.
+#[derive(Debug, Clone)]
+pub enum FileEvent {
     Copy,
     Open,
     Paste,
@@ -187,28 +192,36 @@ pub enum Message {
     SaveProject,
     /// Asks where to save, and as what.
     SaveAs,
-    SaveTo(PathBuf, crate::save::Format),
+    SaveTo(PathBuf, crate::storage::save::Format),
+    Dropped(crate::desktop::drops::Dropped),
+}
+
+/// What became of an export, and closing the window.
+#[derive(Debug, Clone)]
+pub enum FinishEvent {
     Done(Result<String, String>),
     /// The image left the editor, saved (to the file) or copied, as this document had it.
     Exported(String, Option<PathBuf>, Box<Document>),
-    /// Shows a saved file in the file manager.
-    ShowInFiles(PathBuf),
     CloseRequested,
     Close(Answer),
     /// Puts the image away, asking first about unsaved changes.
     Discard,
+}
+
+/// The about card, and links and files handed to the desktop.
+#[derive(Debug, Clone)]
+pub enum OutsideEvent {
     /// Opens or closes the about card.
     About(bool),
-    Settings(settings::Event),
-    /// Looking for a newer release, and installing it.
-    Release(release_card::Event),
     OpenLink(&'static str),
-    Opened(Result<Loaded, String>),
-    Dropped(crate::drops::Dropped),
-    ToastExpired(u64),
-    Ipc(crate::ipc::Request),
-    /// The desktop switched between light and dark.
-    SystemScheme(Scheme),
+    /// Shows a saved file in the file manager.
+    ShowInFiles(PathBuf),
+}
+
+/// The window: taking a screenshot from it, bringing it to the front, and its keyboard.
+#[derive(Debug, Clone)]
+pub enum WindowEvent {
+    Ipc(crate::desktop::ipc::Request),
     /// Hides the window and opens the overlay; the capture comes back over D-Bus.
     Capture,
     /// The window's size and state, taken just before it closes for a capture.
@@ -216,6 +229,10 @@ pub enum Message {
     /// Window `id`, placed so, is to be opened anew to come to the front.
     Remap(window::Id, Placement),
     CaptureEnded(Result<(), String>),
+    /// The window lost the keyboard.
+    Unfocused,
+    /// The window got the keyboard back, perhaps after the overlay ran in a process of its own.
+    Focused,
 }
 
 /// How far copied marks got to the clipboard.
@@ -260,7 +277,7 @@ struct Cropping {
 #[derive(Debug, Default)]
 struct Drops {
     /// The device, once it is ready.
-    device: Option<crate::drops::Device>,
+    device: Option<crate::desktop::drops::Device>,
     /// The window the device was last made anew for.
     renewed_for: Option<window::Id>,
     /// Something that can be opened is dragged over the window.
@@ -283,7 +300,7 @@ pub struct Editor {
     palette: Palette,
     image: Option<(RgbaImage, image::Handle)>,
     path: Option<PathBuf>,
-    history: History,
+    annotator: Annotator,
     /// The document as last opened, saved or copied, to tell unsaved changes.
     kept: Document,
     closing: Closing,
@@ -302,30 +319,17 @@ pub struct Editor {
     /// The image point under the pointer.
     hover: Option<kurbo::Point>,
     tool: Tool,
-    paint: Paint,
-    swatches: Swatches,
-    picker: Option<Picker>,
-    emojis: EmojiPicker,
-    draft: Option<Draft>,
-    /// The marks the select tool picked; a lone one shows its grips.
-    picked: Vec<ShapeId>,
     mark_list: mark_list::Shown,
     /// The marks copied last, while the clipboard is not known to hold them: Ctrl+V pastes them
     /// while they are on their way there, or, should they never get there, when it holds
     /// neither marks nor an image.
     clip: Option<(Vec<Shape>, Offer)>,
-    /// A slider is being dragged; its moves undo as one step.
-    sliding: bool,
-    typing: Option<Typing>,
-    /// The last press, to tell a double click.
-    last_click: Option<iced::advanced::mouse::Click>,
-    modifiers: keyboard::Modifiers,
     toast: Option<Toast>,
     toasts: u64,
     /// Set once the user picks light or dark; until then the editor follows the desktop.
     scheme_chosen: bool,
     typesetter: RefCell<Typesetter>,
-    patches: RefCell<HashMap<crate::paint::PatchKey, image::Handle>>,
+    patches: RefCell<HashMap<crate::annotate::paint::PatchKey, image::Handle>>,
     pictures: RefCell<HashMap<u64, image::Handle>>,
     drops: Drops,
 }
@@ -349,6 +353,7 @@ impl Editor {
     fn boot_with(loaded: Option<Loaded>, token: Option<String>) -> (Self, Task<Message>) {
         let swatches = Swatches::load();
         let drawing = Drawing::load();
+        let paint = drawing.paint_for(Some(Tool::Arrow), &swatches);
         let blank = drawing.styled(Document::new(1, 1, 1.0));
         let placement = Placement::default();
         let (id, opened) = window::open(settings(placement));
@@ -358,7 +363,7 @@ impl Editor {
             palette: Palette::DARK,
             image: None,
             path: None,
-            history: History::new(blank.clone()),
+            annotator: Annotator::new(blank.clone(), paint, swatches),
             kept: blank,
             closing: Closing::No,
             about: false,
@@ -370,18 +375,8 @@ impl Editor {
             canvas: Size::ZERO,
             hover: None,
             tool: Tool::Arrow,
-            paint: drawing.paint_for(Some(Tool::Arrow), &swatches),
-            swatches,
-            picker: None,
-            emojis: EmojiPicker::load(),
-            draft: None,
-            picked: Vec::new(),
             mark_list: mark_list::Shown::Closed,
             clip: None,
-            sliding: false,
-            typing: None,
-            last_click: None,
-            modifiers: keyboard::Modifiers::default(),
             toast: None,
             toasts: 0,
             scheme_chosen: false,
@@ -405,7 +400,7 @@ impl Editor {
     fn open(&mut self, mut loaded: Loaded) {
         let handoff = loaded
             .path
-            .take_if(|path| crate::save::is_handoff(path))
+            .take_if(|path| crate::storage::save::is_handoff(path))
             .map(std::fs::remove_file)
             .is_some();
         let handle = image::Handle::from_rgba(
@@ -427,22 +422,22 @@ impl Editor {
         } else {
             document
         };
-        self.paint = drawing.paint_for(Some(self.tool), &self.swatches);
+        self.annotator.paint = drawing.paint_for(Some(self.tool), &self.annotator.swatches);
         self.kept = document.clone();
-        self.history = History::new(document);
-        self.follow_style(drawing.style);
+        self.annotator.history = History::new(document);
+        self.annotator.follow_style(drawing.style);
         self.image = Some((loaded.image, handle));
         self.path = loaded.path;
         self.viewport = Viewport::fitted();
         self.cropping = None;
-        self.draft = None;
-        self.picked.clear();
+        self.annotator.draft = None;
+        self.annotator.picked.clear();
         if demo {
             self.tool = Tool::Select;
-            self.picked = demo::picked(self.document()).into_iter().collect();
+            self.annotator.picked = demo::picked(self.document()).into_iter().collect();
         }
-        self.typing = None;
-        self.sliding = false;
+        self.annotator.typing = None;
+        self.annotator.sliding = false;
         self.closing = Closing::No;
         self.then = Then::Exit;
         self.patches.borrow_mut().clear();
@@ -451,31 +446,31 @@ impl Editor {
     /// Reads the colors and recent emoji the overlay may have saved, so the editor's next save
     /// does not put back its older copy.
     fn reload_shared(&mut self) {
-        self.swatches = Swatches::load();
-        self.emojis.reload();
+        self.annotator.swatches = Swatches::load();
+        self.annotator.emojis.reload();
     }
 
     /// Puts the image away: the editor shows its empty page again.
     fn clear(&mut self) {
         let blank = Drawing::load().styled(Document::new(1, 1, 1.0));
         self.kept = blank.clone();
-        self.history = History::new(blank);
+        self.annotator.history = History::new(blank);
         self.image = None;
         self.path = None;
         self.viewport = Viewport::fitted();
         self.cropping = None;
         self.hover = None;
-        self.draft = None;
-        self.picked.clear();
-        self.typing = None;
-        self.sliding = false;
+        self.annotator.draft = None;
+        self.annotator.picked.clear();
+        self.annotator.typing = None;
+        self.annotator.sliding = false;
         self.closing = Closing::No;
         self.then = Then::Exit;
         self.patches.borrow_mut().clear();
     }
 
     fn document(&self) -> &Document {
-        self.history.current()
+        self.annotator.history.current()
     }
 
     fn image_size(&self) -> Size {
@@ -510,7 +505,7 @@ impl Editor {
     fn drafts(&self) -> Vec<Shape> {
         let document = self.document();
         let mut drafts = Vec::new();
-        match &self.draft {
+        match &self.annotator.draft {
             Some(Draft::Moving { ids, by, .. }) => {
                 drafts.extend(
                     ids.iter()
@@ -526,7 +521,7 @@ impl Editor {
                 drafts.extend(draft.preview().map(|kind| Shape {
                     id: document.next_id(),
                     kind,
-                    paint: self.paint,
+                    paint: self.annotator.paint,
                     style: None,
                     rotation: 0.0,
                 }));
@@ -534,9 +529,10 @@ impl Editor {
             None => {}
         }
         drafts.extend(
-            self.typing
+            self.annotator
+                .typing
                 .as_ref()
-                .map(|typing| typing.preview(document, self.paint)),
+                .map(|typing| typing.preview(document, self.annotator.paint)),
         );
         drafts
     }
@@ -557,85 +553,38 @@ impl Editor {
         match message {
             Message::Pointer(pointer, scale) => return self.pointer(pointer, scale),
             Message::Pan(by) => self.viewport = self.viewport.panned(by),
-            Message::Zoom { .. }
-            | Message::ZoomFit
-            | Message::ZoomActual
-            | Message::ZoomIn
-            | Message::ZoomOut
-            | Message::ZoomTo(_) => self.zoom(&message),
+            Message::Zoom(event) => self.zoom(event),
             Message::Hover(at) => self.hover = at,
             Message::Canvas(size) => self.canvas = size,
-            Message::Modifiers(modifiers) => self.modifiers = modifiers,
+            Message::Modifiers(modifiers) => self.annotator.modifiers = modifiers,
             Message::PickTool(tool) => self.pick_tool(tool),
-            Message::PickStyle(_)
-            | Message::ToggleShadow
-            | Message::PickColor(_)
-            | Message::EditColor(_)
-            | Message::Picker(_)
-            | Message::Weight(_)
-            | Message::ToggleFill
-            | Message::Brightness(_)
-            | Message::Spot(_)
-            | Message::Look(_)
-            | Message::Frame(_) => return self.restyle(message),
+            Message::Annotate(change) => {
+                if matches!(change, Change::Undo | Change::Redo) {
+                    self.cropping = None;
+                }
+                let effect = self.annotator.update(change);
+                return self.annotated(effect);
+            }
+            Message::Frame(event) => self.frame(event),
             Message::SystemScheme(scheme) => self.follow(Some(scheme)),
             Message::ToggleScheme => self.follow(None),
-            Message::TextEdit(_)
-            | Message::TextDone
-            | Message::PasteText
-            | Message::Choose(_)
-            | Message::Emoji(_) => {
-                return self.typed(message);
-            }
-            Message::Undo => self.travel(true),
-            Message::Redo => self.travel(false),
-            Message::Delete
-            | Message::SelectAll
-            | Message::CopyKey
-            | Message::Cut
-            | Message::Duplicate
-            | Message::Restack(_)
-            | Message::Offered(_)
-            | Message::Pasted(_)
-            | Message::MarkList(_) => return self.edit_marks(message),
+            Message::PasteText => return self.paste_text(),
+            Message::Marks(event) => return self.edit_marks(event),
+            Message::MarkList(event) => return self.mark_list_event(event),
             Message::Escape if self.closing == Closing::Asking => self.closing = Closing::No,
-            Message::Escape | Message::About(false) if self.about => self.about = false,
-            Message::Settings(event) => return self.edit_settings(event),
-            Message::Release(event) => return self.release_event(event),
-            Message::About(_) | Message::OpenLink(_) | Message::ShowInFiles(_) => {
-                return self.outside(message);
-            }
-            Message::CropCancel if self.cropping.is_some() => {
-                self.cropping = None;
-                self.viewport = Viewport::fitted();
-            }
-            Message::Crop | Message::CropDone | Message::CropReset | Message::CropCancel => {
-                self.crop_message(&message);
+            Message::Escape | Message::Outside(OutsideEvent::About(false)) if self.about => {
+                self.about = false;
             }
             Message::Escape => return self.escape(),
-            Message::Focused => self.reload_shared(),
-            Message::Copy
-            | Message::Open
-            | Message::Paste
-            | Message::Save
-            | Message::SaveProject
-            | Message::SaveAs
-            | Message::SaveTo(..)
-            | Message::Unfocused
-            | Message::Dropped(_) => return self.files(message),
-            Message::Done(Ok(text)) if text.is_empty() => {}
-            Message::Done(_)
-            | Message::Exported(..)
-            | Message::CloseRequested
-            | Message::Discard
-            | Message::Close(_) => return self.finish(message),
+            Message::Settings(event) => return self.edit_settings(event),
+            Message::Release(event) => return self.release_event(event),
+            Message::Outside(event) => return self.outside(event),
+            Message::Crop(event) => self.crop_message(event),
+            Message::File(event) => return self.files(event),
+            Message::Finish(event) => return self.finish(event),
             Message::Opened(Ok(loaded)) => return self.replace(loaded),
-            Message::Ipc(_)
-            | Message::Capture
-            | Message::Remap(..)
-            | Message::Hide(_)
-            | Message::CaptureEnded(_) => return self.windowing(message),
             Message::Opened(Err(error)) => return self.toast(Err(error)),
+            Message::Window(event) => return self.windowing(event),
             Message::ToastExpired(id) => {
                 if self.toast.as_ref().is_some_and(|toast| toast.id == id) {
                     self.toast = None;
@@ -647,24 +596,53 @@ impl Editor {
 
     fn pick_tool(&mut self, tool: Tool) {
         self.keep_crop();
-        self.commit_text();
+        self.annotator.pick_tool(Some(tool));
         self.tool = tool;
-        self.paint.color = controls::tool_color(
-            Some(tool),
-            self.paint.color,
-            self.swatches.first(self.document().style),
-        );
-        self.draft = None;
-        if tool != Tool::Select {
-            self.picked.clear();
+    }
+
+    /// Acts on what an edit did: the text box takes the keyboard, the drawing options are kept
+    /// for the next time, and colors that could not be kept are told.
+    fn annotated(&mut self, effect: Effect) -> Task<Message> {
+        if effect.settled {
+            self.remember_drawing();
         }
+        let focus = if effect.focus {
+            iced::widget::operation::focus(view::TEXT_INPUT)
+        } else {
+            Task::none()
+        };
+        match effect.error {
+            Some(error) => Task::batch([focus, self.toast(Err(error))]),
+            None => focus,
+        }
+    }
+
+    /// Changes to the frame around the picture, kept for the next time unless a slider is
+    /// still dragged.
+    fn frame(&mut self, event: frame::Event) {
+        let document = self.document();
+        let op = Op::SetFrame(event.apply(document.frame, document.unit));
+        match event {
+            frame::Event::MarginDone => self.annotator.sliding = false,
+            frame::Event::Margin(_) => {
+                self.annotator.adjust(op, true);
+                return;
+            }
+            frame::Event::Background(_)
+            | frame::Event::ToggleShadow
+            | frame::Event::ToggleOverflow => {
+                self.annotator.history.apply(op);
+            }
+        }
+        self.remember_drawing();
     }
 
     /// Esc puts down what is open, one thing at a time: the eyedropper, the settings, the crop,
     /// the color picker, the text being typed, the mark being drawn, then the picked marks.
     fn escape(&mut self) -> Task<Message> {
-        if self.sampling() {
-            return self.edit_color(picker::Event::Eyedropper);
+        if self.annotator.sampling() {
+            let effect = self.annotator.edit_color(picker::Event::Eyedropper);
+            return self.annotated(effect);
         }
         if self.settings.take().is_some() {
             return Task::none();
@@ -673,88 +651,66 @@ impl Editor {
             self.viewport = Viewport::fitted();
             return Task::none();
         }
-        if let Some(typing) = &mut self.typing
-            && typing.dismiss()
-        {
-            return iced::widget::operation::focus(view::TEXT_INPUT);
+        match self.annotator.put_down() {
+            Some(effect) => self.annotated(effect),
+            None => Task::none(),
         }
-        if self.picker.take().is_none()
-            && self.typing.take().is_none()
-            && self.draft.take().is_none()
-        {
-            self.picked.clear();
-        }
-        Task::none()
     }
 
-    /// Deleting, picking, copying and pasting marks, and the list of them.
-    fn edit_marks(&mut self, message: Message) -> Task<Message> {
-        match message {
-            Message::MarkList(event) => return self.mark_list_event(event),
-            Message::CopyKey if self.picked.is_empty() => return self.export(Export::Copy),
-            Message::CopyKey => return self.copy_marks(),
-            Message::Cut if !self.picked.is_empty() => {
+    /// Picking, copying and pasting marks.
+    fn edit_marks(&mut self, event: MarksEvent) -> Task<Message> {
+        match event {
+            MarksEvent::CopyKey if self.annotator.picked.is_empty() => {
+                return self.export(Export::Copy);
+            }
+            MarksEvent::CopyKey => return self.copy_marks(),
+            MarksEvent::Cut if !self.annotator.picked.is_empty() => {
                 let copied = self.copy_marks();
-                let ids = std::mem::take(&mut self.picked);
-                self.history.apply(Op::Remove { ids });
+                let ids = std::mem::take(&mut self.annotator.picked);
+                self.annotator.history.apply(Op::Remove { ids });
                 return copied;
             }
-            Message::Duplicate => {
-                if let Some((op, ids)) = crate::marks::duplicate(self.document(), &self.picked) {
-                    self.history.apply(op);
-                    self.picked = ids;
-                }
-            }
-            Message::Restack(to) => {
-                if let Some(op) = crate::marks::restack(self.document(), &self.picked, to) {
-                    self.history.apply(op);
-                }
-            }
-            Message::Pasted(Ok(Pasted::Marks(_))) if self.image.is_none() => {
+            MarksEvent::Pasted(Ok(Pasted::Marks(_))) if self.image.is_none() => {
                 return self.toast(Err("Open an image to paste the marks on".to_owned()));
             }
-            Message::Pasted(Ok(Pasted::Marks(clip))) => {
+            MarksEvent::Pasted(Ok(Pasted::Marks(clip))) => {
                 self.keep_crop();
                 let _ = self.update(Message::PickTool(Tool::Select));
-                if let Some((op, ids)) = crate::marks::paste(self.document(), &clip) {
-                    self.history.apply(op);
-                    self.picked = ids;
+                if let Some((op, ids)) = kirie_annotate::marks::paste(self.document(), &clip) {
+                    self.annotator.history.apply(op);
+                    self.annotator.picked = ids;
                 }
             }
-            Message::Pasted(Ok(Pasted::Image(image))) if self.image.is_none() => {
+            MarksEvent::Pasted(Ok(Pasted::Image(image))) if self.image.is_none() => {
                 return self.update(Message::Opened(Ok(Loaded::image(image, None))));
             }
-            Message::Pasted(Ok(Pasted::Image(image))) => {
+            MarksEvent::Pasted(Ok(Pasted::Image(image))) => {
                 self.keep_crop();
-                match crate::marks::place_image(self.document(), image) {
+                match kirie_annotate::marks::place_image(self.document(), image) {
                     Ok((op, id)) => {
                         let _ = self.update(Message::PickTool(Tool::Select));
-                        self.history.apply(op);
-                        self.picked = vec![id];
+                        self.annotator.history.apply(op);
+                        self.annotator.picked = vec![id];
                     }
                     Err(error) => return self.toast(Err(error)),
                 }
             }
-            Message::Pasted(Err(error)) => return self.toast(Err(error)),
-            Message::Offered(Ok(copied)) => {
+            MarksEvent::Pasted(Err(error)) => return self.toast(Err(error)),
+            MarksEvent::Offered(Ok(copied)) => {
                 self.clip = None;
                 return self.toast(Ok(copied));
             }
-            Message::Offered(Err(copied)) => {
+            MarksEvent::Offered(Err(copied)) => {
                 if let Some((_, offer)) = &mut self.clip {
                     *offer = Offer::Failed;
                 }
                 return self.toast(Ok(copied));
             }
-            Message::Delete if !self.picked.is_empty() => {
-                let ids = std::mem::take(&mut self.picked);
-                self.history.apply(Op::Remove { ids });
-            }
-            Message::SelectAll if self.image.is_some() && self.cropping.is_none() => {
+            MarksEvent::SelectAll if self.image.is_some() && self.cropping.is_none() => {
                 let _ = self.update(Message::PickTool(Tool::Select));
                 let document = self.document();
                 let canvas = document.canvas();
-                self.picked = document
+                self.annotator.picked = document
                     .shapes()
                     .filter(|shape| {
                         let area = shape.turn().transform_rect_bbox(document.bounds(shape));
@@ -766,14 +722,14 @@ impl Editor {
                     .map(|shape| shape.id)
                     .collect();
             }
-            _ => {}
+            MarksEvent::Cut | MarksEvent::SelectAll => {}
         }
         Task::none()
     }
 
     /// Puts the picked marks on the clipboard, for Ctrl+V here or in another Kirie.
     fn copy_marks(&mut self) -> Task<Message> {
-        let marks = crate::marks::of(self.document(), &self.picked);
+        let marks = kirie_annotate::marks::of(self.document(), &self.annotator.picked);
         if marks.is_empty() {
             return Task::none();
         }
@@ -785,239 +741,85 @@ impl Editor {
         };
         let device = self.drops.device.clone();
         let offered = async move {
-            let bytes = tokio::task::spawn_blocking(move || crate::marks::encode(marks))
+            let bytes = tokio::task::spawn_blocking(move || kirie_annotate::marks::encode(marks))
                 .await
                 .map_err(|error| error.to_string())??;
-            crate::clipboard::offer_from(bytes, crate::marks::MIME, device).await
+            crate::desktop::clipboard::offer_from(bytes, kirie_annotate::marks::MIME, device).await
         };
         Task::perform(offered, move |offered| {
-            Message::Offered(match offered {
+            Message::Marks(MarksEvent::Offered(match offered {
                 Ok(()) => Ok(copied),
                 Err(error) => Err(format!("{copied} here; other apps cannot ({error})")),
-            })
+            }))
         })
     }
 
-    fn zoom(&mut self, message: &Message) {
+    fn zoom(&mut self, event: ZoomEvent) {
         let content = self.content();
         let middle = Point::new(self.canvas.width / 2.0, self.canvas.height / 2.0);
         let scale = self.viewport.scale(content, self.canvas);
-        self.viewport = match *message {
-            Message::Zoom {
+        self.viewport = match event {
+            ZoomEvent::By {
                 factor,
                 anchor,
                 canvas,
             } => self.viewport.zoomed(factor, anchor, content, canvas),
-            Message::ZoomFit | Message::ZoomTo(Zoom::Fit) => Viewport::fitted(),
-            Message::ZoomActual => Viewport::actual_size(),
-            Message::ZoomIn | Message::ZoomOut => {
-                let level = viewport::step(scale, matches!(message, Message::ZoomIn));
+            ZoomEvent::Fit | ZoomEvent::To(Zoom::Fit) => Viewport::fitted(),
+            ZoomEvent::Actual => Viewport::actual_size(),
+            ZoomEvent::In | ZoomEvent::Out => {
+                let level = viewport::step(scale, matches!(event, ZoomEvent::In));
                 self.viewport.zoomed_to(level, middle, content, self.canvas)
             }
             #[allow(clippy::cast_precision_loss)]
-            Message::ZoomTo(Zoom::Percent(percent)) => {
+            ZoomEvent::To(Zoom::Percent(percent)) => {
                 self.viewport
                     .zoomed_to(percent as f32 / 100.0, middle, content, self.canvas)
             }
-            _ => self.viewport,
         };
     }
 
-    /// Taking a screenshot from the editor, and bringing its window to the front.
-    fn windowing(&mut self, message: Message) -> Task<Message> {
-        match message {
-            Message::Ipc(crate::ipc::Request::Open(path, token)) => self
+    /// Taking a screenshot from the editor, bringing its window to the front, and its keyboard.
+    fn windowing(&mut self, event: WindowEvent) -> Task<Message> {
+        match event {
+            WindowEvent::Ipc(crate::desktop::ipc::Request::Open(path, token)) => self
                 .raise(token)
                 .chain(Task::perform(load_async(path), Message::Opened)),
-            Message::Ipc(crate::ipc::Request::Present(token)) => self.raise(token),
-            Message::Ipc(crate::ipc::Request::About(token)) => {
+            WindowEvent::Ipc(crate::desktop::ipc::Request::Present(token)) => self.raise(token),
+            WindowEvent::Ipc(crate::desktop::ipc::Request::About(token)) => {
                 self.about = true;
                 Task::batch([self.raise(token), self.check_on_about()])
             }
-            Message::Ipc(crate::ipc::Request::Settings(token)) => {
+            WindowEvent::Ipc(crate::desktop::ipc::Request::Settings(token)) => {
                 let _ = self.edit_settings(settings::Event::Open);
                 self.raise(token)
             }
-            Message::Ipc(crate::ipc::Request::Resume) if self.window.is_none() => self.raise(None),
-            Message::Capture => self
-                .window
-                .map_or_else(Task::none, |id| placement(id).map(Message::Hide)),
-            Message::Remap(id, placement) if self.window == Some(id) => {
+            WindowEvent::Ipc(crate::desktop::ipc::Request::Resume) if self.window.is_none() => {
+                self.raise(None)
+            }
+            WindowEvent::Capture => self.window.map_or_else(Task::none, |id| {
+                placement(id).map(|value| Message::Window(WindowEvent::Hide(value)))
+            }),
+            WindowEvent::Remap(id, placement) if self.window == Some(id) => {
                 self.placement = placement;
                 self.reopen(Some(id), None)
             }
-            Message::Hide(placement) => {
+            WindowEvent::Hide(placement) => {
                 let Some(id) = self.window.take() else {
                     return Task::none();
                 };
                 self.placement = placement;
-                window::close(id).chain(Task::perform(capture(), Message::CaptureEnded))
+                window::close(id).chain(Task::perform(capture(), |value| {
+                    Message::Window(WindowEvent::CaptureEnded(value))
+                }))
             }
-            Message::CaptureEnded(Err(error)) => self.raise(None).chain(self.toast(Err(error))),
-            // The overlay asks for the window back when it is done, through `Resume` or `Open`.
-            _ => Task::none(),
-        }
-    }
-
-    /// What became of an export, and closing the window.
-    fn finish(&mut self, message: Message) -> Task<Message> {
-        match message {
-            Message::Done(result) => {
-                if result.is_err() {
-                    self.closing = Closing::No;
-                    self.then = Then::Exit;
-                }
-                self.toast(result)
+            WindowEvent::CaptureEnded(Err(error)) => self.raise(None).chain(self.toast(Err(error))),
+            WindowEvent::Focused => {
+                self.reload_shared();
+                Task::none()
             }
-            Message::Exported(text, file, kept) => {
-                self.kept = *kept;
-                if self.closing == Closing::Saving {
-                    let then = self.carry_on();
-                    return then.chain(self.toast_file(text, file));
-                }
-                self.toast_file(text, file)
-            }
-            Message::CloseRequested => self.close_requested(),
-            Message::Discard => self.discard(),
-            Message::Close(answer) => self.answer(answer),
-            _ => Task::none(),
-        }
-    }
-
-    /// Changes to the style, colors, weight, fill, text look and frame, kept for the next time.
-    fn restyle(&mut self, message: Message) -> Task<Message> {
-        let settled = settled(&message);
-        let task = self.change_style(message);
-        if settled {
-            self.remember_drawing();
-        }
-        task
-    }
-
-    fn change_style(&mut self, message: Message) -> Task<Message> {
-        match message {
-            Message::PickStyle(style) => {
-                let before = self.document().style;
-                let recolor = self.swatches.recolor(before, style);
-                self.history.apply(Op::SetStyle { style, recolor });
-                self.follow_style(before);
-            }
-            Message::ToggleShadow => {
-                let shadow = !self.document().shadow;
-                self.history.apply(Op::SetShadow(shadow));
-            }
-            Message::PickColor(color) => self.repaint(|paint| paint.color = color),
-            Message::EditColor(target) => {
-                self.picker = Some(Picker::new(
-                    target,
-                    self.document().style,
-                    &self.swatches,
-                    self.paint.color,
-                ));
-            }
-            Message::Picker(event) => return self.edit_color(event),
-            Message::Weight(controls::WeightEvent::Done)
-            | Message::Brightness(controls::BrightnessEvent::Done)
-            | Message::Look(controls::TextEvent::SizeDone)
-            | Message::Frame(frame::Event::MarginDone) => self.sliding = false,
-            Message::Frame(event) => {
-                let document = self.document();
-                let op = Op::SetFrame(event.apply(document.frame, document.unit));
-                if let frame::Event::Margin(_) = event {
-                    self.history.apply_gradually(op, self.sliding);
-                    self.sliding = true;
-                } else {
-                    self.history.apply(op);
-                }
-            }
-            Message::Brightness(controls::BrightnessEvent::Slide(brightness)) => {
-                self.history
-                    .apply_gradually(Op::SetSpotlightBrightness(brightness), self.sliding);
-                self.sliding = true;
-            }
-            Message::Weight(controls::WeightEvent::Pick(weight)) => {
-                self.repaint(|paint| paint.weight = weight);
-            }
-            Message::Weight(controls::WeightEvent::Slide(width)) => {
-                self.repaint_gradually(|paint| paint.weight = Weight::new(width), true);
-            }
-            Message::ToggleFill => self.repaint(|paint| paint.filled = !paint.filled),
-            Message::Spot(spot) => self.repaint(|paint| paint.spot = spot),
-            Message::Look(event) => {
-                self.repaint_gradually(
-                    |paint| paint.text = event.apply(paint.text),
-                    event.gradual(),
-                );
-            }
-            _ => {}
-        }
-        Task::none()
-    }
-
-    /// Keeps the drawing options for the next image, and the next session.
-    fn remember_drawing(&self) {
-        let drawing = Drawing::load().with_marks(self.paint, self.document());
-        if self.image.is_some() {
-            drawing.with_frame(self.document()).save();
-        } else {
-            drawing.save();
-        }
-    }
-
-    fn edit_color(&mut self, event: picker::Event) -> Task<Message> {
-        let picker::Outcome::Changed { pick } =
-            picker::update(&mut self.picker, &mut self.swatches, event)
-        else {
-            return Task::none();
-        };
-        if let Some(color) = pick {
-            self.repaint(|paint| paint.color = color);
-        }
-        match self.swatches.save() {
-            Ok(()) => Task::none(),
-            Err(error) => self.toast(Err(error)),
-        }
-    }
-
-    /// Copying, saving, opening and pasting.
-    fn files(&mut self, message: Message) -> Task<Message> {
-        match message {
-            Message::Copy => self.export(Export::Copy),
-            // The window is in front already, so the image opens in it as it is.
-            Message::Open => {
-                Task::perform(crate::dialog::open_image(), |picked| picked).then(|picked| {
-                    match picked {
-                        Ok(Some(path)) => Task::perform(load_async(path), Message::Opened),
-                        Ok(None) => Task::none(),
-                        Err(error) => Task::done(Message::Done(Err(error))),
-                    }
-                })
-            }
-            Message::Paste => Task::perform(
-                paste(self.drops.device.clone(), self.clip.clone()),
-                Message::Pasted,
-            ),
-            Message::Save => self.export(Export::Save),
-            Message::SaveProject => self.export(Export::Project),
-            Message::SaveAs if self.image.is_some() => {
-                let name = self.suggested_name();
-                Task::perform(
-                    async move {
-                        let folder = crate::save::screenshots_dir();
-                        let _ = std::fs::create_dir_all(&folder);
-                        crate::dialog::save_as(&name, &folder, &crate::save::Format::ALL).await
-                    },
-                    |picked| match picked {
-                        Ok(Some((path, format))) => Message::SaveTo(path, format),
-                        Ok(None) => Message::Done(Ok(String::new())),
-                        Err(error) => Message::Done(Err(error)),
-                    },
-                )
-            }
-            Message::SaveTo(path, format) => self.export(Export::To(path, format)),
             // Made anew before anything can be dragged from another window onto this one.
             // Once per window: iced's clipboard makes a device of its own when a window opens.
-            Message::Unfocused => {
+            WindowEvent::Unfocused => {
                 if self.drops.renewed_for != self.window
                     && let Some(device) = &self.drops.device
                 {
@@ -1026,26 +828,106 @@ impl Editor {
                 }
                 Task::none()
             }
-            Message::Dropped(crate::drops::Dropped::Ready(device)) => {
+            // The overlay asks for the window back when it is done, through `Resume` or `Open`.
+            WindowEvent::Ipc(crate::desktop::ipc::Request::Resume)
+            | WindowEvent::Remap(..)
+            | WindowEvent::CaptureEnded(Ok(())) => Task::none(),
+        }
+    }
+
+    /// What became of an export, and closing the window.
+    fn finish(&mut self, event: FinishEvent) -> Task<Message> {
+        match event {
+            FinishEvent::Done(Ok(text)) if text.is_empty() => Task::none(),
+            FinishEvent::Done(result) => {
+                if result.is_err() {
+                    self.closing = Closing::No;
+                    self.then = Then::Exit;
+                }
+                self.toast(result)
+            }
+            FinishEvent::Exported(text, file, kept) => {
+                self.kept = *kept;
+                if self.closing == Closing::Saving {
+                    let then = self.carry_on();
+                    return then.chain(self.toast_file(text, file));
+                }
+                self.toast_file(text, file)
+            }
+            FinishEvent::CloseRequested => self.close_requested(),
+            FinishEvent::Discard => self.discard(),
+            FinishEvent::Close(answer) => self.answer(answer),
+        }
+    }
+
+    /// Keeps the drawing options for the next image, and the next session.
+    fn remember_drawing(&self) {
+        let drawing = Drawing::load().with_marks(self.annotator.paint, self.document());
+        if self.image.is_some() {
+            drawing.with_frame(self.document()).save();
+        } else {
+            drawing.save();
+        }
+    }
+
+    /// Copying, saving, opening and pasting.
+    fn files(&mut self, event: FileEvent) -> Task<Message> {
+        match event {
+            FileEvent::Copy => self.export(Export::Copy),
+            // The window is in front already, so the image opens in it as it is.
+            FileEvent::Open => Task::perform(crate::desktop::dialog::open_image(), |picked| picked)
+                .then(|picked| match picked {
+                    Ok(Some(path)) => Task::perform(load_async(path), Message::Opened),
+                    Ok(None) => Task::none(),
+                    Err(error) => Task::done(Message::Finish(FinishEvent::Done(Err(error)))),
+                }),
+            FileEvent::Paste => Task::perform(
+                paste(self.drops.device.clone(), self.clip.clone()),
+                |value| Message::Marks(MarksEvent::Pasted(value)),
+            ),
+            FileEvent::Save => self.export(Export::Save),
+            FileEvent::SaveProject => self.export(Export::Project),
+            FileEvent::SaveAs if self.image.is_some() => {
+                let name = self.suggested_name();
+                Task::perform(
+                    async move {
+                        let folder = crate::storage::save::screenshots_dir();
+                        let _ = std::fs::create_dir_all(&folder);
+                        crate::desktop::dialog::save_as(
+                            &name,
+                            &folder,
+                            &crate::storage::save::Format::ALL,
+                        )
+                        .await
+                    },
+                    |picked| match picked {
+                        Ok(Some((path, format))) => Message::File(FileEvent::SaveTo(path, format)),
+                        Ok(None) => Message::Finish(FinishEvent::Done(Ok(String::new()))),
+                        Err(error) => Message::Finish(FinishEvent::Done(Err(error))),
+                    },
+                )
+            }
+            FileEvent::SaveTo(path, format) => self.export(Export::To(path, format)),
+            FileEvent::Dropped(crate::desktop::drops::Dropped::Ready(device)) => {
                 self.drops.device = Some(device);
                 Task::none()
             }
-            Message::Dropped(crate::drops::Dropped::Hovering(hovering)) => {
+            FileEvent::Dropped(crate::desktop::drops::Dropped::Hovering(hovering)) => {
                 self.drops.hovered = hovering;
                 Task::none()
             }
-            Message::Dropped(crate::drops::Dropped::Files(paths)) => {
+            FileEvent::Dropped(crate::desktop::drops::Dropped::Files(paths)) => {
                 paths.into_iter().next().map_or_else(Task::none, |path| {
                     Task::perform(load_async(path), Message::Opened)
                 })
             }
-            Message::Dropped(crate::drops::Dropped::Png(bytes)) => {
+            FileEvent::Dropped(crate::desktop::drops::Dropped::Png(bytes)) => {
                 let decoded = ::image::load_from_memory(&bytes)
                     .map(|image| Loaded::image(image.to_rgba8(), None))
                     .map_err(|error| format!("cannot open the dropped image: {error}"));
                 self.update(Message::Opened(decoded))
             }
-            _ => Task::none(),
+            FileEvent::SaveAs => Task::none(),
         }
     }
 
@@ -1064,13 +946,17 @@ impl Editor {
         }
     }
 
-    fn crop_message(&mut self, message: &Message) {
-        match message {
-            Message::Crop if self.cropping.is_some() => self.keep_crop(),
-            Message::Crop if self.image.is_some() => {
-                self.commit_text();
-                self.draft = None;
-                self.picked.clear();
+    fn crop_message(&mut self, event: CropEvent) {
+        match event {
+            CropEvent::Cancel if self.cropping.is_some() => {
+                self.cropping = None;
+                self.viewport = Viewport::fitted();
+            }
+            CropEvent::Start if self.cropping.is_some() => self.keep_crop(),
+            CropEvent::Start if self.image.is_some() => {
+                self.annotator.commit_text();
+                self.annotator.draft = None;
+                self.annotator.picked.clear();
                 let selection = Selection::selected(to_rectangle(self.document().visible()));
                 self.cropping = Some(Cropping {
                     selection,
@@ -1078,14 +964,14 @@ impl Editor {
                 });
                 self.viewport = Viewport::fitted();
             }
-            Message::CropDone => self.keep_crop(),
-            Message::CropReset => {
+            CropEvent::Done => self.keep_crop(),
+            CropEvent::Reset => {
                 let whole = iced::Rectangle::new(Point::ORIGIN, self.image_size());
                 if let Some(cropping) = &mut self.cropping {
                     cropping.selection = Selection::selected(whole);
                 }
             }
-            _ => {}
+            CropEvent::Start | CropEvent::Cancel => {}
         }
     }
 
@@ -1100,7 +986,7 @@ impl Editor {
         };
         let crop = kept(rect, self.image_size());
         if crop != self.document().crop {
-            self.history.apply(Op::Crop(crop));
+            self.annotator.history.apply(Op::Crop(crop));
         }
     }
 
@@ -1130,81 +1016,6 @@ impl Editor {
         }
     }
 
-    /// Undoes or redoes a step; the drawing color follows the style there.
-    fn travel(&mut self, undo: bool) {
-        self.cropping = None;
-        let before = self.document().style;
-        if undo {
-            self.history.undo();
-        } else {
-            self.history.redo();
-        }
-        crate::marks::prune(self.history.current(), &mut self.picked);
-        self.follow_style(before);
-    }
-
-    /// Keeps drawing in the standard color drawn with before the style changed from `before`,
-    /// in the new style's shade of it.
-    fn follow_style(&mut self, before: StyleId) {
-        let now = self.document().style;
-        if now != before {
-            let recolor = self.swatches.recolor(before, now);
-            self.paint.color = crate::controls::restyled(self.paint.color, &recolor);
-        }
-    }
-
-    /// Changes the paint for new marks, and the picked mark's paint too.
-    fn repaint(&mut self, change: impl Fn(&mut Paint)) {
-        self.repaint_gradually(change, false);
-    }
-
-    /// Like [`Self::repaint`]; a `gradual` change joins the step the slider drag began.
-    fn repaint_gradually(&mut self, change: impl Fn(&mut Paint), gradual: bool) {
-        change(&mut self.paint);
-        let Some(op) = crate::marks::repaint(self.document(), &self.picked, change) else {
-            return;
-        };
-        if gradual {
-            self.history.apply_gradually(op, self.sliding);
-        } else {
-            self.history.apply(op);
-        }
-        self.sliding = gradual;
-    }
-
-    /// The paint the controls show: the first picked mark's, else the one new marks get.
-    fn shown_paint(&self) -> Paint {
-        crate::marks::shown_paint(self.document(), &self.picked, self.paint)
-    }
-
-    /// Whether the text controls apply: to words being typed, picked text marks and bubbles, or
-    /// the next.
-    fn texting(&self) -> bool {
-        matches!(self.tool, Tool::Text | Tool::Bubble)
-            || self.typing.is_some()
-            || crate::marks::all(self.document(), &self.picked, |kind| {
-                matches!(kind, Kind::Text { .. } | Kind::Bubble { .. })
-            })
-    }
-
-    /// Whether the emoji picker shows: for the sticker tool or picked stickers.
-    fn stickering(&self) -> bool {
-        crate::marks::stickering(Some(self.tool), self.document(), &self.picked)
-    }
-
-    /// Whether the spotlight controls apply: to the spotlight tool or picked spotlights.
-    fn spotlighting(&self) -> bool {
-        self.tool == Tool::Spotlight
-            || crate::marks::all(self.document(), &self.picked, |kind| {
-                matches!(kind, Kind::Spotlight { .. })
-            })
-    }
-
-    /// Whether a press adds to the picked marks instead of picking anew.
-    fn extending(&self) -> bool {
-        self.modifiers.shift() || self.modifiers.command()
-    }
-
     fn pointer(&mut self, pointer: Pointer, scale: f32) -> Task<Message> {
         if self.image.is_none() {
             return Task::none();
@@ -1212,7 +1023,7 @@ impl Editor {
         if let Pointer::Moved(at) = pointer {
             self.hover = Some(at);
         }
-        if self.sampling() {
+        if self.annotator.sampling() {
             return match pointer {
                 Pointer::Pressed(at) => self.sample(at),
                 _ => Task::none(),
@@ -1222,81 +1033,20 @@ impl Editor {
             self.crop_pointer(pointer, scale);
             return Task::none();
         }
-        match pointer {
+        let effect = match pointer {
             Pointer::Pressed(at) => {
-                self.commit_text();
                 let reach = MARK_REACH / f64::from(scale.max(0.01));
                 #[allow(clippy::cast_possible_truncation)]
-                let double = typing::double_click(
-                    &mut self.last_click,
-                    Point::new(at.x as f32, at.y as f32),
-                );
-                let words = match self.tool {
-                    Tool::Text | Tool::Bubble => typing::words_at(self.document(), at, reach),
-                    Tool::Select if double => typing::words_at(self.document(), at, reach),
-                    _ => None,
-                };
-                if let Some(id) = words {
-                    return self.edit_text(id);
-                }
-                let extend = self.extending();
-                match kirie_annotate::tools::press(
-                    self.tool,
-                    at,
-                    self.document(),
-                    self.paint,
-                    reach,
-                    &self.picked,
-                    extend,
-                ) {
-                    Press::Draft(draft) => {
-                        crate::marks::pressed(&draft, &mut self.picked);
-                        self.draft = Some(draft);
-                    }
-                    Press::Done(op) => {
-                        self.history.apply(op);
-                    }
-                    Press::TypeAt(at) => {
-                        self.typing = Some(Typing::new(at));
-                        return iced::widget::operation::focus(view::TEXT_INPUT);
-                    }
-                    Press::PlaceSticker(at) => {
-                        let size = kirie_annotate::tools::STICKER_SIZE * self.document().unit;
-                        let draft = Draft::sticker(self.emojis.chosen(), at, size);
-                        crate::marks::pressed(&draft, &mut self.picked);
-                        self.draft = Some(draft);
-                    }
-                    Press::Toggle(id) => crate::marks::toggle(&mut self.picked, id),
-                    Press::Nothing => self.picked.clear(),
-                }
+                let click = Point::new(at.x as f32, at.y as f32);
+                self.annotator.press(self.tool, at, click, reach)
             }
             Pointer::Moved(at) => {
-                if let Some(draft) = self.draft.take() {
-                    self.draft = Some(draft.drag(at, self.modifiers.shift()));
-                }
+                self.annotator.drag(at);
+                return Task::none();
             }
-            Pointer::Released(at) => {
-                if let Some(draft) = self.draft.take() {
-                    let draft = draft.drag(at, self.modifiers.shift());
-                    if let Some((center, tail)) = draft.bubble() {
-                        self.typing = Some(Typing::bubble(center, tail));
-                        return iced::widget::operation::focus(view::TEXT_INPUT);
-                    }
-                    let document = self.history.current();
-                    if let Some(op) =
-                        crate::marks::release(draft, document, &mut self.picked, self.paint)
-                    {
-                        self.history.apply(op);
-                    }
-                }
-            }
-        }
-        Task::none()
-    }
-
-    /// Whether the eyedropper waits for a click on the image.
-    fn sampling(&self) -> bool {
-        self.picker.as_ref().is_some_and(Picker::sampling)
+            Pointer::Released(at) => self.annotator.release(at),
+        };
+        self.annotated(effect)
     }
 
     /// Hands the picker the image's color at `at`, if `at` is on the image.
@@ -1309,57 +1059,30 @@ impl Editor {
             Some(Rgba::rgb(red, green, blue))
         });
         match color {
-            Some(color) => self.edit_color(picker::Event::Sampled(color)),
+            Some(color) => {
+                let effect = self.annotator.edit_color(picker::Event::Sampled(color));
+                self.annotated(effect)
+            }
             None => Task::none(),
         }
     }
 
     /// The about card, and links and files handed to the desktop.
-    fn outside(&mut self, message: Message) -> Task<Message> {
-        match message {
-            Message::About(open) => {
+    fn outside(&mut self, event: OutsideEvent) -> Task<Message> {
+        match event {
+            OutsideEvent::About(open) => {
                 self.about = open;
                 if open {
                     return self.check_on_about();
                 }
             }
-            Message::OpenLink(link) => crate::launch::open(link),
-            Message::ShowInFiles(path) => {
-                return Task::future(async move { crate::launch::show_in_files(&path).await })
-                    .discard();
+            OutsideEvent::OpenLink(link) => crate::desktop::launch::open(link),
+            OutsideEvent::ShowInFiles(path) => {
+                return Task::future(
+                    async move { crate::desktop::launch::show_in_files(&path).await },
+                )
+                .discard();
             }
-            _ => {}
-        }
-        Task::none()
-    }
-
-    /// Typing in the text box.
-    fn typed(&mut self, message: Message) -> Task<Message> {
-        match message {
-            Message::TextEdit(action) => {
-                if let Some(typing) = &mut self.typing {
-                    typing.act(action, self.emojis.tone());
-                }
-            }
-            Message::Choose(choice) => {
-                let refocus = self
-                    .typing
-                    .as_mut()
-                    .is_some_and(|typing| typing.choose(choice, &mut self.emojis));
-                if refocus {
-                    return iced::widget::operation::focus(view::TEXT_INPUT);
-                }
-            }
-            Message::TextDone => self.commit_text(),
-            Message::PasteText => return self.paste_text(),
-            Message::Emoji(event) => {
-                if let Some(emoji) = self.emojis.update(event)
-                    && let Some(op) = crate::marks::restick(self.document(), &self.picked, &emoji)
-                {
-                    self.history.apply(op);
-                }
-            }
-            _ => {}
         }
         Task::none()
     }
@@ -1368,13 +1091,16 @@ impl Editor {
     /// iced's clipboard.
     fn paste_text(&self) -> Task<Message> {
         let paste = |text: String| {
-            Message::TextEdit(iced::widget::text_editor::Action::Edit(
+            Message::Annotate(Change::TextEdit(iced::widget::text_editor::Action::Edit(
                 iced::widget::text_editor::Edit::Paste(std::sync::Arc::new(text)),
-            ))
+            )))
         };
-        let nothing = || Message::Done(Ok(String::new()));
+        let nothing = || Message::Finish(FinishEvent::Done(Ok(String::new())));
         Task::perform(
-            crate::drops::clipboard(self.drops.device.clone(), &crate::drops::TEXT),
+            crate::desktop::drops::clipboard(
+                self.drops.device.clone(),
+                &crate::desktop::drops::TEXT,
+            ),
             |bytes| bytes.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
         )
         .then(move |text| match text {
@@ -1383,36 +1109,15 @@ impl Editor {
         })
     }
 
-    fn commit_text(&mut self) {
-        if let Some(op) = self
-            .typing
-            .take()
-            .and_then(|typing| typing.finish(self.paint))
-        {
-            self.history.apply(op);
-        }
-    }
-
-    /// Opens the words of a placed text mark for typing.
-    fn edit_text(&mut self, id: ShapeId) -> Task<Message> {
-        let Some(typing) = self.document().shape(id).and_then(Typing::edit) else {
-            return Task::none();
-        };
-        self.typing = Some(typing);
-        self.picked = vec![id];
-        self.draft = None;
-        iced::widget::operation::focus(view::TEXT_INPUT)
-    }
-
     /// The name the save dialog suggests: the open file's, else one with the time.
     fn suggested_name(&self) -> String {
         let stem = self
             .path
             .as_deref()
-            .filter(|path| !crate::save::is_handoff(path))
+            .filter(|path| !crate::storage::save::is_handoff(path))
             .and_then(Path::file_stem)
             .map_or_else(
-                || crate::save::stem(&jiff::Zoned::now()),
+                || crate::storage::save::stem(&jiff::Zoned::now()),
                 |stem| stem.to_string_lossy().into_owned(),
             );
         format!("{stem}.png")
@@ -1420,30 +1125,36 @@ impl Editor {
 
     fn export(&mut self, export: Export) -> Task<Message> {
         self.keep_crop();
-        self.commit_text();
+        self.annotator.commit_text();
         let Some((image, _)) = &self.image else {
             return Task::none();
         };
         let kept = Box::new(self.document().clone());
         let exported = move |done: Result<(String, Option<PathBuf>), String>| match done {
-            Ok((text, file)) => Message::Exported(text, file, kept),
-            Err(error) => Message::Done(Err(error)),
+            Ok((text, file)) => Message::Finish(FinishEvent::Exported(text, file, kept)),
+            Err(error) => Message::Finish(FinishEvent::Done(Err(error))),
         };
-        let saved = |path: PathBuf| (format!("Saved {}", crate::save::pretty(&path)), Some(path));
+        let saved = |path: PathBuf| {
+            (
+                format!("Saved {}", crate::storage::save::pretty(&path)),
+                Some(path),
+            )
+        };
         let project = || Project {
             image: image.clone(),
             document: self.document().clone(),
         };
         match export {
             Export::Project => {
-                return Task::perform(crate::save::save_project(project()), move |done| {
+                return Task::perform(crate::storage::save::save_project(project()), move |done| {
                     exported(done.map(saved))
                 });
             }
             Export::To(path, format) => {
-                return Task::perform(crate::save::save_as(project(), path, format), move |done| {
-                    exported(done.map(saved))
-                });
+                return Task::perform(
+                    crate::storage::save::save_as(project(), path, format),
+                    move |done| exported(done.map(saved)),
+                );
             }
             Export::Copy | Export::Save => {}
         }
@@ -1461,19 +1172,20 @@ impl Editor {
         };
         match export {
             Export::Copy => {
-                let copied = crate::clipboard::copy_from(picture, self.drops.device.clone());
+                let copied =
+                    crate::desktop::clipboard::copy_from(picture, self.drops.device.clone());
                 Task::perform(copied, move |copied| {
                     exported(copied.map(|()| ("Copied to the clipboard".to_owned(), None)))
                 })
             }
             Export::Save | Export::Project | Export::To(..) => {
-                let saved = crate::save::save_and_copy(picture, self.drops.device.clone());
+                let saved = crate::storage::save::save_and_copy(picture, self.drops.device.clone());
                 Task::perform(saved, move |done| {
                     exported(done.map(|(path, copied)| {
                         let text = if copied {
-                            format!("Saved {} and copied", crate::save::pretty(&path))
+                            format!("Saved {} and copied", crate::storage::save::pretty(&path))
                         } else {
-                            format!("Saved {}", crate::save::pretty(&path))
+                            format!("Saved {}", crate::storage::save::pretty(&path))
                         };
                         (text, Some(path))
                     }))
@@ -1511,8 +1223,8 @@ impl Editor {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let quiet = self.typing.is_some()
-            || self.picker.is_some()
+        let quiet = self.annotator.typing.is_some()
+            || self.annotator.picker.is_some()
             || self.closing != Closing::No
             || self.about
             || self.settings.is_some();
@@ -1533,9 +1245,10 @@ impl Editor {
             keys,
             releases,
             event::listen_with(focus),
-            Subscription::run(crate::ipc::requests).map(Message::Ipc),
-            Subscription::run(crate::appearance::changes).map(Message::SystemScheme),
-            window::close_requests().map(|_| Message::CloseRequested),
+            Subscription::run(crate::desktop::ipc::requests)
+                .map(|value| Message::Window(WindowEvent::Ipc(value))),
+            Subscription::run(crate::desktop::appearance::changes).map(Message::SystemScheme),
+            window::close_requests().map(|_| Message::Finish(FinishEvent::CloseRequested)),
         ])
     }
 
@@ -1551,26 +1264,26 @@ impl Editor {
 /// image on the clipboard, read through the window's data device, else through the clipboard
 /// protocol of wlroots compositors; else `clip`, marks that never got there.
 async fn paste(
-    device: Option<crate::drops::Device>,
+    device: Option<crate::desktop::drops::Device>,
     clip: Option<(Vec<Shape>, Offer)>,
 ) -> Result<Pasted, String> {
-    const KINDS: &[&str] = &[crate::marks::MIME, crate::drops::PNG];
+    const KINDS: &[&str] = &[kirie_annotate::marks::MIME, crate::desktop::drops::PNG];
     let unsent = match clip {
         Some((marks, Offer::Pending)) => return Ok(Pasted::Marks(marks)),
         Some((marks, Offer::Failed)) => Some(marks),
         None => None,
     };
-    let found = match crate::drops::clipboard_kind(device, KINDS).await {
+    let found = match crate::desktop::drops::clipboard_kind(device, KINDS).await {
         Some(found) => Ok(found),
-        None => crate::clipboard::paste(KINDS).await,
+        None => crate::desktop::clipboard::paste(KINDS).await,
     };
     let (kind, bytes) = match found {
         Ok(found) => found,
         Err(error) => return unsent.map(Pasted::Marks).ok_or(error),
     };
     tokio::task::spawn_blocking(move || {
-        if kind == crate::marks::MIME {
-            return crate::marks::decode(&bytes).map(Pasted::Marks);
+        if kind == kirie_annotate::marks::MIME {
+            return kirie_annotate::marks::decode(&bytes).map(Pasted::Marks);
         }
         ::image::load_from_memory_with_format(&bytes, ::image::ImageFormat::Png)
             .map(|image| Pasted::Image(image.to_rgba8()))
@@ -1588,9 +1301,11 @@ async fn load_async(path: PathBuf) -> Result<Loaded, String> {
 
 /// Opens what is dropped on the editor's windows, from when window `id` is open.
 fn take_drops(id: window::Id) -> Task<Message> {
-    window::run(id, crate::drops::display).then(|display| {
+    window::run(id, crate::desktop::drops::display).then(|display| {
         display.map_or_else(Task::none, |display| {
-            Task::run(crate::drops::drops(display), Message::Dropped)
+            Task::run(crate::desktop::drops::drops(display), |value| {
+                Message::File(FileEvent::Dropped(value))
+            })
         })
     })
 }
@@ -1600,7 +1315,9 @@ impl Editor {
     /// activation `token` from whatever the user clicked. Without one, the window is opened
     /// anew, which most compositors put in front.
     fn raise(&mut self, token: Option<String>) -> Task<Message> {
-        let remap = |id| placement(id).map(move |placement| Message::Remap(id, placement));
+        let remap = |id| {
+            placement(id).map(move |placement| Message::Window(WindowEvent::Remap(id, placement)))
+        };
         match (self.window, token) {
             (Some(id), Some(token)) => {
                 activate(id, token).then(move |done| if done { Task::none() } else { remap(id) })
@@ -1628,7 +1345,7 @@ impl Editor {
 /// asked.
 fn activate(id: window::Id, token: String) -> Task<bool> {
     window::run(id, move |window| {
-        crate::activation::activate(window, &token)
+        crate::desktop::activation::activate(window, &token)
     })
 }
 
@@ -1655,7 +1372,7 @@ fn settings(placement: Placement) -> window::Settings {
 /// Runs the overlay in its own process, after the window has had time to hide.
 async fn capture() -> Result<(), String> {
     tokio::time::sleep(Duration::from_millis(350)).await;
-    let exe = crate::launch::exe().map_err(|error| error.to_string())?;
+    let exe = crate::desktop::launch::exe().map_err(|error| error.to_string())?;
     tokio::task::spawn_blocking(move || {
         std::process::Command::new(exe)
             .args(["capture", "--edit"])
@@ -1673,24 +1390,13 @@ async fn capture() -> Result<(), String> {
     .map_err(|error| error.to_string())?
 }
 
-/// Whether a change is not one step of a slider drag, whose last step follows.
-fn settled(message: &Message) -> bool {
-    !matches!(
-        message,
-        Message::Weight(controls::WeightEvent::Slide(_))
-            | Message::Brightness(controls::BrightnessEvent::Slide(_))
-            | Message::Look(controls::TextEvent::Size(_))
-            | Message::Frame(frame::Event::Margin(_))
-    )
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Export {
     Copy,
     Save,
     Project,
     /// To a file the user chose.
-    To(PathBuf, crate::save::Format),
+    To(PathBuf, crate::storage::save::Format),
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -1713,15 +1419,15 @@ fn typing_key(event: Event, _: event::Status, _: window::Id) -> Option<Message> 
 /// Ctrl+Q closes the editor as its window's close button does, asking about unsaved changes.
 fn quit_key(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<Message> {
     (modifiers.command() && key.as_ref() == keyboard::Key::Character("q"))
-        .then_some(Message::CloseRequested)
+        .then_some(Message::Finish(FinishEvent::CloseRequested))
 }
 
 /// The window losing the keyboard, when the data device is made anew to take drops.
 #[allow(clippy::needless_pass_by_value)]
 fn focus(event: Event, _: event::Status, _: window::Id) -> Option<Message> {
     match event {
-        Event::Window(window::Event::Unfocused) => Some(Message::Unfocused),
-        Event::Window(window::Event::Focused) => Some(Message::Focused),
+        Event::Window(window::Event::Unfocused) => Some(Message::Window(WindowEvent::Unfocused)),
+        Event::Window(window::Event::Focused) => Some(Message::Window(WindowEvent::Focused)),
         _ => None,
     }
 }
@@ -1746,7 +1452,7 @@ fn crop_key(event: Event, status: event::Status, id: window::Id) -> Option<Messa
         ..
     }) = event
     {
-        return Some(Message::CropDone);
+        return Some(Message::Crop(CropEvent::Done));
     }
     key(event, status, id)
 }
@@ -1782,33 +1488,45 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
     let command = modifiers.command();
     if command
         && let keyboard::Key::Character(written) = key.as_ref()
-        && let Some(to) = crate::marks::restack_key(written)
+        && let Some(to) = kirie_annotate::marks::restack_key(written)
     {
-        return Some(Message::Restack(to));
+        return Some(Message::Annotate(Change::Restack(to)));
     }
     match key.as_ref() {
         keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
-        keyboard::Key::Named(Named::Enter) if modifiers.shift() || command => Some(Message::Save),
-        keyboard::Key::Named(Named::Delete | Named::Backspace) => Some(Message::Delete),
-        keyboard::Key::Character("z") if command && modifiers.shift() => Some(Message::Redo),
-        keyboard::Key::Character("z") if command => Some(Message::Undo),
-        keyboard::Key::Character("y") if command => Some(Message::Redo),
-        keyboard::Key::Character("c") if command => Some(Message::CopyKey),
-        keyboard::Key::Character("x") if command => Some(Message::Cut),
-        keyboard::Key::Character("d") if command => Some(Message::Duplicate),
-        keyboard::Key::Character("v") if command => Some(Message::Paste),
-        keyboard::Key::Character("w") if command => Some(Message::Discard),
-        keyboard::Key::Character("a") if command => Some(Message::SelectAll),
+        keyboard::Key::Named(Named::Enter) if modifiers.shift() || command => {
+            Some(Message::File(FileEvent::Save))
+        }
+        keyboard::Key::Named(Named::Delete | Named::Backspace) => {
+            Some(Message::Annotate(Change::Delete))
+        }
+        keyboard::Key::Character("z") if command && modifiers.shift() => {
+            Some(Message::Annotate(Change::Redo))
+        }
+        keyboard::Key::Character("z") if command => Some(Message::Annotate(Change::Undo)),
+        keyboard::Key::Character("y") if command => Some(Message::Annotate(Change::Redo)),
+        keyboard::Key::Character("c") if command => Some(Message::Marks(MarksEvent::CopyKey)),
+        keyboard::Key::Character("x") if command => Some(Message::Marks(MarksEvent::Cut)),
+        keyboard::Key::Character("d") if command => Some(Message::Annotate(Change::Duplicate)),
+        keyboard::Key::Character("v") if command => Some(Message::File(FileEvent::Paste)),
+        keyboard::Key::Character("w") if command => Some(Message::Finish(FinishEvent::Discard)),
+        keyboard::Key::Character("a") if command => Some(Message::Marks(MarksEvent::SelectAll)),
         keyboard::Key::Character(",") if command => Some(Message::Settings(settings::Event::Open)),
-        keyboard::Key::Character("o") if command => Some(Message::Open),
-        keyboard::Key::Character("s") if command && modifiers.shift() => Some(Message::SaveAs),
-        keyboard::Key::Character("s") if command && modifiers.alt() => Some(Message::SaveProject),
-        keyboard::Key::Character("s") if command => Some(Message::Save),
-        keyboard::Key::Character("0") if command => Some(Message::ZoomFit),
-        keyboard::Key::Character("1") if command => Some(Message::ZoomActual),
-        keyboard::Key::Character("=" | "+") if command => Some(Message::ZoomIn),
-        keyboard::Key::Character("-") if command => Some(Message::ZoomOut),
-        keyboard::Key::Character("c" | "C") if !command && modifiers.shift() => Some(Message::Crop),
+        keyboard::Key::Character("o") if command => Some(Message::File(FileEvent::Open)),
+        keyboard::Key::Character("s") if command && modifiers.shift() => {
+            Some(Message::File(FileEvent::SaveAs))
+        }
+        keyboard::Key::Character("s") if command && modifiers.alt() => {
+            Some(Message::File(FileEvent::SaveProject))
+        }
+        keyboard::Key::Character("s") if command => Some(Message::File(FileEvent::Save)),
+        keyboard::Key::Character("0") if command => Some(Message::Zoom(ZoomEvent::Fit)),
+        keyboard::Key::Character("1") if command => Some(Message::Zoom(ZoomEvent::Actual)),
+        keyboard::Key::Character("=" | "+") if command => Some(Message::Zoom(ZoomEvent::In)),
+        keyboard::Key::Character("-") if command => Some(Message::Zoom(ZoomEvent::Out)),
+        keyboard::Key::Character("c" | "C") if !command && modifiers.shift() => {
+            Some(Message::Crop(CropEvent::Start))
+        }
         keyboard::Key::Character("m") if !command => {
             Some(Message::MarkList(mark_list::Event::Toggle))
         }
@@ -1863,6 +1581,11 @@ pub fn run(loaded: Option<Loaded>, card: Option<Card>, token: Option<String>) ->
     .run()
 }
 
+/// `change` as the message the views send for it.
+fn annotate<T>(change: impl Fn(T) -> Change + Clone) -> impl Fn(T) -> Message + Clone {
+    move |value| Message::Annotate(change(value))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1888,12 +1611,12 @@ mod tests {
         for listen in [key, typing_key, crop_key] {
             assert!(matches!(
                 listen(ctrl_q(), event::Status::Ignored, id),
-                Some(Message::CloseRequested)
+                Some(Message::Finish(FinishEvent::CloseRequested))
             ));
         }
         assert!(matches!(
             key(ctrl_q(), event::Status::Captured, id),
-            Some(Message::CloseRequested)
+            Some(Message::Finish(FinishEvent::CloseRequested))
         ));
         assert!(
             typing_key(
@@ -1925,7 +1648,7 @@ mod tests {
                     event::Status::Ignored,
                     id
                 ),
-                Some(Message::Crop)
+                Some(Message::Crop(CropEvent::Start))
             ));
         }
     }
@@ -1938,7 +1661,10 @@ mod tests {
             event::Status::Ignored,
             id,
         );
-        assert!(matches!(focused, Some(Message::Focused)));
+        assert!(matches!(
+            focused,
+            Some(Message::Window(WindowEvent::Focused))
+        ));
     }
 
     #[test]

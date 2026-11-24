@@ -14,6 +14,7 @@ authors = ["Samuel Bachmann <samuel.bachmann@gmail.com>"]
 kirie-capture = { path = "crates/kirie-capture" }
 kirie-ui = { path = "crates/kirie-ui" }
 kirie-annotate = { path = "crates/kirie-annotate" }
+kirie-update = { path = "crates/kirie-update" }
 serde = { version = "1", features = ["derive", "rc"] }
 directories = "6"
 jiff = "0.2"

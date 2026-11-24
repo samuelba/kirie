@@ -10,13 +10,17 @@ use kirie_ui::widget::{
 };
 use kirie_ui::{Palette, Scheme, space};
 
+use super::annotate;
 use super::canvas::{Backdrop, Board};
 use super::viewport::Zoom;
-use super::{Editor, Message};
-use crate::controls;
-use crate::marks::Restack;
-use crate::paint::Part;
-use crate::picker::{self, Picker};
+use super::{
+    CropEvent, Editor, FileEvent, FinishEvent, Message, OutsideEvent, WindowEvent, ZoomEvent,
+};
+use crate::annotate::annotator::Change;
+use crate::annotate::controls;
+use crate::annotate::paint::Part;
+use crate::annotate::picker::{self, Picker};
+use kirie_annotate::marks::Restack;
 
 pub const TEXT_INPUT: &str = "kirie-editor-text";
 pub const APP_ICON: &[u8] =
@@ -63,14 +67,20 @@ impl Editor {
                 "Undo (Ctrl+Z)",
                 palette,
                 false,
-                self.history.can_undo().then_some(Message::Undo)
+                self.annotator
+                    .history
+                    .can_undo()
+                    .then_some(Message::Annotate(Change::Undo))
             ),
             icon_button(
                 Icon::Redo,
                 "Redo (Ctrl+Shift+Z)",
                 palette,
                 false,
-                self.history.can_redo().then_some(Message::Redo)
+                self.annotator
+                    .history
+                    .can_redo()
+                    .then_some(Message::Annotate(Change::Redo))
             ),
         ]
         .spacing(2);
@@ -89,14 +99,14 @@ impl Editor {
             "Take a screenshot",
             palette,
             false,
-            Some(Message::Capture),
+            Some(Message::Window(WindowEvent::Capture)),
         );
         let open = icon_button(
             Icon::Open,
             "Open an image (Ctrl+O)",
             palette,
             false,
-            Some(Message::Open),
+            Some(Message::File(FileEvent::Open)),
         );
         let mut actions = row![open, capture, divider(palette), history]
             .spacing(space::S)
@@ -113,7 +123,7 @@ impl Editor {
         );
         actions = actions.push(divider(palette)).push(settings).push(theme);
         let document = self.document();
-        let styles = controls::styles(document.style, palette, Message::PickStyle);
+        let styles = controls::styles(document.style, palette, annotate(Change::PickStyle));
         container(
             row![
                 brand,
@@ -138,7 +148,7 @@ impl Editor {
                 "Discard the image (Ctrl+W)",
                 palette,
                 false,
-                Some(Message::Discard),
+                Some(Message::Finish(FinishEvent::Discard)),
             ))
             .push(icon_button(
                 Icon::Project,
@@ -146,23 +156,28 @@ impl Editor {
                      (Ctrl+Alt+S)",
                 palette,
                 false,
-                Some(Message::SaveProject),
+                Some(Message::File(FileEvent::SaveProject)),
             ))
             .push(icon_button(
                 Icon::SaveAs,
                 "Save as… (Ctrl+Shift+S)",
                 palette,
                 false,
-                Some(Message::SaveAs),
+                Some(Message::File(FileEvent::SaveAs)),
             ))
             .push(icon_button(
                 Icon::Save,
                 "Save to Pictures and copy (Ctrl+S or Shift+Enter)",
                 palette,
                 false,
-                Some(Message::Save),
+                Some(Message::File(FileEvent::Save)),
             ))
-            .push(primary_button(Icon::Copy, "Copy", palette, Message::Copy))
+            .push(primary_button(
+                Icon::Copy,
+                "Copy",
+                palette,
+                Message::File(FileEvent::Copy),
+            ))
             .spacing(space::S)
             .align_y(Alignment::Center)
             .into()
@@ -180,7 +195,7 @@ impl Editor {
             .align_y(Alignment::Center),
         )
         .padding([space::XS, space::S])
-        .on_press(Message::About(true))
+        .on_press(Message::Outside(OutsideEvent::About(true)))
         .style(move |_, status| button::Style {
             background: match status {
                 button::Status::Hovered => Some(Background::Color(palette.surface[1])),
@@ -213,7 +228,9 @@ impl Editor {
             "Crop (Shift+C)",
             palette,
             self.cropping.is_some(),
-            self.image.is_some().then_some(Message::Crop),
+            self.image
+                .is_some()
+                .then_some(Message::Crop(CropEvent::Start)),
         );
         container(
             column(tools)
@@ -250,19 +267,19 @@ impl Editor {
         if self.cropping.is_some() {
             floating_bits = floating_bits.push(self.crop_bar());
         }
-        if let Some(typing) = &self.typing {
+        if let Some(typing) = &self.annotator.typing {
             floating_bits = floating_bits.push(
                 container(
                     row![
-                        crate::typing::text_box(
+                        crate::annotate::typing::text_box(
                             typing,
                             TEXT_INPUT,
-                            &self.emojis,
+                            &self.annotator.emojis,
                             palette,
-                            Message::TextEdit,
-                            Message::TextDone,
+                            annotate(Change::TextEdit),
+                            Message::Annotate(Change::TextDone),
                             Some(Message::PasteText),
-                            Message::Choose,
+                            annotate(Change::Choose),
                         ),
                         column![
                             text("Enter to place").size(12).color(palette.muted),
@@ -295,7 +312,7 @@ impl Editor {
                 content = content.push(secondary_button(
                     "Show in Files",
                     palette,
-                    Message::ShowInFiles(file.clone()),
+                    Message::Outside(OutsideEvent::ShowInFiles(file.clone())),
                 ));
                 padding = Padding::from(space::S).left(space::L);
             }
@@ -340,9 +357,9 @@ impl Editor {
                         .size(12)
                         .color(palette.muted),
                 ],
-                secondary_button("Whole image", palette, Message::CropReset),
-                secondary_button("Cancel", palette, Message::CropCancel),
-                primary_button(Icon::Crop, "Crop", palette, Message::CropDone),
+                secondary_button("Whole image", palette, Message::Crop(CropEvent::Reset)),
+                secondary_button("Cancel", palette, Message::Crop(CropEvent::Cancel)),
+                primary_button(Icon::Crop, "Crop", palette, Message::Crop(CropEvent::Done)),
             ]
             .spacing(space::M)
             .align_y(Alignment::Center),
@@ -365,14 +382,14 @@ impl Editor {
                     Icon::Capture,
                     "Take a screenshot",
                     palette,
-                    Message::Capture
+                    Message::Window(WindowEvent::Capture)
                 ),
                 icon_button(
                     Icon::Open,
                     "Open an image (Ctrl+O)",
                     palette,
                     false,
-                    Some(Message::Open)
+                    Some(Message::File(FileEvent::Open))
                 ),
             ]
             .spacing(space::S)
@@ -391,14 +408,14 @@ impl Editor {
                 "Fit (Ctrl+0)",
                 palette,
                 self.viewport.is_fitted(),
-                Some(Message::ZoomFit)
+                Some(Message::Zoom(ZoomEvent::Fit))
             ),
             icon_button(
                 Icon::Image,
                 "Actual size (Ctrl+1)",
                 palette,
                 false,
-                Some(Message::ZoomActual)
+                Some(Message::Zoom(ZoomEvent::Actual))
             ),
             text("Ctrl+scroll to zoom").size(12).color(palette.muted),
         ]
@@ -416,7 +433,7 @@ impl Editor {
                 super::frame::view(document.frame, document.unit, palette, Message::Frame),
             ));
         }
-        if !self.picked.is_empty() {
+        if !self.annotator.picked.is_empty() {
             content = content.push(rule::horizontal(1)).push(section(
                 palette,
                 "Selection",
@@ -435,19 +452,19 @@ impl Editor {
     /// What the picked marks can do: come to the front, go to the back, go away.
     fn mark_actions(&self) -> Element<'_, Message> {
         let palette = self.palette;
-        let count = self.picked.len();
+        let count = self.annotator.picked.len();
         let several = count > 1;
         let action = |icon, tip, message| icon_button(icon, tip, palette, false, Some(message));
         row![
             action(
                 Icon::BringToFront,
                 "Bring to front (Ctrl+Shift+]; one step: Ctrl+])",
-                Message::Restack(Restack::Front),
+                Message::Annotate(Change::Restack(Restack::Front)),
             ),
             action(
                 Icon::SendToBack,
                 "Send to back (Ctrl+Shift+[; one step: Ctrl+[)",
-                Message::Restack(Restack::Back),
+                Message::Annotate(Change::Restack(Restack::Back)),
             ),
             action(
                 Icon::Delete,
@@ -456,7 +473,7 @@ impl Editor {
                 } else {
                     "Delete mark (Del)"
                 },
-                Message::Delete,
+                Message::Annotate(Change::Delete),
             ),
             text(if several {
                 format!("{count} marks picked")
@@ -547,17 +564,17 @@ impl Editor {
                 Icon::ZoomOut,
                 "Zoom out (Ctrl+-)",
                 palette,
-                Some(Message::ZoomOut)
+                Some(Message::Zoom(ZoomEvent::Out))
             ),
             // A fitted image is never enlarged, so "Fit 100%" is the longest label it shows.
             small_pick_list(levels, shown, "Fit 100%", palette, |choice| {
-                Message::ZoomTo(choice.zoom())
+                Message::Zoom(ZoomEvent::To(choice.zoom()))
             }),
             small_icon_button(
                 Icon::ZoomIn,
                 "Zoom in (Ctrl++)",
                 palette,
-                Some(Message::ZoomIn)
+                Some(Message::Zoom(ZoomEvent::In))
             ),
         ]
         .spacing(2)
@@ -567,14 +584,15 @@ impl Editor {
 
     /// The emoji the sticker tool places, or the picked stickers show.
     fn sticker_section(&self) -> iced::widget::Column<'_, Message> {
-        let current = crate::marks::sticker_shown(self.document(), &self.picked)
-            .unwrap_or_else(|| self.emojis.chosen());
+        let current = kirie_annotate::marks::sticker_shown(self.document(), &self.annotator.picked)
+            .unwrap_or_else(|| self.annotator.emojis.chosen());
         section(
             self.palette,
             "Sticker",
-            self.emojis
+            self.annotator
+                .emojis
                 .view(current, self.palette, Length::Fill)
-                .map(Message::Emoji),
+                .map(annotate(Change::Emoji)),
         )
     }
 
@@ -582,47 +600,47 @@ impl Editor {
     /// picked mark or the next.
     fn paint_sections(&self) -> iced::widget::Column<'_, Message> {
         let palette = self.palette;
-        let paint = self.shown_paint();
+        let paint = self.annotator.shown_paint();
         let mut colors = column![
             controls::colors(
-                &self.swatches,
+                &self.annotator.swatches,
                 self.document().style,
                 paint,
                 palette,
-                self.picker.as_ref().map(Picker::target),
-                Message::PickColor,
-                Message::EditColor,
+                self.annotator.picker.as_ref().map(Picker::target),
+                annotate(Change::PickColor),
+                annotate(Change::EditColor),
             )
             .wrap()
         ]
         .spacing(space::M);
-        if let Some(open) = &self.picker {
-            colors = colors.push(picker::view(open, palette).map(Message::Picker));
+        if let Some(open) = &self.annotator.picker {
+            colors = colors.push(picker::view(open, palette).map(annotate(Change::Picker)));
         }
         let content = column![section(palette, "Color", colors.into())].spacing(space::L);
-        if self.stickering() {
+        if self.annotator.stickering(Some(self.tool)) {
             return self.sticker_section();
         }
-        if self.texting() {
+        if self.annotator.texting(Some(self.tool)) {
             let fallback = self.document().style.font();
             return content.push(section(
                 palette,
                 "Text",
                 column![
-                    controls::fonts(paint.text, fallback, palette, Message::Look),
-                    controls::text_size(paint.text, palette, 150.0, Message::Look),
-                    controls::text_layout(paint.text, palette, Message::Look),
+                    controls::fonts(paint.text, fallback, palette, annotate(Change::Look)),
+                    controls::text_size(paint.text, palette, 150.0, annotate(Change::Look)),
+                    controls::text_layout(paint.text, palette, annotate(Change::Look)),
                 ]
                 .spacing(space::S)
                 .into(),
             ));
         }
-        if self.spotlighting() {
+        if self.annotator.spotlighting(Some(self.tool)) {
             return content
                 .push(section(
                     palette,
                     "Spotlight",
-                    controls::spot_shapes(paint, palette, Message::Spot),
+                    controls::spot_shapes(paint, palette, annotate(Change::Spot)),
                 ))
                 .push(section(
                     palette,
@@ -631,7 +649,7 @@ impl Editor {
                         self.document().spotlight_brightness,
                         palette,
                         126.0,
-                        Message::Brightness,
+                        annotate(Change::Brightness),
                     ),
                 ));
         }
@@ -641,7 +659,7 @@ impl Editor {
                 "Fill shapes",
                 palette,
                 paint.filled,
-                Some(Message::ToggleFill)
+                Some(Message::Annotate(Change::ToggleFill))
             ),
             text(if paint.filled {
                 "Shapes are filled"
@@ -659,7 +677,7 @@ impl Editor {
                 document.style,
                 document.shadow,
                 palette,
-                Message::ToggleShadow
+                Message::Annotate(Change::ToggleShadow)
             ),
             text(match (clean, document.shadow) {
                 (false, _) => "Only in the Clean style",
@@ -673,7 +691,8 @@ impl Editor {
         .align_y(Alignment::Center);
         content
             .push(section(palette, "Weight", {
-                let (presets, slider) = controls::weights(paint, palette, 150.0, Message::Weight);
+                let (presets, slider) =
+                    controls::weights(paint, palette, 150.0, annotate(Change::Weight));
                 column![presets, slider].spacing(space::S).into()
             }))
             .push(section(palette, "Fill", fill.into()))

@@ -12,17 +12,20 @@ const SCHEMA_ID: &str = "org.gnome.shell.extensions.kirie";
 const FILES: [(&str, &str); 4] = [
     (
         METADATA,
-        include_str!("../../../gnome-extension/metadata.json"),
+        include_str!("../../../../gnome-extension/metadata.json"),
     ),
     (
         "extension.js",
-        include_str!("../../../gnome-extension/extension.js"),
+        include_str!("../../../../gnome-extension/extension.js"),
     ),
-    ("LICENSE", include_str!("../../../gnome-extension/LICENSE")),
+    (
+        "LICENSE",
+        include_str!("../../../../gnome-extension/LICENSE"),
+    ),
     (
         "schemas/org.gnome.shell.extensions.kirie.gschema.xml",
         include_str!(
-            "../../../gnome-extension/schemas/org.gnome.shell.extensions.kirie.gschema.xml"
+            "../../../../gnome-extension/schemas/org.gnome.shell.extensions.kirie.gschema.xml"
         ),
     ),
 ];
@@ -82,7 +85,7 @@ fn write_files(target: &Path) -> std::io::Result<()> {
 /// GNOME Shell does not see the user's shell PATH (e.g. ~/.local/bin), so the extension is told
 /// exactly which binary to start.
 fn point_extension_at_this_binary(schemas: &Path) {
-    let Ok(binary) = crate::launch::exe() else {
+    let Ok(binary) = crate::desktop::launch::exe() else {
         return;
     };
     let value = format!("[{}]", quote(&binary));

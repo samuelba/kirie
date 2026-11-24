@@ -6,12 +6,12 @@ use iced::widget::canvas::{self, Action, Event, Frame, Geometry, Path, Stroke, T
 use iced::{Color, Pixels, Point, Rectangle, Renderer, Size, Theme, Vector, alignment};
 use kirie_ui::{radius, space};
 
-use kirie_annotate::{Shape, Tool};
+use kirie_annotate::Tool;
 
 use super::{HANDLE_REACH, MARK_REACH, Message, Overlay, Pointer, to_kurbo};
-use crate::loupe::{self, Lens};
-use crate::paint::{Captures, Marks, Painter, Part, draw_marquee, draw_picked};
-use crate::selection::Handle;
+use crate::annotate::paint::{Captures, Marks, Painter, Part, draw_marquee, draw_picked};
+use crate::annotate::selection::Handle;
+use crate::canvas::loupe::{self, Lens};
 
 const HANDLE_RADIUS: f32 = 4.5;
 const LABEL_SIZE: f32 = 13.0;
@@ -130,15 +130,15 @@ impl canvas::Program<Message> for Surface<'_> {
         let Some(at) = cursor.position().map(|at| self.to_desktop(at)) else {
             return Interaction::default();
         };
-        if self.overlay.selection.dragging() || self.overlay.sampling() {
+        if self.overlay.selection.dragging() || self.overlay.annotator.sampling() {
             return Interaction::Crosshair;
         }
         match self.overlay.tool {
             Some(Tool::Select) => {
-                return crate::cursor::select(
+                return crate::canvas::cursor::select(
                     self.overlay.document(),
-                    &self.overlay.picked,
-                    self.overlay.draft.as_ref(),
+                    &self.overlay.annotator.picked,
+                    self.overlay.annotator.draft.as_ref(),
                     to_kurbo(at),
                     MARK_REACH,
                 );
@@ -147,7 +147,7 @@ impl canvas::Program<Message> for Surface<'_> {
             Some(_) => return Interaction::Crosshair,
             None => {}
         }
-        crate::selection::interaction(self.overlay.selection.hit(at, HANDLE_REACH))
+        crate::annotate::selection::interaction(self.overlay.selection.hit(at, HANDLE_REACH))
     }
 }
 
@@ -174,30 +174,14 @@ impl Surface<'_> {
         };
         let transform =
             kurbo::Affine::translate((-f64::from(self.area.x), -f64::from(self.area.y)));
-        let preview = overlay
-            .draft
-            .as_ref()
-            .and_then(kirie_annotate::Draft::preview)
-            .map(|kind| Shape {
-                id: document.next_id(),
-                kind,
-                paint: overlay.paint,
-                style: None,
-                rotation: 0.0,
-            })
-            .or_else(|| {
-                overlay
-                    .typing
-                    .as_ref()
-                    .map(|typing| typing.preview(document, overlay.paint))
-            });
+        let preview = overlay.annotator.preview();
         let picked = painter.draw_marks(
             frame,
             Marks {
                 document,
-                draft: overlay.draft.as_ref(),
+                draft: overlay.annotator.draft.as_ref(),
                 preview,
-                picked: &overlay.picked,
+                picked: &overlay.annotator.picked,
                 visible,
                 layer: Some(layer.unwrap_or(usize::MAX)),
             },
@@ -210,13 +194,14 @@ impl Surface<'_> {
         draw_picked(
             frame,
             &picked,
-            &overlay.picked,
+            &overlay.annotator.picked,
             document,
             transform,
             1.0,
             accent,
         );
         if let Some(rect) = overlay
+            .annotator
             .draft
             .as_ref()
             .and_then(kirie_annotate::Draft::marquee)
@@ -229,7 +214,7 @@ impl Surface<'_> {
     /// marks are drawn, and while the eyedropper waits for a click.
     fn magnifying(&self) -> bool {
         let overlay = self.overlay;
-        overlay.sampling()
+        overlay.annotator.sampling()
             || overlay.magnifier
                 && overlay.tool.is_none()
                 && overlay.toolbar_drag.is_none()

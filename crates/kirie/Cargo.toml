@@ -20,13 +20,11 @@ directories.workspace = true
 jiff.workspace = true
 tokio.workspace = true
 kirie-annotate.workspace = true
+kirie-update.workspace = true
 kurbo = "0.11"
 wl-clipboard-rs = "0.9.5"
 ron = "0.12"
-minisign-verify = "0.3"
 semver = "1"
-sha2 = "0.11"
-ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 serde.workspace = true
 xkbcommon = { version = "0.8", default-features = false }
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"] }
