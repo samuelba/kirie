@@ -4,7 +4,8 @@
 
 use std::collections::HashMap;
 use std::os::unix::ffi::OsStringExt as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use image::{RgbaImage, imageops};
 use zbus::{OwnedVariant as OwnedValue, Variant as Value};
@@ -15,7 +16,9 @@ use crate::geometry::{Frame, Output, Rect};
 const DESTINATION: &str = "org.freedesktop.portal.Desktop";
 const PATH: &str = "/org/freedesktop/portal/desktop";
 /// How long a screenshot may take, with time for the user to answer GNOME's permission dialog.
-const ANSWER: std::time::Duration = std::time::Duration::from_secs(120);
+const ANSWER: Duration = Duration::from_secs(120);
+/// How far a file's time may lag the clock and still count as written after it.
+const SLACK: Duration = Duration::from_secs(2);
 /// Numbers each request, so its handle token is unique within the process.
 static REQUESTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
@@ -76,6 +79,7 @@ where
 /// its own picker instead. Gives up after [`ANSWER`], picker or not.
 pub async fn screenshot(interactive: bool) -> Result<RgbaImage, CaptureError> {
     let token = token();
+    let sent = SystemTime::now();
     let options: HashMap<&str, Value<'_>> = HashMap::from([
         ("handle_token", Value::from(token.as_str())),
         ("interactive", Value::from(interactive)),
@@ -100,9 +104,25 @@ pub async fn screenshot(interactive: bool) -> Result<RgbaImage, CaptureError> {
     let image = image::open(&path)
         .map_err(|error| CaptureError::Portal(error.to_string()))?
         .to_rgba8();
-    // The portal saved the picture for us; Kirie keeps its own copy.
-    let _ = std::fs::remove_file(&path);
+    // The portal saved the picture for us; Kirie keeps its own copy. Only a file made for this
+    // request goes: anything else could be a squatter on the portal's bus name pointing at a
+    // file to delete.
+    if made_since(&path, sent) {
+        let _ = std::fs::remove_file(&path);
+    } else {
+        tracing::warn!(path = %path.display(), "keeping a picture the portal did not make now");
+    }
     Ok(image)
+}
+
+/// Whether `path` is a plain file, not a link, last written no earlier than `since`. A little
+/// slack allows for coarse file times.
+fn made_since(path: &Path, since: SystemTime) -> bool {
+    let since = since.checked_sub(SLACK).unwrap_or(SystemTime::UNIX_EPOCH);
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| {
+        metadata.file_type().is_file()
+            && metadata.modified().is_ok_and(|modified| modified >= since)
+    })
 }
 
 /// The local path of a `file://` URI, with percent escapes decoded.
@@ -181,6 +201,32 @@ mod tests {
         assert_eq!(file_path("https://example.org/a.png"), None);
         assert_eq!(file_path("file:///bad%zz"), None);
         assert_eq!(file_path("file:///cut%2"), None);
+    }
+
+    #[test]
+    fn only_pictures_made_for_the_request_are_deleted() {
+        let dir = std::env::temp_dir().join(format!("kirie-made-since-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fresh = dir.join("fresh.png");
+        let old = dir.join("old.png");
+        let link = dir.join("link.png");
+        let sent = SystemTime::now();
+        std::fs::write(&fresh, b"new").unwrap();
+        std::fs::write(&old, b"mine").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(sent - Duration::from_secs(60))
+            .unwrap();
+        std::os::unix::fs::symlink(&fresh, &link).unwrap();
+
+        assert!(made_since(&fresh, sent));
+        assert!(!made_since(&old, sent));
+        assert!(!made_since(&link, sent));
+        assert!(!made_since(&dir, sent));
+        assert!(!made_since(&dir.join("missing.png"), sent));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
