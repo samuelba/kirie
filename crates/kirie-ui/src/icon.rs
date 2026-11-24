@@ -79,6 +79,7 @@ icons! {
     BringToFront => "bring-to-front",
     SendToBack => "send-to-back",
     Settings => "settings",
+    Layers => "layers",
 }
 
 impl Icon {

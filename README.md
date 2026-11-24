@@ -101,6 +101,11 @@ them (with nothing picked, Ctrl+C copies the picture), and Ctrl+V pastes them ba
 were, or onto another image. With an image open, Ctrl+V puts a copied picture on top of it as
 a mark of its own, to move and resize: its corners keep its proportions, unless you hold Shift.
 
+The editor lists every mark, topmost first, in the Marks panel at the top right of the canvas
+(M opens and closes it). Click a row to pick a mark, even one hidden under others; Ctrl+click or
+Shift+click adds it or takes it out, pointing at a row outlines its mark on the canvas, and a
+double-click opens the words of a text or speech bubble.
+
 To catch an open menu, a tooltip or a hover state, wait before the screenshot:
 `kirie capture --delay 5` takes it after five seconds (up to 60).
 
