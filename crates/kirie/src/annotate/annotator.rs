@@ -334,8 +334,10 @@ impl Annotator {
         self.picker.as_ref().is_some_and(Picker::sampling)
     }
 
-    /// Undoes or redoes a step; the drawing color follows the style there.
+    /// Undoes or redoes a step; the words being typed become a step of their own first, and the
+    /// drawing color follows the style there.
     fn travel(&mut self, undo: bool) {
+        self.commit_text();
         let before = self.style();
         if undo {
             self.history.undo();
@@ -598,6 +600,37 @@ mod tests {
         assert_eq!(annotator.put_down(), Some(Effect::default()));
         assert!(annotator.picked.is_empty());
         assert_eq!(annotator.put_down(), None);
+    }
+
+    #[test]
+    fn undo_while_editing_words_takes_back_the_typing_and_redo_brings_it_back() {
+        use iced::widget::text_editor::{Action, Edit};
+
+        let text = |annotator: &Annotator| {
+            annotator
+                .document()
+                .shapes()
+                .find_map(|shape| match &shape.kind {
+                    Kind::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+        };
+        let mut annotator = annotator();
+        annotator.history.apply(Op::Add {
+            kind: Kind::Text {
+                at: kurbo::Point::new(10.0, 10.0),
+                text: "Hi".to_owned(),
+            },
+            paint: Paint::default(),
+        });
+        let id = annotator.document().shapes().next().unwrap().id;
+        let _ = annotator.edit_text(id);
+        let _ = annotator.update(Change::TextEdit(Action::Edit(Edit::Insert('!'))));
+        let _ = annotator.update(Change::Undo);
+        assert!(annotator.typing.is_none());
+        assert_eq!(text(&annotator).as_deref(), Some("Hi"));
+        let _ = annotator.update(Change::Redo);
+        assert_eq!(text(&annotator).as_deref(), Some("Hi!"));
     }
 
     #[test]
