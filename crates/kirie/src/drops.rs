@@ -44,6 +44,8 @@ const STALL_SECONDS: i64 = 5;
 pub enum Dropped {
     /// The data device is ready; it is handed over once, before any drop.
     Ready(Device),
+    /// Something the editor can open is dragged over the window (`true`), or no longer is.
+    Hovering(bool),
     Files(Vec<PathBuf>),
     Png(Vec<u8>),
 }
@@ -249,6 +251,10 @@ struct Offer {
 }
 
 impl State {
+    fn hover(&self, hovering: bool) {
+        let _ = self.sender.unbounded_send(Dropped::Hovering(hovering));
+    }
+
     fn forget(&mut self, offer: &WlDataOffer) {
         self.offers.remove(&offer.id());
         offer.destroy();
@@ -438,13 +444,16 @@ impl Dispatch<WlDataDevice, ()> for State {
                 if let Some(old) = state.dragged.replace(offer) {
                     state.forget(&old);
                 }
+                state.hover(kind.is_some());
             }
             wl_data_device::Event::Leave => {
+                state.hover(false);
                 if let Some(offer) = state.dragged.take() {
                     state.forget(&offer);
                 }
             }
             wl_data_device::Event::Drop => {
+                state.hover(false);
                 if let Some(offer) = state.dragged.take() {
                     state.take(&offer);
                 }

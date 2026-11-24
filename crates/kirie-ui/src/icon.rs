@@ -65,6 +65,7 @@ icons! {
     Project => "file-archive",
     Delete => "trash",
     Image => "image",
+    ImageDown => "image-down",
     Plus => "plus",
     AlignLeft => "text-align-start",
     AlignCenter => "text-align-center",
