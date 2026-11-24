@@ -26,7 +26,7 @@ trait Shell {
 /// The windows on the active workspace, topmost first, from GNOME Shell.
 pub async fn windows() -> Result<Vec<crate::windows::Window>, CaptureError> {
     let failed = |error: zbus::Error| CaptureError::Shell(error.to_string());
-    let connection = zbus::Connection::session().await.map_err(failed)?;
+    let connection = crate::bus::session().await.map_err(failed)?;
     let windows = ShellProxy::new(&connection)
         .await
         .map_err(failed)?
@@ -45,7 +45,7 @@ pub async fn windows() -> Result<Vec<crate::windows::Window>, CaptureError> {
 /// Puts a PNG on the clipboard through GNOME Shell, which keeps it after Kirie exits.
 pub async fn set_clipboard(png: &[u8]) -> Result<(), CaptureError> {
     let failed = |error: zbus::Error| CaptureError::Shell(error.to_string());
-    let connection = zbus::Connection::session().await.map_err(failed)?;
+    let connection = crate::bus::session().await.map_err(failed)?;
     ShellProxy::new(&connection)
         .await
         .map_err(failed)?
@@ -62,7 +62,7 @@ pub fn launched() -> bool {
 /// Asks the extension to start a capture; false when there is no extension.
 pub async fn capture(edit: bool, cursor: bool) -> bool {
     let attempt = async {
-        let connection = zbus::Connection::session().await?;
+        let connection = crate::bus::session().await?;
         let dbus = zbus::fdo::DBusProxy::new(&connection).await?;
         if !dbus.name_has_owner(BUS_NAME.try_into()?).await? {
             return Ok::<_, zbus::Error>(false);
@@ -82,7 +82,7 @@ pub async fn capture(edit: bool, cursor: bool) -> bool {
 /// Every screen, captured by GNOME Shell, in the order of its monitor index.
 pub async fn screens(known: &[Output]) -> Result<Vec<Frame>, CaptureError> {
     let failed = |error: zbus::Error| CaptureError::Shell(error.to_string());
-    let connection = zbus::Connection::session().await.map_err(failed)?;
+    let connection = crate::bus::session().await.map_err(failed)?;
     let screens = ShellProxy::new(&connection)
         .await
         .map_err(failed)?

@@ -208,15 +208,22 @@ fn backup(original: &str) -> Result<(), String> {
 /// `original` (COSMIC Settings saved it meanwhile).
 fn replace(path: &Path, text: &str, original: Option<&str>) -> Result<(), String> {
     let dir = path.parent().ok_or("the shortcuts file has no directory")?;
-    let temporary = dir.join(".custom.kirie-tmp");
     let fail = |error: std::io::Error| format!("cannot write {}: {error}", path.display());
     std::fs::create_dir_all(dir).map_err(fail)?;
-    std::fs::write(&temporary, text).map_err(fail)?;
-    if read(path)?.as_deref() != original {
+    let temporary = crate::storage::store::write_beside(path, text).map_err(fail)?;
+    let unchanged = read(path).and_then(|now| {
+        (now.as_deref() == original)
+            .then_some(())
+            .ok_or_else(|| "COSMIC changed its shortcuts meanwhile; try again".to_owned())
+    });
+    if let Err(error) = unchanged {
         let _ = std::fs::remove_file(&temporary);
-        return Err("COSMIC changed its shortcuts meanwhile; try again".into());
+        return Err(error);
     }
-    std::fs::rename(&temporary, path).map_err(fail)
+    std::fs::rename(&temporary, path).map_err(|error| {
+        let _ = std::fs::remove_file(&temporary);
+        fail(error)
+    })
 }
 
 /// One `binding: action` pair, with the action kept as written.
