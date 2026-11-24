@@ -14,6 +14,8 @@ use crate::geometry::{Frame, Output, Rect};
 
 const DESTINATION: &str = "org.freedesktop.portal.Desktop";
 const PATH: &str = "/org/freedesktop/portal/desktop";
+/// How long a screenshot may take, with time for the user to answer GNOME's permission dialog.
+const ANSWER: std::time::Duration = std::time::Duration::from_secs(120);
 /// Numbers each request, so its handle token is unique within the process.
 static REQUESTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
@@ -35,7 +37,7 @@ where
     B: serde::Serialize + zbus::zvariant::DynamicType,
 {
     let portal = |error: zbus::Error| CaptureError::Portal(error.to_string());
-    let connection = zbus::Connection::session().await.map_err(portal)?;
+    let connection = crate::bus::session().await.map_err(portal)?;
     let sender = connection
         .unique_name()
         .map(|name| name.trim_start_matches(':').replace('.', "_"))
@@ -71,7 +73,7 @@ where
 }
 
 /// Asks the portal for a screenshot of the whole desktop. `interactive` lets the desktop show
-/// its own picker instead.
+/// its own picker instead. Gives up after [`ANSWER`], picker or not.
 pub async fn screenshot(interactive: bool) -> Result<RgbaImage, CaptureError> {
     let token = token();
     let options: HashMap<&str, Value<'_>> = HashMap::from([
@@ -79,13 +81,16 @@ pub async fn screenshot(interactive: bool) -> Result<RgbaImage, CaptureError> {
         ("interactive", Value::from(interactive)),
         ("modal", Value::from(false)),
     ]);
-    let results = request(
+    let body = ("", options);
+    let asked = request(
         "org.freedesktop.portal.Screenshot",
         "Screenshot",
         &token,
-        &("", options),
-    )
-    .await?;
+        &body,
+    );
+    let results = tokio::time::timeout(ANSWER, asked).await.map_err(|_| {
+        CaptureError::Portal(format!("no answer within {} seconds", ANSWER.as_secs()))
+    })??;
     let uri: String = results
         .get("uri")
         .and_then(|uri| String::try_from(uri.clone()).ok())

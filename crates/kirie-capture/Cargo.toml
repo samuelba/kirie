@@ -17,6 +17,7 @@ rustix = { version = "1", features = ["fs", "event"] }
 futures-util = { version = "0.3", default-features = false }
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] }
 thiserror.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 wayland-backend = "0.3"
 wayland-client = "0.31"
