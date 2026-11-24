@@ -1,5 +1,6 @@
 //! Copying a picture, or marks, to the clipboard. The clipboard is served by a small background
-//! copy of Kirie, so what is copied stays pasteable after the overlay closes.
+//! copy of Kirie, so what is copied stays pasteable after the overlay closes. Where the
+//! compositor lets no such program take it, as on GNOME, the editor's window offers it itself.
 
 use std::io::Write as _;
 use std::process::{Command, Stdio};
@@ -18,6 +19,15 @@ const MAX_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Encodes `image` as PNG and hands it to a background process that offers it on the clipboard.
 pub async fn copy(image: RgbaImage) -> Result<(), String> {
+    copy_from(image, None).await
+}
+
+/// Like [`copy`], with the window of `device` offering it where no background process can.
+/// GNOME keeps a PNG the window offers after the window closes.
+pub async fn copy_from(
+    image: RgbaImage,
+    device: Option<crate::drops::Device>,
+) -> Result<(), String> {
     let png = tokio::task::spawn_blocking(move || encode_png(&image))
         .await
         .map_err(|error| error.to_string())??;
@@ -26,7 +36,27 @@ pub async fn copy(image: RgbaImage) -> Result<(), String> {
             .await
             .map_err(|error| error.to_string());
     }
-    offer(png, PNG).await
+    offer_from(png, PNG, device).await
+}
+
+/// Like [`offer`], with the window of `device` offering the bytes where no background process
+/// can.
+pub async fn offer_from(
+    bytes: Vec<u8>,
+    kind: &'static str,
+    device: Option<crate::drops::Device>,
+) -> Result<(), String> {
+    let Some(device) = device else {
+        return offer(bytes, kind).await;
+    };
+    let Err(error) = offer(bytes.clone(), kind).await else {
+        return Ok(());
+    };
+    tracing::debug!(%error, "the window offers the clipboard itself");
+    tokio::task::spawn_blocking(move || device.offer(bytes, kind))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|own| format!("{error}; {own}"))
 }
 
 /// Hands `bytes` to a background process that offers them on the clipboard as `kind`, one of

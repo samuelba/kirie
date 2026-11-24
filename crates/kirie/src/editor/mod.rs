@@ -772,11 +772,12 @@ impl Editor {
         } else {
             format!("Copied {} marks; Ctrl+V pastes them", marks.len())
         };
+        let device = self.drops.device.clone();
         let offered = async move {
             let bytes = tokio::task::spawn_blocking(move || crate::marks::encode(marks))
                 .await
                 .map_err(|error| error.to_string())??;
-            crate::clipboard::offer(bytes, crate::marks::MIME).await
+            crate::clipboard::offer_from(bytes, crate::marks::MIME, device).await
         };
         Task::perform(offered, move |offered| {
             Message::Offered(match offered {
@@ -1448,11 +1449,15 @@ impl Editor {
             }
         };
         match export {
-            Export::Copy => Task::perform(crate::clipboard::copy(picture), move |copied| {
-                exported(copied.map(|()| ("Copied to the clipboard".to_owned(), None)))
-            }),
+            Export::Copy => {
+                let copied = crate::clipboard::copy_from(picture, self.drops.device.clone());
+                Task::perform(copied, move |copied| {
+                    exported(copied.map(|()| ("Copied to the clipboard".to_owned(), None)))
+                })
+            }
             Export::Save | Export::Project | Export::To(..) => {
-                Task::perform(crate::save::save_and_copy(picture), move |done| {
+                let saved = crate::save::save_and_copy(picture, self.drops.device.clone());
+                Task::perform(saved, move |done| {
                     exported(done.map(|(path, copied)| {
                         let text = if copied {
                             format!("Saved {} and copied", crate::save::pretty(&path))
