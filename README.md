@@ -16,9 +16,9 @@ piece out of your screen, mark it up right there or later in the editor, and cop
 It runs on GNOME, COSMIC, KDE Plasma and the layer-shell compositors (sway, Hyprland, niri,
 Wayfire). X11 is not supported. More at [samuelba.dev/kirie](https://samuelba.dev/kirie).
 
-![The overlay: a region of the screen cut out, with a box, a step number, an arrow and text drawn on it, and the toolbar under the selection](docs/screenshots/overlay.webp)
+![The overlay: a region of the screen cut out, with a tilted box, an arrow and the text "Kirie 🚀" being typed on it, and the toolbar under the selection](docs/screenshots/overlay.webp)
 
-![The editor: one of each mark on a screenshot, with the style, color, weight, fill, shadow and frame settings on the right](docs/screenshots/editor.webp)
+![The editor: every mark in the Clean, Sketch and Ink styles side by side, with the style, color, weight, fill, shadow and frame settings on the right](docs/screenshots/editor.webp)
 
 ## Install
 
