@@ -219,10 +219,20 @@ impl From<StoredPaint> for Paint {
             color: stored.color,
             weight: stored.weight,
             filled: stored.filled,
-            text: stored.text.unwrap_or(TextLook {
-                size: stored.weight.legacy_text_size(),
-                ..TextLook::default()
-            }),
+            text: stored.text.map_or(
+                TextLook {
+                    size: stored.weight.legacy_text_size(),
+                    ..TextLook::default()
+                },
+                |text| TextLook {
+                    size: if text.size.is_finite() {
+                        text.size.clamp(TextLook::MIN_SIZE, TextLook::MAX_SIZE)
+                    } else {
+                        TextLook::default().size
+                    },
+                    ..text
+                },
+            ),
             spot: stored.spot,
         }
     }

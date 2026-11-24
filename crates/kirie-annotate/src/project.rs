@@ -19,6 +19,10 @@ const VERSION: u32 = 3;
 const PLAIN: u32 = 2;
 /// The most pixels a project's image marks may hold together.
 const MAX_PIXELS: u64 = 4 * crate::pixels::MAX_PIXELS;
+/// The largest `image.png` read: room for a picture of 48 million pixels, even uncompressed.
+const MAX_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
+/// The largest `manifest.ron` or `document.ron` read; image marks make up most of it.
+const MAX_TEXT_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Project {
@@ -38,6 +42,8 @@ pub enum ProjectError {
     NotAProject(String),
     #[error("this project needs a newer Kirie (format version {0})")]
     TooNew(u32),
+    #[error("the project's {0} is too large")]
+    TooLarge(&'static str),
     #[error("the project's image is {got:?}, its marks expect {expected:?}")]
     SizeMismatch {
         expected: (u32, u32),
@@ -105,8 +111,7 @@ pub fn load(reader: impl Read + Seek) -> Result<Project, ProjectError> {
     if manifest.version > VERSION {
         return Err(ProjectError::TooNew(manifest.version));
     }
-    let mut png = Vec::new();
-    zip.by_name("image.png")?.read_to_end(&mut png)?;
+    let png = read(&mut zip, "image.png", MAX_IMAGE_BYTES)?;
     let image = image::load_from_memory_with_format(&png, image::ImageFormat::Png)?.to_rgba8();
     let text = read_text(&mut zip, "document.ron")?;
     let document: Document = crate::pixels::budget(MAX_PIXELS, || ron::from_str(&text))?;
@@ -121,13 +126,28 @@ pub fn load(reader: impl Read + Seek) -> Result<Project, ProjectError> {
 
 fn read_text(
     zip: &mut zip::ZipArchive<impl Read + Seek>,
-    name: &str,
+    name: &'static str,
 ) -> Result<String, ProjectError> {
-    let mut text = String::new();
-    zip.by_name(name)
-        .map_err(|_| ProjectError::NotAProject(format!("it has no {name}")))?
-        .read_to_string(&mut text)?;
-    Ok(text)
+    let bytes = read(zip, name, MAX_TEXT_BYTES)?;
+    String::from_utf8(bytes).map_err(|_| ProjectError::NotAProject(format!("{name} is not text")))
+}
+
+/// The unpacked bytes of the file `name`, refused past `most`: a small project could unpack
+/// into far more than it holds.
+fn read(
+    zip: &mut zip::ZipArchive<impl Read + Seek>,
+    name: &'static str,
+    most: u64,
+) -> Result<Vec<u8>, ProjectError> {
+    let entry = zip
+        .by_name(name)
+        .map_err(|_| ProjectError::NotAProject(format!("it has no {name}")))?;
+    let mut bytes = Vec::new();
+    entry.take(most + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > most {
+        return Err(ProjectError::TooLarge(name));
+    }
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -286,6 +306,28 @@ mod tests {
         zip.finish().unwrap();
         let error = load(Cursor::new(out.into_inner())).unwrap_err();
         assert!(error.to_string().contains("manifest.ron"), "{error}");
+    }
+
+    #[test]
+    fn files_that_unpack_too_large_are_refused() {
+        let mut out = Cursor::new(Vec::new());
+        let mut zip = zip::ZipWriter::new(&mut out);
+        zip.start_file(
+            "document.ron",
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated),
+        )
+        .unwrap();
+        zip.write_all(&[b' '; 10_000]).unwrap();
+        zip.finish().unwrap();
+        let mut zip = zip::ZipArchive::new(Cursor::new(out.into_inner())).unwrap();
+        assert!(matches!(
+            read(&mut zip, "document.ron", 9_999),
+            Err(ProjectError::TooLarge("document.ron"))
+        ));
+        assert_eq!(
+            read(&mut zip, "document.ron", 10_000).unwrap().len(),
+            10_000
+        );
     }
 
     #[test]
