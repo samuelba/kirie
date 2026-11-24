@@ -5,6 +5,7 @@ mod canvas;
 mod closing;
 mod demo;
 mod frame;
+mod mark_list;
 mod release_card;
 mod settings;
 mod view;
@@ -150,6 +151,7 @@ pub enum Message {
     /// Moves through or picks the emoji offered while typing.
     Choose(crate::typing::Choice),
     Frame(frame::Event),
+    MarkList(mark_list::Event),
     ToggleScheme,
     TextEdit(iced::widget::text_editor::Action),
     TextDone,
@@ -293,6 +295,7 @@ pub struct Editor {
     draft: Option<Draft>,
     /// The marks the select tool picked; a lone one shows its grips.
     picked: Vec<ShapeId>,
+    mark_list: mark_list::Shown,
     /// The marks copied last, while the clipboard is not known to hold them: Ctrl+V pastes them
     /// while they are on their way there, or, should they never get there, when it holds
     /// neither marks nor an image.
@@ -362,6 +365,7 @@ impl Editor {
             emojis: EmojiPicker::load(),
             draft: None,
             picked: Vec::new(),
+            mark_list: mark_list::Shown::Closed,
             clip: None,
             sliding: false,
             typing: None,
@@ -544,20 +548,7 @@ impl Editor {
             Message::Hover(at) => self.hover = at,
             Message::Canvas(size) => self.canvas = size,
             Message::Modifiers(modifiers) => self.modifiers = modifiers,
-            Message::PickTool(tool) => {
-                self.keep_crop();
-                self.commit_text();
-                self.tool = tool;
-                self.paint.color = controls::tool_color(
-                    Some(tool),
-                    self.paint.color,
-                    self.swatches.first(self.document().style),
-                );
-                self.draft = None;
-                if tool != Tool::Select {
-                    self.picked.clear();
-                }
-            }
+            Message::PickTool(tool) => self.pick_tool(tool),
             Message::PickStyle(_)
             | Message::ToggleShadow
             | Message::PickColor(_)
@@ -587,7 +578,8 @@ impl Editor {
             | Message::Duplicate
             | Message::Restack(_)
             | Message::Offered(_)
-            | Message::Pasted(_) => return self.edit_marks(message),
+            | Message::Pasted(_)
+            | Message::MarkList(_) => return self.edit_marks(message),
             Message::Escape if self.closing == Closing::Asking => self.closing = Closing::No,
             Message::Escape | Message::About(false) if self.about => self.about = false,
             Message::Settings(event) => return self.edit_settings(event),
@@ -634,6 +626,21 @@ impl Editor {
         Task::none()
     }
 
+    fn pick_tool(&mut self, tool: Tool) {
+        self.keep_crop();
+        self.commit_text();
+        self.tool = tool;
+        self.paint.color = controls::tool_color(
+            Some(tool),
+            self.paint.color,
+            self.swatches.first(self.document().style),
+        );
+        self.draft = None;
+        if tool != Tool::Select {
+            self.picked.clear();
+        }
+    }
+
     /// Esc puts down what is open, one thing at a time: the eyedropper, the settings, the crop,
     /// the color picker, the text being typed, the mark being drawn, then the picked marks.
     fn escape(&mut self) -> Task<Message> {
@@ -661,9 +668,10 @@ impl Editor {
         Task::none()
     }
 
-    /// Deleting, picking, copying and pasting marks.
+    /// Deleting, picking, copying and pasting marks, and the list of them.
     fn edit_marks(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::MarkList(event) => return self.mark_list_event(event),
             Message::CopyKey if self.picked.is_empty() => return self.export(Export::Copy),
             Message::CopyKey => return self.copy_marks(),
             Message::Cut if !self.picked.is_empty() => {
@@ -1769,6 +1777,9 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("=" | "+") if command => Some(Message::ZoomIn),
         keyboard::Key::Character("-") if command => Some(Message::ZoomOut),
         keyboard::Key::Character("c") if !command => Some(Message::Crop),
+        keyboard::Key::Character("m") if !command => {
+            Some(Message::MarkList(mark_list::Event::Toggle))
+        }
         keyboard::Key::Character(c) if !command => c
             .chars()
             .next()

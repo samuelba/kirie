@@ -8,7 +8,9 @@ use kirie_annotate::{Draft, Shape, Tool};
 
 use super::{Editor, MARK_REACH, Message, Pointer, pixel};
 use crate::loupe::{self, Lens};
-use crate::paint::{ImageSource, Marks, Painter, Part, color_of, draw_marquee, draw_picked};
+use crate::paint::{
+    ImageSource, Marks, Painter, Part, color_of, draw_listed, draw_marquee, draw_picked,
+};
 use crate::selection::Handle;
 
 /// The radius of a crop handle, in screen pixels.
@@ -220,6 +222,14 @@ impl Board<'_> {
             pixel,
             accent,
         );
+        if let Some(shape) = editor
+            .mark_list
+            .hovered()
+            .filter(|id| !editor.picked.contains(id))
+            .and_then(|id| editor.document().shape(id))
+        {
+            draw_listed(frame, shape, editor.document(), transform, accent);
+        }
         if let Some(rect) = editor.draft.as_ref().and_then(Draft::marquee) {
             draw_marquee(frame, rect, transform, accent);
         }

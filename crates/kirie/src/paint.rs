@@ -400,6 +400,17 @@ pub fn draw_picked(
     }
 }
 
+/// A dashed line around `shape`, whose row in the list of marks is under the pointer.
+pub fn draw_listed(
+    frame: &mut Frame,
+    shape: &Shape,
+    document: &Document,
+    transform: Affine,
+    accent: Color,
+) {
+    draw_outline(frame, shape, document.bounds(shape), transform, accent);
+}
+
 /// The box being dragged to pick the marks inside it.
 pub fn draw_marquee(frame: &mut Frame, rect: kurbo::Rect, transform: Affine, accent: Color) {
     let rect = transform.transform_rect_bbox(rect);

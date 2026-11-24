@@ -306,6 +306,16 @@ impl Editor {
                 .align_y(Alignment::End)
                 .padding(space::XL),
         );
+        if let Some(list) = self.mark_list() {
+            layers = layers.push(
+                container(list)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Alignment::End)
+                    .align_y(Alignment::Start)
+                    .padding(space::L),
+            );
+        }
         if let Some(card) = self.release_card() {
             layers = layers.push(card);
         }
