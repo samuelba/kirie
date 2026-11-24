@@ -160,6 +160,8 @@ pub enum Message {
     PasteText,
     /// The window lost the keyboard.
     Unfocused,
+    /// The window got the keyboard back, perhaps after the overlay ran in a process of its own.
+    Focused,
     Undo,
     Redo,
     Delete,
@@ -413,6 +415,7 @@ impl Editor {
         );
         // The overlay may have changed the options since, in a process of its own.
         let drawing = Drawing::load();
+        self.reload_shared();
         let demo = (loaded.fresh || handoff) && demo::wanted();
         let document = match (loaded.fresh, handoff) {
             (true, _) => drawing.framed(drawing.styled(loaded.document)),
@@ -443,6 +446,13 @@ impl Editor {
         self.closing = Closing::No;
         self.then = Then::Exit;
         self.patches.borrow_mut().clear();
+    }
+
+    /// Reads the colors and recent emoji the overlay may have saved, so the editor's next save
+    /// does not put back its older copy.
+    fn reload_shared(&mut self) {
+        self.swatches = Swatches::load();
+        self.emojis.reload();
     }
 
     /// Puts the image away: the editor shows its empty page again.
@@ -603,6 +613,7 @@ impl Editor {
                 self.crop_message(&message);
             }
             Message::Escape => return self.escape(),
+            Message::Focused => self.reload_shared(),
             Message::Copy
             | Message::Open
             | Message::Paste
@@ -1708,7 +1719,11 @@ fn quit_key(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<Messa
 /// The window losing the keyboard, when the data device is made anew to take drops.
 #[allow(clippy::needless_pass_by_value)]
 fn focus(event: Event, _: event::Status, _: window::Id) -> Option<Message> {
-    matches!(event, Event::Window(window::Event::Unfocused)).then_some(Message::Unfocused)
+    match event {
+        Event::Window(window::Event::Unfocused) => Some(Message::Unfocused),
+        Event::Window(window::Event::Focused) => Some(Message::Focused),
+        _ => None,
+    }
 }
 
 /// The crop that keeps `rect` of an image of `size`, in whole pixels: none for all of it.
@@ -1913,6 +1928,17 @@ mod tests {
                 Some(Message::Crop)
             ));
         }
+    }
+
+    #[test]
+    fn getting_the_keyboard_back_reads_what_the_overlay_saved() {
+        let id = window::Id::unique();
+        let focused = focus(
+            Event::Window(window::Event::Focused),
+            event::Status::Ignored,
+            id,
+        );
+        assert!(matches!(focused, Some(Message::Focused)));
     }
 
     #[test]
