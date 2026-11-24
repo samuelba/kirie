@@ -12,7 +12,6 @@ mod extension;
 mod ipc;
 mod launch;
 mod loupe;
-mod marks;
 mod notify;
 mod overlay;
 mod paint;
@@ -435,7 +434,12 @@ mod tests {
             other => panic!("{other:?}"),
         };
         assert_eq!(kind(&["kirie", clipboard::SERVE]), clipboard::PNG);
-        let marks = kind(&["kirie", clipboard::SERVE, "--kind", marks::MIME]);
+        let marks = kind(&[
+            "kirie",
+            clipboard::SERVE,
+            "--kind",
+            kirie_annotate::marks::MIME,
+        ]);
         assert!(clipboard::KINDS.contains(&marks.as_str()));
         assert!(clipboard::serve("text/html").is_err());
     }

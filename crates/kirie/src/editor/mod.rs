@@ -174,7 +174,7 @@ pub enum Message {
     /// Copies the picked marks a step aside.
     Duplicate,
     /// Moves the picked marks up or down among the others.
-    Restack(crate::marks::Restack),
+    Restack(kirie_annotate::marks::Restack),
     /// Copied marks reached the clipboard, or did not; with what to tell.
     Offered(Result<String, String>),
     /// What was on the clipboard when Ctrl+V was pressed.
@@ -700,13 +700,16 @@ impl Editor {
                 return copied;
             }
             Message::Duplicate => {
-                if let Some((op, ids)) = crate::marks::duplicate(self.document(), &self.picked) {
+                if let Some((op, ids)) =
+                    kirie_annotate::marks::duplicate(self.document(), &self.picked)
+                {
                     self.history.apply(op);
                     self.picked = ids;
                 }
             }
             Message::Restack(to) => {
-                if let Some(op) = crate::marks::restack(self.document(), &self.picked, to) {
+                if let Some(op) = kirie_annotate::marks::restack(self.document(), &self.picked, to)
+                {
                     self.history.apply(op);
                 }
             }
@@ -716,7 +719,7 @@ impl Editor {
             Message::Pasted(Ok(Pasted::Marks(clip))) => {
                 self.keep_crop();
                 let _ = self.update(Message::PickTool(Tool::Select));
-                if let Some((op, ids)) = crate::marks::paste(self.document(), &clip) {
+                if let Some((op, ids)) = kirie_annotate::marks::paste(self.document(), &clip) {
                     self.history.apply(op);
                     self.picked = ids;
                 }
@@ -726,7 +729,7 @@ impl Editor {
             }
             Message::Pasted(Ok(Pasted::Image(image))) => {
                 self.keep_crop();
-                match crate::marks::place_image(self.document(), image) {
+                match kirie_annotate::marks::place_image(self.document(), image) {
                     Ok((op, id)) => {
                         let _ = self.update(Message::PickTool(Tool::Select));
                         self.history.apply(op);
@@ -773,7 +776,7 @@ impl Editor {
 
     /// Puts the picked marks on the clipboard, for Ctrl+V here or in another Kirie.
     fn copy_marks(&mut self) -> Task<Message> {
-        let marks = crate::marks::of(self.document(), &self.picked);
+        let marks = kirie_annotate::marks::of(self.document(), &self.picked);
         if marks.is_empty() {
             return Task::none();
         }
@@ -785,10 +788,10 @@ impl Editor {
         };
         let device = self.drops.device.clone();
         let offered = async move {
-            let bytes = tokio::task::spawn_blocking(move || crate::marks::encode(marks))
+            let bytes = tokio::task::spawn_blocking(move || kirie_annotate::marks::encode(marks))
                 .await
                 .map_err(|error| error.to_string())??;
-            crate::clipboard::offer_from(bytes, crate::marks::MIME, device).await
+            crate::clipboard::offer_from(bytes, kirie_annotate::marks::MIME, device).await
         };
         Task::perform(offered, move |offered| {
             Message::Offered(match offered {
@@ -1139,7 +1142,7 @@ impl Editor {
         } else {
             self.history.redo();
         }
-        crate::marks::prune(self.history.current(), &mut self.picked);
+        kirie_annotate::marks::prune(self.history.current(), &mut self.picked);
         self.follow_style(before);
     }
 
@@ -1161,7 +1164,7 @@ impl Editor {
     /// Like [`Self::repaint`]; a `gradual` change joins the step the slider drag began.
     fn repaint_gradually(&mut self, change: impl Fn(&mut Paint), gradual: bool) {
         change(&mut self.paint);
-        let Some(op) = crate::marks::repaint(self.document(), &self.picked, change) else {
+        let Some(op) = kirie_annotate::marks::repaint(self.document(), &self.picked, change) else {
             return;
         };
         if gradual {
@@ -1174,7 +1177,7 @@ impl Editor {
 
     /// The paint the controls show: the first picked mark's, else the one new marks get.
     fn shown_paint(&self) -> Paint {
-        crate::marks::shown_paint(self.document(), &self.picked, self.paint)
+        kirie_annotate::marks::shown_paint(self.document(), &self.picked, self.paint)
     }
 
     /// Whether the text controls apply: to words being typed, picked text marks and bubbles, or
@@ -1182,20 +1185,20 @@ impl Editor {
     fn texting(&self) -> bool {
         matches!(self.tool, Tool::Text | Tool::Bubble)
             || self.typing.is_some()
-            || crate::marks::all(self.document(), &self.picked, |kind| {
+            || kirie_annotate::marks::all(self.document(), &self.picked, |kind| {
                 matches!(kind, Kind::Text { .. } | Kind::Bubble { .. })
             })
     }
 
     /// Whether the emoji picker shows: for the sticker tool or picked stickers.
     fn stickering(&self) -> bool {
-        crate::marks::stickering(Some(self.tool), self.document(), &self.picked)
+        kirie_annotate::marks::stickering(Some(self.tool), self.document(), &self.picked)
     }
 
     /// Whether the spotlight controls apply: to the spotlight tool or picked spotlights.
     fn spotlighting(&self) -> bool {
         self.tool == Tool::Spotlight
-            || crate::marks::all(self.document(), &self.picked, |kind| {
+            || kirie_annotate::marks::all(self.document(), &self.picked, |kind| {
                 matches!(kind, Kind::Spotlight { .. })
             })
     }
@@ -1250,7 +1253,7 @@ impl Editor {
                     extend,
                 ) {
                     Press::Draft(draft) => {
-                        crate::marks::pressed(&draft, &mut self.picked);
+                        kirie_annotate::marks::pressed(&draft, &mut self.picked);
                         self.draft = Some(draft);
                     }
                     Press::Done(op) => {
@@ -1263,10 +1266,10 @@ impl Editor {
                     Press::PlaceSticker(at) => {
                         let size = kirie_annotate::tools::STICKER_SIZE * self.document().unit;
                         let draft = Draft::sticker(self.emojis.chosen(), at, size);
-                        crate::marks::pressed(&draft, &mut self.picked);
+                        kirie_annotate::marks::pressed(&draft, &mut self.picked);
                         self.draft = Some(draft);
                     }
-                    Press::Toggle(id) => crate::marks::toggle(&mut self.picked, id),
+                    Press::Toggle(id) => kirie_annotate::marks::toggle(&mut self.picked, id),
                     Press::Nothing => self.picked.clear(),
                 }
             }
@@ -1283,9 +1286,12 @@ impl Editor {
                         return iced::widget::operation::focus(view::TEXT_INPUT);
                     }
                     let document = self.history.current();
-                    if let Some(op) =
-                        crate::marks::release(draft, document, &mut self.picked, self.paint)
-                    {
+                    if let Some(op) = kirie_annotate::marks::release(
+                        draft,
+                        document,
+                        &mut self.picked,
+                        self.paint,
+                    ) {
                         self.history.apply(op);
                     }
                 }
@@ -1354,7 +1360,8 @@ impl Editor {
             Message::PasteText => return self.paste_text(),
             Message::Emoji(event) => {
                 if let Some(emoji) = self.emojis.update(event)
-                    && let Some(op) = crate::marks::restick(self.document(), &self.picked, &emoji)
+                    && let Some(op) =
+                        kirie_annotate::marks::restick(self.document(), &self.picked, &emoji)
                 {
                     self.history.apply(op);
                 }
@@ -1554,7 +1561,7 @@ async fn paste(
     device: Option<crate::drops::Device>,
     clip: Option<(Vec<Shape>, Offer)>,
 ) -> Result<Pasted, String> {
-    const KINDS: &[&str] = &[crate::marks::MIME, crate::drops::PNG];
+    const KINDS: &[&str] = &[kirie_annotate::marks::MIME, crate::drops::PNG];
     let unsent = match clip {
         Some((marks, Offer::Pending)) => return Ok(Pasted::Marks(marks)),
         Some((marks, Offer::Failed)) => Some(marks),
@@ -1569,8 +1576,8 @@ async fn paste(
         Err(error) => return unsent.map(Pasted::Marks).ok_or(error),
     };
     tokio::task::spawn_blocking(move || {
-        if kind == crate::marks::MIME {
-            return crate::marks::decode(&bytes).map(Pasted::Marks);
+        if kind == kirie_annotate::marks::MIME {
+            return kirie_annotate::marks::decode(&bytes).map(Pasted::Marks);
         }
         ::image::load_from_memory_with_format(&bytes, ::image::ImageFormat::Png)
             .map(|image| Pasted::Image(image.to_rgba8()))
@@ -1782,7 +1789,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
     let command = modifiers.command();
     if command
         && let keyboard::Key::Character(written) = key.as_ref()
-        && let Some(to) = crate::marks::restack_key(written)
+        && let Some(to) = kirie_annotate::marks::restack_key(written)
     {
         return Some(Message::Restack(to));
     }

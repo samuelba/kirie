@@ -11,7 +11,7 @@ use image::RgbaImage;
 pub const SERVE: &str = "serve-clipboard";
 pub const PNG: &str = "image/png";
 /// What the background copy offers.
-pub const KINDS: [&str; 2] = [PNG, crate::marks::MIME];
+pub const KINDS: [&str; 2] = [PNG, kirie_annotate::marks::MIME];
 /// How long the clipboard service gets to say that it holds the clipboard.
 const READY: std::time::Duration = std::time::Duration::from_secs(2);
 /// The most bytes read from the clipboard.

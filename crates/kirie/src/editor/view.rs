@@ -14,9 +14,9 @@ use super::canvas::{Backdrop, Board};
 use super::viewport::Zoom;
 use super::{Editor, Message};
 use crate::controls;
-use crate::marks::Restack;
 use crate::paint::Part;
 use crate::picker::{self, Picker};
+use kirie_annotate::marks::Restack;
 
 pub const TEXT_INPUT: &str = "kirie-editor-text";
 pub const APP_ICON: &[u8] =
@@ -567,7 +567,7 @@ impl Editor {
 
     /// The emoji the sticker tool places, or the picked stickers show.
     fn sticker_section(&self) -> iced::widget::Column<'_, Message> {
-        let current = crate::marks::sticker_shown(self.document(), &self.picked)
+        let current = kirie_annotate::marks::sticker_shown(self.document(), &self.picked)
             .unwrap_or_else(|| self.emojis.chosen());
         section(
             self.palette,

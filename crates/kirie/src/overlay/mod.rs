@@ -91,7 +91,7 @@ pub enum Message {
     /// Copies the picked marks a step aside.
     Duplicate,
     /// Moves the picked marks up or down among the others.
-    Restack(crate::marks::Restack),
+    Restack(kirie_annotate::marks::Restack),
     Escape,
     Finish(Action),
     /// Enter: the action the overlay was opened for.
@@ -567,13 +567,16 @@ impl Overlay {
                 self.history.apply(Op::Remove { ids });
             }
             Message::Duplicate => {
-                if let Some((op, ids)) = crate::marks::duplicate(self.document(), &self.picked) {
+                if let Some((op, ids)) =
+                    kirie_annotate::marks::duplicate(self.document(), &self.picked)
+                {
                     self.history.apply(op);
                     self.picked = ids;
                 }
             }
             Message::Restack(to) => {
-                if let Some(op) = crate::marks::restack(self.document(), &self.picked, *to) {
+                if let Some(op) = kirie_annotate::marks::restack(self.document(), &self.picked, *to)
+                {
                     self.history.apply(op);
                 }
             }
@@ -733,7 +736,7 @@ impl Overlay {
         } else {
             self.history.redo();
         }
-        crate::marks::prune(self.history.current(), &mut self.picked);
+        kirie_annotate::marks::prune(self.history.current(), &mut self.picked);
         self.follow_style(before);
     }
 
@@ -755,7 +758,7 @@ impl Overlay {
     /// Like [`Self::repaint`]; a `gradual` change joins the step the slider drag began.
     fn repaint_gradually(&mut self, change: impl Fn(&mut Paint), gradual: bool) {
         change(&mut self.paint);
-        let Some(op) = crate::marks::repaint(self.document(), &self.picked, change) else {
+        let Some(op) = kirie_annotate::marks::repaint(self.document(), &self.picked, change) else {
             return;
         };
         if gradual {
@@ -768,7 +771,7 @@ impl Overlay {
 
     /// The paint the controls show: the first picked mark's, else the one new marks get.
     fn shown_paint(&self) -> Paint {
-        crate::marks::shown_paint(self.document(), &self.picked, self.paint)
+        kirie_annotate::marks::shown_paint(self.document(), &self.picked, self.paint)
     }
 
     /// Whether the text controls apply: to words being typed, picked text marks and bubbles, or
@@ -776,7 +779,7 @@ impl Overlay {
     fn texting(&self) -> bool {
         matches!(self.tool, Some(Tool::Text | Tool::Bubble))
             || self.typing.is_some()
-            || crate::marks::all(self.document(), &self.picked, |kind| {
+            || kirie_annotate::marks::all(self.document(), &self.picked, |kind| {
                 matches!(kind, Kind::Text { .. } | Kind::Bubble { .. })
             })
     }
@@ -786,7 +789,8 @@ impl Overlay {
         match message {
             Message::Emoji(event) => {
                 if let Some(emoji) = self.emojis.update(event)
-                    && let Some(op) = crate::marks::restick(self.document(), &self.picked, &emoji)
+                    && let Some(op) =
+                        kirie_annotate::marks::restick(self.document(), &self.picked, &emoji)
                 {
                     self.history.apply(op);
                 }
@@ -809,13 +813,13 @@ impl Overlay {
 
     /// Whether the emoji picker shows: for the sticker tool or picked stickers.
     fn stickering(&self) -> bool {
-        crate::marks::stickering(self.tool, self.document(), &self.picked)
+        kirie_annotate::marks::stickering(self.tool, self.document(), &self.picked)
     }
 
     /// Whether the spotlight controls apply: to the spotlight tool or picked spotlights.
     fn spotlighting(&self) -> bool {
         self.tool == Some(Tool::Spotlight)
-            || crate::marks::all(self.document(), &self.picked, |kind| {
+            || kirie_annotate::marks::all(self.document(), &self.picked, |kind| {
                 matches!(kind, Kind::Spotlight { .. })
             })
     }
@@ -1016,7 +1020,7 @@ impl Overlay {
                 );
                 match press {
                     Press::Draft(draft) => {
-                        crate::marks::pressed(&draft, &mut self.picked);
+                        kirie_annotate::marks::pressed(&draft, &mut self.picked);
                         self.draft = Some(draft);
                     }
                     Press::Done(op) => {
@@ -1029,10 +1033,10 @@ impl Overlay {
                     Press::PlaceSticker(at) => {
                         let size = kirie_annotate::tools::STICKER_SIZE * self.document().unit;
                         let draft = Draft::sticker(self.emojis.chosen(), at, size);
-                        crate::marks::pressed(&draft, &mut self.picked);
+                        kirie_annotate::marks::pressed(&draft, &mut self.picked);
                         self.draft = Some(draft);
                     }
-                    Press::Toggle(id) => crate::marks::toggle(&mut self.picked, id),
+                    Press::Toggle(id) => kirie_annotate::marks::toggle(&mut self.picked, id),
                     Press::Nothing => self.picked.clear(),
                 }
             }
@@ -1049,9 +1053,12 @@ impl Overlay {
                         return iced::widget::operation::focus(view::TEXT_INPUT);
                     }
                     let document = self.history.current();
-                    if let Some(op) =
-                        crate::marks::release(draft, document, &mut self.picked, self.paint)
-                    {
+                    if let Some(op) = kirie_annotate::marks::release(
+                        draft,
+                        document,
+                        &mut self.picked,
+                        self.paint,
+                    ) {
                         self.history.apply(op);
                     }
                 }
@@ -1285,7 +1292,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
     let command = modifiers.command();
     if command
         && let keyboard::Key::Character(written) = key.as_ref()
-        && let Some(to) = crate::marks::restack_key(written)
+        && let Some(to) = kirie_annotate::marks::restack_key(written)
     {
         return Some(Message::Restack(to));
     }

@@ -248,7 +248,7 @@ impl Overlay {
             );
         }
         if self.stickering() {
-            let current = crate::marks::sticker_shown(self.document(), &self.picked)
+            let current = kirie_annotate::marks::sticker_shown(self.document(), &self.picked)
                 .unwrap_or_else(|| self.emojis.chosen());
             panel = panel.push(
                 self.emojis

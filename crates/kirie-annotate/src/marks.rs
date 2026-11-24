@@ -2,7 +2,7 @@
 //! at once, by Shift+click or by a box dragged around them; and copies of them, duplicated or
 //! passed through the clipboard.
 
-use kirie_annotate::{Document, Draft, Kind, Op, Paint, Shape, ShapeId, TextLook};
+use crate::{Document, Draft, Kind, Op, Paint, Shape, ShapeId, TextLook};
 use kurbo::Vec2;
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +19,7 @@ const LONGEST_EMOJI: usize = 16;
 /// The most bytes of marks read from the clipboard.
 pub const MAX_BYTES: usize = 256 * 1024 * 1024;
 /// The most pixels the image marks of one paste hold together.
-const MAX_PIXELS: u64 = 2 * kirie_annotate::pixels::MAX_PIXELS;
+const MAX_PIXELS: u64 = 2 * crate::pixels::MAX_PIXELS;
 /// The longest pasted text, in characters, and the most points of a pasted stroke.
 const LONGEST: usize = 100_000;
 /// The highest step number pasted.
@@ -117,12 +117,8 @@ pub fn all(document: &Document, picked: &[ShapeId], is: impl Fn(&Kind) -> bool) 
 }
 
 /// Whether the sticker picker applies: to the sticker tool or picked stickers.
-pub fn stickering(
-    tool: Option<kirie_annotate::Tool>,
-    document: &Document,
-    picked: &[ShapeId],
-) -> bool {
-    tool == Some(kirie_annotate::Tool::Sticker)
+pub fn stickering(tool: Option<crate::Tool>, document: &Document, picked: &[ShapeId]) -> bool {
+    tool == Some(crate::Tool::Sticker)
         || all(document, picked, |kind| {
             matches!(kind, Kind::Sticker { .. })
         })
@@ -229,7 +225,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Shape>, String> {
         return Err("too many marks are copied to paste them".to_owned());
     }
     let text = std::str::from_utf8(bytes).map_err(|_| "the copied marks are not text")?;
-    let clip: Clip = kirie_annotate::pixels::budget(MAX_PIXELS, || ron::from_str(text))
+    let clip: Clip = crate::pixels::budget(MAX_PIXELS, || ron::from_str(text))
         .map_err(|error| format!("the copied marks cannot be read: {error}"))?;
     if clip.marks.len() > MOST {
         return Err(format!("more than {MOST} marks cannot be pasted at once"));
@@ -261,7 +257,7 @@ fn sane(shape: Shape) -> Option<Shape> {
         },
         kind => kind,
     };
-    let rotation = if kirie_annotate::edit::turns(&kind) {
+    let rotation = if crate::edit::turns(&kind) {
         shape.rotation
     } else {
         0.0
@@ -334,14 +330,14 @@ pub fn duplicate(document: &Document, picked: &[ShapeId]) -> Option<(Op, Vec<Sha
 /// The edit that puts `image` over the picture as a mark, and its id: in the middle of what is
 /// kept, shrunk to fit four fifths of it.
 pub fn place_image(document: &Document, image: image::RgbaImage) -> Result<(Op, ShapeId), String> {
-    let most = kirie_annotate::pixels::MAX_SIDE;
+    let most = crate::pixels::MAX_SIDE;
     if image.width() == 0 || image.height() == 0 {
         return Err("the pasted image is empty".to_owned());
     }
-    if !kirie_annotate::pixels::fits(image.width(), image.height()) {
+    if !crate::pixels::fits(image.width(), image.height()) {
         return Err(format!(
             "images over {most} pixels wide or tall, or of over {} megapixels, cannot be pasted",
-            kirie_annotate::pixels::MAX_PIXELS / 1_000_000
+            crate::pixels::MAX_PIXELS / 1_000_000
         ));
     }
     let visible = document.visible();
@@ -354,7 +350,7 @@ pub fn place_image(document: &Document, image: image::RgbaImage) -> Result<(Op, 
     let op = Op::Add {
         kind: Kind::Image {
             rect,
-            pixels: kirie_annotate::Pixels::new(image),
+            pixels: crate::Pixels::new(image),
         },
         paint: Paint::default(),
     };
@@ -376,7 +372,7 @@ fn insert(document: &Document, marks: &[Shape], by: Vec2) -> (Op, Vec<ShapeId>) 
 
 #[cfg(test)]
 mod tests {
-    use kirie_annotate::Op;
+    use crate::Op;
     use kurbo::{Point, Rect};
 
     use super::*;
@@ -613,7 +609,7 @@ mod tests {
             },
         });
         let picked = [ShapeId(1), ShapeId(2)];
-        let red = kirie_annotate::Rgba::rgb(255, 0, 0);
+        let red = crate::Rgba::rgb(255, 0, 0);
         let op = repaint(&document, &picked, |paint| paint.color = red).unwrap();
         let painted = document.apply(op);
         let paint = |id| painted.shape(id).unwrap().paint;
@@ -667,11 +663,7 @@ mod tests {
         let stickers: Vec<ShapeId> = document.shapes().skip(3).map(|shape| shape.id).collect();
         assert!(stickering(None, &document, &stickers));
         assert!(!stickering(None, &document, &[ShapeId(1), stickers[0]]));
-        assert!(stickering(
-            Some(kirie_annotate::Tool::Sticker),
-            &document,
-            &[]
-        ));
+        assert!(stickering(Some(crate::Tool::Sticker), &document, &[]));
         let changed = document.apply(restick(&document, &stickers, "b").unwrap());
         for id in &stickers {
             assert_eq!(changed.shape(*id).unwrap().kind, sticker("b"));

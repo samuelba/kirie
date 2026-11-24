@@ -5,6 +5,7 @@ pub mod document;
 pub mod edit;
 pub mod effects;
 pub mod emoji;
+pub mod marks;
 pub mod pixels;
 pub mod primitive;
 pub mod project;
