@@ -77,7 +77,16 @@ pub fn write(path: &Path, text: impl AsRef<[u8]>) -> std::io::Result<()> {
     if let Some(folder) = path.parent() {
         std::fs::create_dir_all(folder)?;
     }
-    let partial = write_beside(path, text)?;
+    replace_with(path, |file| file.write_all(text.as_ref()))
+}
+
+/// Replaces `path` with a file that `fill` writes beside it, so a failure halfway leaves the old
+/// file as it was.
+pub fn replace_with(
+    path: &Path,
+    fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let partial = fill_beside(path, fill)?;
     std::fs::rename(&partial, path).inspect_err(|_| {
         let _ = std::fs::remove_file(&partial);
     })
@@ -86,10 +95,17 @@ pub fn write(path: &Path, text: impl AsRef<[u8]>) -> std::io::Result<()> {
 /// Numbers the temporary files of this process.
 static WRITES: AtomicU32 = AtomicU32::new(0);
 
-/// Writes `text` to a new hidden file next to `path`, flushed to disk, and returns where. Each
-/// write gets its own file, so the editor, the overlay and the tray never write into one
-/// another's.
+/// Writes `text` to a new hidden file next to `path`, flushed to disk, and returns where.
 pub fn write_beside(path: &Path, text: impl AsRef<[u8]>) -> std::io::Result<PathBuf> {
+    fill_beside(path, |file| file.write_all(text.as_ref()))
+}
+
+/// A new hidden file next to `path`, written by `fill` and flushed to disk. Each write gets its
+/// own file, so the editor, the overlay and the tray never write into one another's.
+fn fill_beside(
+    path: &Path,
+    fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<PathBuf> {
     let name = path.file_name().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "the path names no file")
     })?;
@@ -110,7 +126,7 @@ pub fn write_beside(path: &Path, text: impl AsRef<[u8]>) -> std::io::Result<Path
             Err(error) => return Err(error),
         }
     };
-    match file.write_all(text.as_ref()).and_then(|()| file.sync_all()) {
+    match fill(&mut file).and_then(|()| file.sync_all()) {
         Ok(()) => Ok(partial),
         Err(error) => {
             let _ = std::fs::remove_file(&partial);
@@ -138,6 +154,21 @@ mod tests {
             std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
             1
         );
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn a_failed_replacement_leaves_the_old_file() {
+        let folder = folder("failed");
+        let path = folder.join("shot.png");
+        write(&path, "old").unwrap();
+        let failed = replace_with(&path, |file| {
+            file.write_all(b"half")?;
+            Err(std::io::Error::other("the encoder gave up"))
+        });
+        assert!(failed.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 1);
         std::fs::remove_dir_all(folder).unwrap();
     }
 

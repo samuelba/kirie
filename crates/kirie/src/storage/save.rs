@@ -1,5 +1,6 @@
 //! Where screenshots go and how they are named.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use image::RgbaImage;
@@ -90,12 +91,6 @@ pub fn default_dir() -> PathBuf {
     pictures.join("Screenshots")
 }
 
-/// `Kirie_2026-11-22_10-30-15.png`, or as the settings name it, with a counter when that name
-/// is taken.
-pub fn file_name(dir: &Path, now: &jiff::Zoned, taken: impl Fn(&Path) -> bool) -> PathBuf {
-    named(dir, &stem(now), "png", taken)
-}
-
 /// The name of a screenshot taken `now`, without extension, as the settings name it.
 pub fn stem(now: &jiff::Zoned) -> String {
     crate::storage::settings::Settings::load().stem(now)
@@ -107,15 +102,45 @@ fn handoff_stem(now: &jiff::Zoned) -> String {
     format!("Kirie_{}", now.strftime("%Y-%m-%d_%H-%M-%S"))
 }
 
-fn named(dir: &Path, stem: &str, extension: &str, taken: impl Fn(&Path) -> bool) -> PathBuf {
-    let first = dir.join(format!("{stem}.{extension}"));
-    if !taken(&first) {
-        return first;
+/// The most `<stem>_<n>` names tried before a save gives up.
+const MOST_NAMES: u32 = 10_000;
+
+/// `<stem>.<extension>` in `dir` for the first name, `<stem>_<n>.<extension>` after.
+fn named(dir: &Path, stem: &str, extension: &str, n: u32) -> PathBuf {
+    if n == 1 {
+        dir.join(format!("{stem}.{extension}"))
+    } else {
+        dir.join(format!("{stem}_{n}.{extension}"))
     }
-    (2..u32::MAX)
-        .map(|n| dir.join(format!("{stem}_{n}.{extension}")))
-        .find(|path| !taken(path))
-        .unwrap_or(first)
+}
+
+/// Writes a new file in `dir` under the first free name, `Kirie_2026-11-22_10-30-15.png` and then
+/// `Kirie_2026-11-22_10-30-15_2.png` and on. Creating the file is what claims its name, so two
+/// saves at once never write into the same one.
+fn create_named(
+    dir: &Path,
+    stem: &str,
+    extension: &str,
+    mut options: std::fs::OpenOptions,
+    fill: impl FnOnce(&mut std::io::BufWriter<std::fs::File>) -> std::io::Result<()>,
+) -> Result<PathBuf, String> {
+    options.write(true).create_new(true);
+    let (path, file) = (1..=MOST_NAMES)
+        .map(|n| named(dir, stem, extension, n))
+        .find_map(|path| match options.open(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+            opened => Some(opened.map(|file| (path, file))),
+        })
+        .unwrap_or_else(|| Err(std::io::Error::other("every name is taken")))
+        .map_err(|error| format!("cannot write {}: {error}", dir.display()))?;
+    let mut writer = std::io::BufWriter::new(file);
+    match fill(&mut writer).and_then(|()| writer.flush()) {
+        Ok(()) => Ok(path),
+        Err(error) => {
+            let _ = std::fs::remove_file(&path);
+            Err(format!("cannot write {}: {error}", path.display()))
+        }
+    }
 }
 
 /// A path for messages, with the home folder shown as `~`.
@@ -171,21 +196,15 @@ pub fn save_handoff(project: &kirie_annotate::project::Project) -> Result<PathBu
         .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
         .map_err(|error| format!("cannot protect {}: {error}", dir.display()))?;
-    let path = named(
+    let mut options = std::fs::OpenOptions::new();
+    options.mode(0o600);
+    create_named(
         &dir,
         &handoff_stem(&jiff::Zoned::now()),
         kirie_annotate::project::EXTENSION,
-        Path::exists,
-    );
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)
-        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
-    kirie_annotate::project::save(project, std::io::BufWriter::new(file))
-        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
-    Ok(path)
+        options,
+        |writer| kirie_annotate::project::save(project, writer).map_err(std::io::Error::other),
+    )
 }
 
 /// Writes an editable `.kirie` project into the screenshots folder.
@@ -194,17 +213,13 @@ pub async fn save_project(project: kirie_annotate::project::Project) -> Result<P
         let dir = screenshots_dir();
         std::fs::create_dir_all(&dir)
             .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
-        let path = named(
+        create_named(
             &dir,
             &stem(&jiff::Zoned::now()),
             kirie_annotate::project::EXTENSION,
-            Path::exists,
-        );
-        let file = std::fs::File::create(&path)
-            .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
-        kirie_annotate::project::save(&project, std::io::BufWriter::new(file))
-            .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
-        Ok(path)
+            std::fs::OpenOptions::new(),
+            |writer| kirie_annotate::project::save(&project, writer).map_err(std::io::Error::other),
+        )
     })
     .await
     .map_err(|error| error.to_string())?
@@ -216,11 +231,17 @@ pub async fn save(image: RgbaImage) -> Result<PathBuf, String> {
         let dir = screenshots_dir();
         std::fs::create_dir_all(&dir)
             .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
-        let path = file_name(&dir, &jiff::Zoned::now(), Path::exists);
-        image
-            .save(&path)
-            .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
-        Ok(path)
+        create_named(
+            &dir,
+            &stem(&jiff::Zoned::now()),
+            "png",
+            std::fs::OpenOptions::new(),
+            |writer| {
+                image
+                    .write_to(writer, image::ImageFormat::Png)
+                    .map_err(std::io::Error::other)
+            },
+        )
     })
     .await
     .map_err(|error| error.to_string())?
@@ -248,34 +269,55 @@ pub async fn save_and_copy(
 /// project itself.
 pub async fn save_as(project: Project, path: PathBuf, format: Format) -> Result<PathBuf, String> {
     tokio::task::spawn_blocking(move || {
-        let failed =
-            |error: &dyn std::fmt::Display| format!("cannot write {}: {error}", path.display());
-        if format == Format::Project {
-            let file = std::fs::File::create(&path).map_err(|error| failed(&error))?;
-            kirie_annotate::project::save(&project, std::io::BufWriter::new(file))
-                .map_err(|error| failed(&error))?;
-            return Ok(path);
-        }
-        let picture = kirie_annotate::render::render(
-            &project.document,
-            &project.image,
-            &mut kirie_annotate::Typesetter::new(),
-        )
-        .map_err(|error| error.to_string())?;
-        let written = match format {
-            Format::Jpeg => image::DynamicImage::ImageRgba8(picture)
-                .to_rgb8()
-                .save_with_format(&path, image::ImageFormat::Jpeg),
-            Format::Webp => picture.save_with_format(&path, image::ImageFormat::WebP),
-            Format::Png | Format::Project => {
-                picture.save_with_format(&path, image::ImageFormat::Png)
-            }
+        let picture = match format {
+            Format::Project => None,
+            _ => Some(
+                kirie_annotate::render::render(
+                    &project.document,
+                    &project.image,
+                    &mut kirie_annotate::Typesetter::new(),
+                )
+                .map_err(|error| error.to_string())?,
+            ),
         };
-        written.map_err(|error| failed(&error))?;
+        // Through a link, the file it points at is the one replaced, and it keeps its mode.
+        let target = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        let mode = std::fs::metadata(&target)
+            .ok()
+            .map(|meta| meta.permissions());
+        crate::storage::store::replace_with(&target, |file| {
+            if let Some(mode) = mode {
+                file.set_permissions(mode)?;
+            }
+            let mut writer = std::io::BufWriter::new(file);
+            match picture {
+                None => kirie_annotate::project::save(&project, &mut writer)
+                    .map_err(std::io::Error::other)?,
+                Some(picture) => {
+                    encode(picture, format, &mut writer).map_err(std::io::Error::other)?;
+                }
+            }
+            writer.flush()
+        })
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
         Ok(path)
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+fn encode(
+    picture: RgbaImage,
+    format: Format,
+    writer: &mut (impl std::io::Write + std::io::Seek),
+) -> image::ImageResult<()> {
+    match format {
+        Format::Jpeg => image::DynamicImage::ImageRgba8(picture)
+            .to_rgb8()
+            .write_to(writer, image::ImageFormat::Jpeg),
+        Format::Webp => picture.write_to(writer, image::ImageFormat::WebP),
+        Format::Png | Format::Project => picture.write_to(writer, image::ImageFormat::Png),
+    }
 }
 
 #[cfg(test)]
@@ -286,18 +328,78 @@ mod tests {
         "2026-11-22T12:00:05[UTC]".parse().unwrap()
     }
 
-    #[test]
-    fn names_carry_the_time() {
-        let path = file_name(Path::new("/shots"), &noon(), |_| false);
-        assert_eq!(path, Path::new("/shots/Kirie_2026-11-22_12-00-05.png"));
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("kirie-save-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn create(dir: &Path, text: &'static str) -> Result<PathBuf, String> {
+        create_named(
+            dir,
+            &stem(&noon()),
+            "png",
+            std::fs::OpenOptions::new(),
+            |writer| writer.write_all(text.as_bytes()),
+        )
     }
 
     #[test]
-    fn taken_names_get_a_counter() {
-        let path = file_name(Path::new("/shots"), &noon(), |path| {
-            !path.ends_with("Kirie_2026-11-22_12-00-05_3.png")
+    fn names_carry_the_time() {
+        let name = |n| named(Path::new("/shots"), &stem(&noon()), "png", n);
+        assert_eq!(name(1), Path::new("/shots/Kirie_2026-11-22_12-00-05.png"));
+        assert_eq!(name(3), Path::new("/shots/Kirie_2026-11-22_12-00-05_3.png"));
+    }
+
+    #[test]
+    fn taken_names_get_a_counter_and_stay_as_they_were() {
+        let dir = scratch("taken");
+        let first = create(&dir, "first").unwrap();
+        std::fs::write(dir.join("Kirie_2026-11-22_12-00-05_2.png"), "second").unwrap();
+        let third = create(&dir, "third").unwrap();
+        assert_eq!(third, dir.join("Kirie_2026-11-22_12-00-05_3.png"));
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "first");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("Kirie_2026-11-22_12-00-05_2.png")).unwrap(),
+            "second"
+        );
+        assert_eq!(std::fs::read_to_string(&third).unwrap(), "third");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn saves_at_once_each_get_a_name_of_their_own() {
+        let dir = scratch("at-once");
+        let start = std::sync::Barrier::new(16);
+        let mut saved: Vec<PathBuf> = std::thread::scope(|scope| {
+            let saving: Vec<_> = (0..16)
+                .map(|_| {
+                    scope.spawn(|| {
+                        start.wait();
+                        create(&dir, "shot").unwrap()
+                    })
+                })
+                .collect();
+            saving
+                .into_iter()
+                .map(|save| save.join().unwrap())
+                .collect()
         });
-        assert_eq!(path, Path::new("/shots/Kirie_2026-11-22_12-00-05_3.png"));
+        saved.sort();
+        saved.dedup();
+        assert_eq!(saved.len(), 16);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_save_leaves_no_file() {
+        let dir = scratch("failed");
+        let failed = create_named(&dir, "shot", "png", std::fs::OpenOptions::new(), |_| {
+            Err(std::io::Error::other("the encoder gave up"))
+        });
+        assert!(failed.is_err());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -379,6 +481,36 @@ mod tests {
                 assert_eq!(image::open(&path).unwrap().width(), 4);
             }
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn saving_as_over_a_file_replaces_it_whole() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let dir = scratch("over");
+        let project = Project {
+            image: RgbaImage::from_pixel(4, 3, image::Rgba([200, 10, 10, 255])),
+            document: kirie_annotate::Document::new(4, 3, 1.0),
+        };
+        let real = dir.join("real.png");
+        std::fs::write(&real, "old").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let link = dir.join("link.png");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let saved = runtime
+            .block_on(save_as(project, link.clone(), Format::Png))
+            .unwrap();
+        assert_eq!(saved, link);
+        assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_eq!(image::open(&real).unwrap().width(), 4);
+        let mode = std::fs::metadata(&real).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o640);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
