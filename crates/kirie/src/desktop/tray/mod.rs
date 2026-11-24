@@ -61,7 +61,7 @@ trait Watcher {
 
 /// Shows the tray icon until Quit is picked; returns at once when another Kirie shows it.
 pub fn run() -> anyhow::Result<()> {
-    crate::block_on(serve())?
+    crate::runtime::block_on(serve())?
 }
 
 async fn serve() -> anyhow::Result<()> {

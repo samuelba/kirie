@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use anyhow::Context as _;
 use kirie_capture::{Cursor, geometry};
 
+use crate::runtime::block_on;
+
 /// Which part of the screens to take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Area {
@@ -39,30 +41,6 @@ impl Target {
     }
 }
 
-/// A region as `X,Y,W,H`, or as slurp prints it, `X,Y WxH`.
-pub fn parse_region(text: &str) -> Result<geometry::Rect, String> {
-    let numbers: Vec<&str> = text
-        .split([',', ' ', 'x'])
-        .filter(|part| !part.is_empty())
-        .collect();
-    let [x, y, width, height] = numbers[..] else {
-        return Err(format!("{text:?} is not X,Y,W,H"));
-    };
-    let number = |part: &str| {
-        part.trim()
-            .parse::<i32>()
-            .map_err(|_| format!("{part:?} is not a whole number"))
-    };
-    let rect = geometry::Rect::new(number(x)?, number(y)?, number(width)?, number(height)?);
-    if rect.width <= 0 || rect.height <= 0 {
-        return Err("the region must be at least one pixel wide and tall".to_owned());
-    }
-    if rect.x.checked_add(rect.width).is_none() || rect.y.checked_add(rect.height).is_none() {
-        return Err("the region reaches too far".to_owned());
-    }
-    Ok(rect)
-}
-
 /// Takes `area` of the screens and sends it to `target`.
 pub fn capture(area: Area, target: &Target, cursor: bool) -> anyhow::Result<()> {
     // A Kirie the GNOME Shell extension started may read the screens without asking; it only
@@ -77,7 +55,7 @@ pub fn capture(area: Area, target: &Target, cursor: bool) -> anyhow::Result<()> 
         Cursor::Hidden
     };
     let lookup = (area == Area::Window).then(|| std::thread::spawn(kirie_capture::windows::start));
-    let (protocol, frames) = crate::block_on(kirie_capture::capture(cursor))??;
+    let (protocol, frames) = block_on(kirie_capture::capture(cursor))??;
     let bounds = geometry::bounds(&frames).context("no screens")?;
     let part = match area {
         Area::All => bounds,
@@ -88,7 +66,7 @@ pub fn capture(area: Area, target: &Target, cursor: bool) -> anyhow::Result<()> 
             let lookup = lookup
                 .and_then(|lookup| lookup.join().ok())
                 .context("cannot find the windows")?;
-            let windows = crate::block_on(lookup.finish(&frames))?;
+            let windows = block_on(lookup.finish(&frames))?;
             let window = windows
                 .first()
                 .context("Kirie cannot see the windows on this desktop")?;
@@ -108,7 +86,7 @@ pub fn capture(area: Area, target: &Target, cursor: bool) -> anyhow::Result<()> 
                 .styled(kirie_annotate::Document::new(width, height, unit));
             let project = kirie_annotate::project::Project { image, document };
             let path = crate::storage::save::save_handoff(&project).map_err(anyhow::Error::msg)?;
-            crate::open_handoff(&path)?;
+            super::handoff::open(&path)?;
         }
         Target::File(path) => {
             image
@@ -127,7 +105,7 @@ pub fn capture(area: Area, target: &Target, cursor: bool) -> anyhow::Result<()> 
                 .context("cannot write to stdout")?;
         }
         Target::Clipboard => {
-            crate::block_on(crate::desktop::clipboard::copy(image))?.map_err(anyhow::Error::msg)?;
+            block_on(crate::desktop::clipboard::copy(image))?.map_err(anyhow::Error::msg)?;
             eprintln!("Copied {width}×{height} to the clipboard");
         }
     }
@@ -137,23 +115,6 @@ pub fn capture(area: Area, target: &Target, cursor: bool) -> anyhow::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn regions_are_read_as_kirie_or_slurp_writes_them() {
-        assert_eq!(
-            parse_region("10,20,300,200"),
-            Ok(geometry::Rect::new(10, 20, 300, 200))
-        );
-        assert_eq!(
-            parse_region("-5,20 300x200"),
-            Ok(geometry::Rect::new(-5, 20, 300, 200))
-        );
-        assert!(parse_region("10,20,300").is_err());
-        assert!(parse_region("10,20,0,5").is_err());
-        assert!(parse_region("a,b,c,d").is_err());
-        assert!(parse_region("1,2,3,4,5").is_err());
-        assert!(parse_region("2147483647,0,5,5").is_err());
-    }
 
     #[test]
     fn a_dash_is_stdout_and_nothing_is_the_clipboard() {
