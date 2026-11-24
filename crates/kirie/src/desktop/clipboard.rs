@@ -3,7 +3,7 @@
 //! compositor lets no such program take it, as on GNOME, the editor's window offers it itself.
 
 use std::io::Write as _;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 use image::RgbaImage;
 
@@ -60,8 +60,11 @@ pub async fn offer_from(
 }
 
 /// Hands `bytes` to a background process that offers them on the clipboard as `kind`, one of
-/// [`KINDS`].
+/// [`KINDS`]. The process gets a process group of its own, so that Ctrl+C in the terminal Kirie
+/// runs in leaves the clipboard be, and is reaped once it ends.
 pub async fn offer(bytes: Vec<u8>, kind: &'static str) -> Result<(), String> {
+    use std::os::unix::process::CommandExt as _;
+
     tokio::task::spawn_blocking(move || {
         let exe = crate::desktop::launch::exe().map_err(|error| error.to_string())?;
         let mut child = Command::new(exe)
@@ -69,33 +72,41 @@ pub async fn offer(bytes: Vec<u8>, kind: &'static str) -> Result<(), String> {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
+            .process_group(0)
             .spawn()
             .map_err(|error| format!("cannot start the clipboard service: {error}"))?;
-        child
-            .stdin
-            .take()
-            .ok_or("the clipboard service has no input")?
-            .write_all(&bytes)
-            .map_err(|error| format!("cannot hand it to the clipboard: {error}"))?;
-        // The service says when it holds the clipboard, and gives up at once where the
-        // compositor lets no program take it; one slow to start is left to it.
-        let mut said = child
-            .stdout
-            .take()
-            .ok_or("the clipboard service has no output")?;
-        let (sender, ready) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            use std::io::Read as _;
-            let mut byte = [0];
-            let _ = sender.send(said.read(&mut byte).is_ok_and(|read| read == 1));
-        });
-        match ready.recv_timeout(READY) {
-            Ok(false) => Err("the clipboard cannot be reached here".to_owned()),
-            Ok(true) | Err(_) => Ok(()),
-        }
+        let handed = hand_over(&mut child, &bytes);
+        crate::desktop::launch::reap(child);
+        handed
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// Writes `bytes` to the clipboard service `child` and waits until it says it holds the
+/// clipboard. It gives up at once where the compositor lets no program take it; one slow to
+/// start is left to it.
+fn hand_over(child: &mut Child, bytes: &[u8]) -> Result<(), String> {
+    child
+        .stdin
+        .take()
+        .ok_or("the clipboard service has no input")?
+        .write_all(bytes)
+        .map_err(|error| format!("cannot hand it to the clipboard: {error}"))?;
+    let mut said = child
+        .stdout
+        .take()
+        .ok_or("the clipboard service has no output")?;
+    let (sender, ready) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        use std::io::Read as _;
+        let mut byte = [0];
+        let _ = sender.send(said.read(&mut byte).is_ok_and(|read| read == 1));
+    });
+    match ready.recv_timeout(READY) {
+        Ok(false) => Err("the clipboard cannot be reached here".to_owned()),
+        Ok(true) | Err(_) => Ok(()),
+    }
 }
 
 pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, String> {

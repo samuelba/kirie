@@ -2,7 +2,7 @@
 //! desktop's apps, with the file manager showing a file selected.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 /// What Linux appends to the running binary's path once an update replaced the file.
 const REPLACED: &str = " (deleted)";
@@ -70,11 +70,14 @@ pub fn spawn(mut command: Command) {
         .stderr(Stdio::null())
         .process_group(0);
     match command.spawn() {
-        Ok(mut child) => {
-            std::thread::spawn(move || child.wait());
-        }
+        Ok(child) => reap(child),
         Err(error) => tracing::warn!(%error, "cannot start {:?}", command.get_program()),
     }
+}
+
+/// Waits for `child` in the background, so that it leaves no zombie once it ends.
+pub fn reap(mut child: Child) {
+    std::thread::spawn(move || child.wait());
 }
 
 /// `file://` and the path, with every byte but unreserved ones and `/` escaped.
@@ -107,6 +110,22 @@ mod tests {
             without_replaced(Path::new("/usr/bin/kirie")),
             Path::new("/usr/bin/kirie")
         );
+    }
+
+    #[test]
+    fn a_reaped_child_leaves_no_zombie() {
+        let child = Command::new("true").spawn().unwrap();
+        let entry = PathBuf::from(format!("/proc/{}", child.id()));
+        assert!(entry.exists(), "{entry:?} is missing before the reap");
+        reap(child);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while entry.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{entry:?} is a zombie"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     #[test]
