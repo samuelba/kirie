@@ -49,14 +49,20 @@ pub async fn offer_from(
     let Some(device) = device else {
         return offer(bytes, kind).await;
     };
-    let Err(error) = offer(bytes.clone(), kind).await else {
-        return Ok(());
-    };
-    tracing::debug!(%error, "the window offers the clipboard itself");
+    let data_control = tokio::task::spawn_blocking(|| {
+        kirie_capture::wayland::globals().is_ok_and(|globals| globals.data_control)
+    })
+    .await
+    .unwrap_or(true);
+    if data_control {
+        let Err(error) = offer(bytes.clone(), kind).await else {
+            return Ok(());
+        };
+        tracing::debug!(%error, "the window offers the clipboard itself");
+    }
     tokio::task::spawn_blocking(move || device.offer(bytes, kind))
         .await
         .map_err(|error| error.to_string())?
-        .map_err(|own| format!("{error}; {own}"))
 }
 
 /// Hands `bytes` to a background process that offers them on the clipboard as `kind`, one of

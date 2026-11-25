@@ -87,6 +87,8 @@ pub enum Message {
     Layer(LayerShellCustomActionWithId),
     /// Time passes while the flash fades.
     Flash(std::time::Instant),
+    /// The window's data device, for the clipboard.
+    Dropped(crate::desktop::drops::Dropped),
 }
 
 /// Moving the toolbar by its grip.
@@ -204,6 +206,8 @@ pub struct Overlay {
     patches: RefCell<HashMap<crate::annotate::paint::PatchKey, image::Handle>>,
     pictures: RefCell<HashMap<u64, image::Handle>>,
     outcome: Arc<Mutex<Outcome>>,
+    /// Offers the picture on the clipboard where no other program may, as on GNOME.
+    device: Option<crate::desktop::drops::Device>,
 }
 
 impl std::fmt::Debug for Overlay {
@@ -290,7 +294,7 @@ impl Overlay {
             Host::Window => {
                 let (id, open) = window::open(window_settings());
                 surfaces.insert(id, 0);
-                vec![open.discard()]
+                vec![open.then(clipboard_device)]
             }
             Host::Shell => (0..frames.len())
                 .map(|index| {
@@ -340,6 +344,7 @@ impl Overlay {
             patches: RefCell::new(HashMap::new()),
             pictures: RefCell::new(HashMap::new()),
             outcome,
+            device: None,
         };
         let overlay = if std::env::var_os("KIRIE_OVERLAY_DEMO").is_some() {
             overlay.with_demo()
@@ -468,11 +473,15 @@ impl Overlay {
                 self.place(id, size);
                 Task::none()
             }
-            Message::Layer(_) => Task::none(),
             Message::Flash(now) => {
                 self.flash = self.flash.and_then(|flash| flash.at(now));
                 Task::none()
             }
+            Message::Dropped(crate::desktop::drops::Dropped::Ready(device)) => {
+                self.device = Some(device);
+                Task::none()
+            }
+            Message::Layer(_) | Message::Dropped(_) => Task::none(),
         }
     }
 
@@ -784,14 +793,15 @@ impl Overlay {
         };
         match action {
             Action::Save => Task::perform(
-                crate::storage::save::save_and_copy(picture, None),
+                crate::storage::save::save_and_copy(picture, self.device.clone()),
                 |saved| {
                     Message::Finished(saved.map(|(path, copied)| Outcome::Saved { path, copied }))
                 },
             ),
-            Action::Copy => Task::perform(crate::desktop::clipboard::copy(picture), |copied| {
-                Message::Finished(copied.map(|()| Outcome::Copied))
-            }),
+            Action::Copy => Task::perform(
+                crate::desktop::clipboard::copy_from(picture, self.device.clone()),
+                |copied| Message::Finished(copied.map(|()| Outcome::Copied)),
+            ),
             Action::Edit | Action::SaveAs => Task::none(),
         }
     }
@@ -800,12 +810,23 @@ impl Overlay {
         if let Ok(mut slot) = self.outcome.lock() {
             *slot = outcome;
         }
+        let handed = self.device.clone().map_or_else(Task::none, |device| {
+            Task::future(tokio::task::spawn_blocking(move || {
+                if !device.wait_handed(HANDOVER) {
+                    tracing::warn!("nothing took the clipboard before the overlay closed");
+                }
+            }))
+            .discard()
+        });
         if self.host == Host::Layer {
-            return iced::exit();
+            return handed.chain(iced::exit());
         }
         // GNOME 46 can leave a window on screen when its process ends before the compositor
         // has seen it closed.
-        Task::batch(self.surfaces.keys().copied().map(window::close))
+        handed
+            .chain(Task::batch(
+                self.surfaces.keys().copied().map(window::close),
+            ))
             .chain(Task::future(tokio::time::sleep(TEARDOWN)).discard())
             .chain(iced::exit())
     }
@@ -853,6 +874,18 @@ impl Overlay {
 
 /// How long the closed overlay windows get to reach the compositor before the process ends.
 const TEARDOWN: std::time::Duration = std::time::Duration::from_millis(100);
+/// How long the overlay waits for GNOME to take what its window put on the clipboard, which it
+/// keeps once the window is gone.
+const HANDOVER: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The data device of window `id`, through which it can offer the clipboard itself.
+fn clipboard_device(id: window::Id) -> Task<Message> {
+    window::run(id, crate::desktop::drops::display).then(|display| {
+        display.map_or_else(Task::none, |display| {
+            Task::run(crate::desktop::drops::drops(display), Message::Dropped)
+        })
+    })
+}
 
 fn window_settings() -> window::Settings {
     window::Settings {

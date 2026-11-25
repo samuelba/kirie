@@ -18,7 +18,7 @@ if [[ "${1:-}" != "--session" ]]; then
     install -d -m 0700 "$dev/runtime"
     ln -sfn "$root/gnome-extension" "$dev/data/gnome-shell/extensions/$uuid"
     cat >"$dev/data/gnome-shell/extensions/$devtools/metadata.json" <<JSON
-{"uuid": "$devtools", "name": "Kirie devtools", "description": "Test-only: unsafe mode.", "shell-version": ["46", "47", "48", "49", "50"]}
+{"uuid": "$devtools", "name": "Kirie devtools", "description": "Test-only: unsafe mode.", "shell-version": ["46", "47", "48", "49", "50", "51"]}
 JSON
     cat >"$dev/data/gnome-shell/extensions/$devtools/extension.js" <<'JS'
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';

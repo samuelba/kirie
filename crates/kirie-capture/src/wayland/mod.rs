@@ -25,6 +25,11 @@ pub(crate) const EXT_SOURCES: &str = "ext_output_image_capture_source_manager_v1
 pub(crate) const EXT_COPY: &str = "ext_image_copy_capture_manager_v1";
 pub(crate) const WLR_SCREENCOPY: &str = "zwlr_screencopy_manager_v1";
 pub(crate) const LAYER_SHELL: &str = "zwlr_layer_shell_v1";
+/// The clipboard protocols that let a program without a window take the clipboard.
+const DATA_CONTROL: [&str; 2] = [
+    "ext_data_control_manager_v1",
+    "zwlr_data_control_manager_v1",
+];
 
 /// What the compositor of this session offers Kirie.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -33,6 +38,7 @@ pub struct Globals {
     pub ext_image_copy_capture: bool,
     pub wlr_screencopy: bool,
     pub layer_shell: bool,
+    pub data_control: bool,
     pub interfaces: Vec<String>,
 }
 
@@ -118,6 +124,7 @@ fn describe(list: &GlobalList) -> Globals {
             ext_image_copy_capture: offers(EXT_SOURCES) && offers(EXT_COPY),
             wlr_screencopy: offers(WLR_SCREENCOPY),
             layer_shell: offers(LAYER_SHELL),
+            data_control: DATA_CONTROL.into_iter().any(offers),
             interfaces,
         }
     })
