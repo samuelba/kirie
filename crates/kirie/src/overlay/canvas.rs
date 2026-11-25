@@ -84,11 +84,7 @@ impl canvas::Program<Message> for Surface<'_> {
             }
             Part::Chrome => self.draw_marks(&mut frame, None),
         }
-        let selection = self
-            .overlay
-            .selection
-            .rect()
-            .map(|rect| self.to_local(rect));
+        let selection = self.overlay.region.rect().map(|rect| self.to_local(rect));
 
         let scrim = Path::new(|path| {
             path.rectangle(Point::ORIGIN, bounds.size());
@@ -130,7 +126,7 @@ impl canvas::Program<Message> for Surface<'_> {
         let Some(at) = cursor.position().map(|at| self.to_desktop(at)) else {
             return Interaction::default();
         };
-        if self.overlay.selection.dragging() || self.overlay.annotator.sampling() {
+        if self.overlay.region.dragging() || self.overlay.annotator.sampling() {
             return Interaction::Crosshair;
         }
         match self.overlay.tool {
@@ -147,7 +143,7 @@ impl canvas::Program<Message> for Surface<'_> {
             Some(_) => return Interaction::Crosshair,
             None => {}
         }
-        crate::annotate::selection::interaction(self.overlay.selection.hit(at, HANDLE_REACH))
+        crate::annotate::selection::interaction(self.overlay.region.hit(at, HANDLE_REACH))
     }
 }
 
@@ -157,7 +153,7 @@ impl Surface<'_> {
     fn draw_marks(&self, frame: &mut Frame, layer: Option<usize>) {
         let overlay = self.overlay;
         let document = overlay.document();
-        let visible = overlay.selection.rect().map_or(kurbo::Rect::ZERO, |rect| {
+        let visible = overlay.region.rect().map_or(kurbo::Rect::ZERO, |rect| {
             kurbo::Rect::new(
                 f64::from(rect.x),
                 f64::from(rect.y),
@@ -218,7 +214,7 @@ impl Surface<'_> {
             || overlay.magnifier
                 && overlay.tool.is_none()
                 && !overlay.toolbar.dragging()
-                && (overlay.selection.rect().is_none() || overlay.selection.dragging())
+                && (overlay.region.rect().is_none() || overlay.region.dragging())
     }
 
     /// The frozen pixels around the pointer at `at`, magnified, with its place and color.
@@ -255,7 +251,7 @@ impl Surface<'_> {
             &Path::rectangle(rect.position(), rect.size()),
             Stroke::default().with_color(palette.accent).with_width(1.5),
         );
-        if !self.overlay.selection.dragging() {
+        if !self.overlay.region.dragging() {
             for handle in Handle::ALL {
                 let dot = Path::circle(handle.position(rect), HANDLE_RADIUS);
                 frame.fill(&dot, Color::WHITE);

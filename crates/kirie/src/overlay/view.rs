@@ -9,7 +9,7 @@ use kirie_ui::space;
 use kirie_ui::widget::{divider, floating, icon_button, primary_button, secondary_button};
 
 use super::annotate;
-use super::{Action, Message, Overlay, canvas, toolbar};
+use super::{Action, Message, Overlay, canvas, region, toolbar};
 use crate::annotate::annotator::Change;
 use crate::annotate::controls;
 use crate::annotate::paint::Part;
@@ -82,7 +82,7 @@ impl Overlay {
                 );
             }
         }
-        if self.selection.rect().is_none() {
+        if self.region.rect().is_none() {
             layers = layers.push(self.hint(index));
         }
         if let Some(at) = self.toolbar_position(screen.area) {
@@ -124,7 +124,7 @@ impl Overlay {
             content = content.push(secondary_button(
                 "Take this screen",
                 self.palette,
-                Message::SelectScreen(screen),
+                Message::Region(region::Event::SelectScreen(screen)),
             ));
         }
         let mut card = column![content].spacing(space::XS);
@@ -158,8 +158,8 @@ impl Overlay {
 
     /// Where the toolbar goes, in desktop coordinates, and the screen it is on.
     pub(super) fn toolbar_place(&self) -> Option<(Point, Rectangle)> {
-        let selection = self.selection.rect()?;
-        if self.selection.dragging() {
+        let selection = self.region.rect()?;
+        if self.region.dragging() {
             return None;
         }
         let screens: Vec<Rectangle> = self.screens.iter().map(|screen| screen.area).collect();
@@ -262,14 +262,14 @@ impl Overlay {
         .spacing(2);
         let remember = icon_button(
             Icon::Pin,
-            if self.remembered.is_some() {
+            if self.region.is_remembered() {
                 "Remembered for the next screenshot until it changes; click to forget it"
             } else {
                 "Remember this region for the next screenshot"
             },
             palette,
-            self.remembered.is_some(),
-            Some(Message::ToggleRemember),
+            self.region.is_remembered(),
+            Some(Message::Region(region::Event::ToggleRemember)),
         );
         let main = row![
             tools,

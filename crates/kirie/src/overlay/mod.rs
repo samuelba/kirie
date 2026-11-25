@@ -2,7 +2,7 @@
 //! region, marks it up, and copies or saves it.
 
 mod canvas;
-pub mod region;
+mod region;
 mod toolbar;
 mod view;
 
@@ -24,7 +24,7 @@ use kirie_ui::Palette;
 use crate::annotate::annotator::{Annotator, Change, Effect};
 use crate::annotate::drawing::Drawing;
 use crate::annotate::picker;
-use crate::annotate::selection::{self, Release, Selection};
+use crate::annotate::selection::Hit;
 use crate::annotate::swatches::Swatches;
 
 pub const NAMESPACE: &str = "kirie-overlay";
@@ -74,12 +74,7 @@ pub enum Message {
     Finish(Action),
     /// Enter: the action the overlay was opened for.
     Accept,
-    SelectAll,
-    /// Selects the screen with this index.
-    SelectScreen(usize),
-    Nudge(Vector),
-    /// Keeps the selection for the next screenshot, or forgets it.
-    ToggleRemember,
+    Region(region::Event),
     /// Shows or hides the magnifier while a region is picked, for this and later screenshots.
     ToggleMagnifier,
     Finished(Result<Outcome, String>),
@@ -169,9 +164,7 @@ pub struct Overlay {
     screens: Vec<Screen>,
     surfaces: HashMap<window::Id, usize>,
     desktop: Rectangle,
-    selection: Selection,
-    /// The selection kept for the next screenshot, while it is unchanged.
-    remembered: Option<Rectangle>,
+    region: region::Region,
     pointer: Option<Point>,
     palette: Palette,
     tool: Option<Tool>,
@@ -239,6 +232,14 @@ fn screens(frames: &[Frame]) -> Vec<Screen> {
         .collect()
 }
 
+/// The topmost of `windows` under `at`.
+fn window_at(windows: &[(Rectangle, String)], at: Point) -> Option<Rectangle> {
+    windows
+        .iter()
+        .find(|(area, _)| area.contains(at))
+        .map(|(area, _)| *area)
+}
+
 fn to_kurbo(point: Point) -> kurbo::Point {
     kurbo::Point::new(f64::from(point.x), f64::from(point.y))
 }
@@ -302,16 +303,13 @@ impl Overlay {
             .collect();
         let swatches = Swatches::load();
         let paint = drawing.paint_for(None, &swatches);
-        let remembered = crate::overlay::region::load()
-            .and_then(|region| crate::overlay::region::within(region, desktop));
         let overlay = Self {
             windows,
             captures: frames,
             screens,
             surfaces,
             desktop,
-            selection: remembered.map(Selection::selected).unwrap_or_default(),
-            remembered,
+            region: region::Region::recalled(desktop),
             pointer: None,
             palette: Palette::DARK,
             tool: None,
@@ -351,17 +349,16 @@ impl Overlay {
             return self;
         };
         let area = screen.area;
-        let region = Rectangle::new(
+        let selected = Rectangle::new(
             Point::new(area.x + area.width * 0.2, area.y + area.height * 0.15),
             Size::new(area.width * 0.6, area.height * 0.5),
         );
-        self.selection = Selection::selected(region);
-        self.remembered = None;
+        self.region = region::Region::of(selected);
         self.tool = Some(Tool::Select);
         let point = |x: f32, y: f32| {
             kurbo::Point::new(
-                f64::from(region.x + region.width * x),
-                f64::from(region.y + region.height * y),
+                f64::from(selected.x + selected.width * x),
+                f64::from(selected.y + selected.height * y),
             )
         };
         for kind in [
@@ -433,18 +430,8 @@ impl Overlay {
                 self.annotated(effect)
             }
             Message::Escape => self.escape(),
-            Message::Nudge(by) => {
-                self.selection = self.selection.nudge(by, self.desktop);
-                self.keep_remembered();
-                Task::none()
-            }
-            Message::SelectAll => self.select_area(self.desktop),
-            Message::SelectScreen(index) => match self.screens.get(index) {
-                Some(screen) => self.select_area(screen.area),
-                None => Task::none(),
-            },
-            Message::ToggleRemember => {
-                self.toggle_remember();
+            Message::Region(event) => {
+                self.region_event(event);
                 Task::none()
             }
             Message::ToggleMagnifier => self.toggle_magnifier(),
@@ -494,12 +481,17 @@ impl Overlay {
         }
     }
 
-    fn toggle_remember(&mut self) {
-        if self.remembered.take().is_some() {
-            crate::overlay::region::forget();
-        } else if let Some(region) = self.selection.rect() {
-            crate::overlay::region::remember(region);
-            self.remembered = Some(region);
+    /// Picking the region by keys and buttons.
+    fn region_event(&mut self, event: region::Event) {
+        match event {
+            region::Event::Nudge(by) => self.region.nudge(by, self.desktop),
+            region::Event::SelectAll => self.region.select(self.desktop),
+            region::Event::SelectScreen(index) => {
+                if let Some(screen) = self.screens.get(index) {
+                    self.region.select(screen.area);
+                }
+            }
+            region::Event::ToggleRemember => self.region.toggle_remember(),
         }
     }
 
@@ -514,23 +506,6 @@ impl Overlay {
             tracing::warn!(%error, "magnifier choice not kept");
         }
         Task::none()
-    }
-
-    /// Forgets the remembered region once the selection is changed.
-    fn select_area(&mut self, area: Rectangle) -> Task<Message> {
-        self.selection = Selection::selected(area);
-        self.keep_remembered();
-        Task::none()
-    }
-
-    fn keep_remembered(&mut self) {
-        if self
-            .remembered
-            .is_some_and(|region| self.selection.rect() != Some(region))
-        {
-            self.remembered = None;
-            crate::overlay::region::forget();
-        }
     }
 
     /// Shows the screen a fullscreen window landed on: the one with the window's size.
@@ -556,9 +531,7 @@ impl Overlay {
             if self.surfaces.len() == 1 {
                 self.desktop = area;
                 // A remembered region on another screen stays remembered for when it fits.
-                self.remembered = crate::overlay::region::load()
-                    .and_then(|region| crate::overlay::region::within(region, self.desktop));
-                self.selection = self.remembered.map(Selection::selected).unwrap_or_default();
+                self.region = region::Region::recalled(self.desktop);
             }
         }
     }
@@ -598,7 +571,7 @@ impl Overlay {
         }
         // A gesture stays with what its press started, whatever happens on the way.
         if let Pointer::Pressed(at) = pointer {
-            let inside = self.selection.hit(at, HANDLE_REACH) == Some(selection::Hit::Inside)
+            let inside = self.region.hit(at, HANDLE_REACH) == Some(Hit::Inside)
                 || self.on_grip(to_kurbo(at));
             self.drawing = match self.tool {
                 Some(tool) if inside => Some(tool),
@@ -642,14 +615,6 @@ impl Overlay {
         let _ = self.annotated(effect);
     }
 
-    /// The topmost window under `at`.
-    fn window_at(&self, at: Point) -> Option<Rectangle> {
-        self.windows
-            .iter()
-            .find(|(area, _)| area.contains(at))
-            .map(|(area, _)| *area)
-    }
-
     /// Whether `at` is on a grip of the lone picked mark.
     fn on_grip(&self, at: kurbo::Point) -> bool {
         let [id] = self.annotator.picked[..] else {
@@ -661,30 +626,19 @@ impl Overlay {
             })
     }
 
+    /// Picks the region; a click takes the window under it, else its screen.
     fn select(&mut self, pointer: Pointer) {
-        match pointer {
-            Pointer::Pressed(at) => self.selection = self.selection.press(at, HANDLE_REACH),
-            Pointer::Moved(at) => self.selection = self.selection.drag_to(at, self.desktop),
-            Pointer::Released(at) => {
-                let (selection, release) = self.selection.release(at);
-                self.selection = selection;
-                if let Release::Click(at) = release {
-                    let picked = self
-                        .window_at(at)
-                        .and_then(|window| window.intersection(&self.desktop))
-                        .or_else(|| {
-                            self.screens
-                                .iter()
-                                .find(|screen| screen.area.contains(at))
-                                .map(|screen| screen.area)
-                        });
-                    if let Some(area) = picked {
-                        self.selection = Selection::selected(area);
-                    }
-                }
-            }
-        }
-        self.keep_remembered();
+        let (windows, screens, desktop) = (&self.windows, &self.screens, self.desktop);
+        self.region.follow(pointer, HANDLE_REACH, desktop, |at| {
+            window_at(windows, at)
+                .and_then(|window| window.intersection(&desktop))
+                .or_else(|| {
+                    screens
+                        .iter()
+                        .find(|screen| screen.area.contains(at))
+                        .map(|screen| screen.area)
+                })
+        });
     }
 
     fn annotate(&mut self, tool: Tool, pointer: Pointer) -> Task<Message> {
@@ -720,7 +674,7 @@ impl Overlay {
     /// The selection's pixels at the highest scale of the screens it covers, and the marks
     /// moved onto them.
     fn project(&self) -> Result<kirie_annotate::project::Project, String> {
-        let region = self.selection.rect().ok_or("nothing is selected")?;
+        let region = self.region.rect().ok_or("nothing is selected")?;
         let region = whole(region);
         let image = geometry::crop(&self.captures, region).ok_or("the selection is empty")?;
         let scale = f64::from(image.width()) / f64::from(region.width.max(1));
@@ -745,7 +699,7 @@ impl Overlay {
 
     fn finish(&mut self, action: Action) -> Task<Message> {
         self.annotator.commit_text();
-        if self.busy || self.selection.rect().is_none() {
+        if self.busy || self.region.rect().is_none() {
             return Task::none();
         }
         self.busy = true;
@@ -938,16 +892,16 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Named(Named::Delete | Named::Backspace) => {
             Some(Message::Annotate(Change::Delete))
         }
-        keyboard::Key::Named(Named::ArrowLeft) => Some(Message::Nudge(Vector::new(-step, 0.0))),
-        keyboard::Key::Named(Named::ArrowRight) => Some(Message::Nudge(Vector::new(step, 0.0))),
-        keyboard::Key::Named(Named::ArrowUp) => Some(Message::Nudge(Vector::new(0.0, -step))),
-        keyboard::Key::Named(Named::ArrowDown) => Some(Message::Nudge(Vector::new(0.0, step))),
+        keyboard::Key::Named(Named::ArrowLeft) => Some(nudge(-step, 0.0)),
+        keyboard::Key::Named(Named::ArrowRight) => Some(nudge(step, 0.0)),
+        keyboard::Key::Named(Named::ArrowUp) => Some(nudge(0.0, -step)),
+        keyboard::Key::Named(Named::ArrowDown) => Some(nudge(0.0, step)),
         keyboard::Key::Character("z") if command && modifiers.shift() => {
             Some(Message::Annotate(Change::Redo))
         }
         keyboard::Key::Character("z") if command => Some(Message::Annotate(Change::Undo)),
         keyboard::Key::Character("y") if command => Some(Message::Annotate(Change::Redo)),
-        keyboard::Key::Character("a") if command => Some(Message::SelectAll),
+        keyboard::Key::Character("a") if command => Some(Message::Region(region::Event::SelectAll)),
         keyboard::Key::Character("s") if command && modifiers.shift() => {
             Some(Message::Finish(Action::SaveAs))
         }
@@ -963,6 +917,10 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
             .map(|tool| Message::PickTool(Some(tool))),
         _ => None,
     }
+}
+
+fn nudge(x: f32, y: f32) -> Message {
+    Message::Region(region::Event::Nudge(Vector::new(x, y)))
 }
 
 /// Shows the overlay until the user is done: layer-shell surfaces on every screen where the
