@@ -7,7 +7,8 @@ use kirie_ui::icon::Icon;
 use kirie_ui::space;
 use kirie_ui::widget::{floating, primary_button, secondary_button};
 
-use super::{Editor, Export, FinishEvent, Loaded, Message};
+use super::files::Export;
+use super::{Editor, FinishEvent, Loaded, Message};
 
 /// What the user chose when asked about unsaved changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,7 +198,7 @@ mod tests {
     use kirie_annotate::{Kind, Op, Paint};
 
     use super::*;
-    use crate::editor::Loaded;
+    use crate::editor::{Loaded, files};
 
     fn editor() -> Editor {
         let image = ::image::RgbaImage::new(40, 30);
@@ -229,7 +230,7 @@ mod tests {
         assert!(!editor.unsaved());
         mark(&mut editor);
         assert!(editor.unsaved());
-        let _ = editor.update(Message::Finish(FinishEvent::Exported(
+        let _ = editor.update(Message::File(files::Event::Exported(
             "Saved".into(),
             None,
             Box::new(editor.document().clone()),
@@ -265,7 +266,7 @@ mod tests {
         let mut editor = editor();
         mark(&mut editor);
         editor.closing = Closing::Saving;
-        let _ = editor.update(Message::Finish(FinishEvent::Done(Err("disk full".into()))));
+        let _ = editor.update(Message::File(files::Event::Done(Err("disk full".into()))));
         assert_eq!(editor.closing, Closing::No);
         assert!(editor.unsaved());
     }
@@ -329,7 +330,7 @@ mod tests {
         let _ = editor.update(Message::Finish(FinishEvent::Discard));
         editor.closing = Closing::Saving;
         let saved = Box::new(editor.document().clone());
-        let _ = editor.update(Message::Finish(FinishEvent::Exported(
+        let _ = editor.update(Message::File(files::Event::Exported(
             "Saved".into(),
             None,
             saved,

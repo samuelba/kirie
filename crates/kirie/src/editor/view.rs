@@ -12,10 +12,9 @@ use kirie_ui::{Palette, Scheme, space};
 
 use super::annotate;
 use super::canvas::{Backdrop, Board};
-use super::viewport::Zoom;
-use super::{
-    CropEvent, Editor, FileEvent, FinishEvent, Message, OutsideEvent, WindowEvent, ZoomEvent,
-};
+use super::viewport::{self, Zoom};
+use super::{Editor, FinishEvent, Message, OutsideEvent, window};
+use super::{crop, files};
 use crate::annotate::annotator::Change;
 use crate::annotate::controls;
 use crate::annotate::paint::Part;
@@ -99,14 +98,14 @@ impl Editor {
             "Take a screenshot",
             palette,
             false,
-            Some(Message::Window(WindowEvent::Capture)),
+            Some(Message::Window(window::Event::Capture)),
         );
         let open = icon_button(
             Icon::Open,
             "Open an image (Ctrl+O)",
             palette,
             false,
-            Some(Message::File(FileEvent::Open)),
+            Some(Message::File(files::Event::Open)),
         );
         let mut actions = row![open, capture, divider(palette), history]
             .spacing(space::S)
@@ -156,27 +155,27 @@ impl Editor {
                      (Ctrl+Alt+S)",
                 palette,
                 false,
-                Some(Message::File(FileEvent::SaveProject)),
+                Some(Message::File(files::Event::SaveProject)),
             ))
             .push(icon_button(
                 Icon::SaveAs,
                 "Save as… (Ctrl+Shift+S)",
                 palette,
                 false,
-                Some(Message::File(FileEvent::SaveAs)),
+                Some(Message::File(files::Event::SaveAs)),
             ))
             .push(icon_button(
                 Icon::Save,
                 "Save to Pictures and copy (Ctrl+S or Shift+Enter)",
                 palette,
                 false,
-                Some(Message::File(FileEvent::Save)),
+                Some(Message::File(files::Event::Save)),
             ))
             .push(primary_button(
                 Icon::Copy,
                 "Copy",
                 palette,
-                Message::File(FileEvent::Copy),
+                Message::File(files::Event::Copy),
             ))
             .spacing(space::S)
             .align_y(Alignment::Center)
@@ -230,7 +229,7 @@ impl Editor {
             self.cropping.is_some(),
             self.image
                 .is_some()
-                .then_some(Message::Crop(CropEvent::Start)),
+                .then_some(Message::Crop(crop::Event::Start)),
         );
         container(
             column(tools)
@@ -298,26 +297,8 @@ impl Editor {
                 .style(floating(palette)),
             );
         }
-        if let Some(toast) = &self.toast {
-            let color = if toast.error {
-                palette.danger
-            } else {
-                palette.text
-            };
-            let mut content = row![text(toast.text.clone()).size(13).color(color)]
-                .spacing(space::M)
-                .align_y(Alignment::Center);
-            let mut padding = Padding::from([space::S, space::L]);
-            if let Some(file) = &toast.file {
-                content = content.push(secondary_button(
-                    "Show in Files",
-                    palette,
-                    Message::Outside(OutsideEvent::ShowInFiles(file.clone())),
-                ));
-                padding = Padding::from(space::S).left(space::L);
-            }
-            floating_bits =
-                floating_bits.push(container(content).padding(padding).style(floating(palette)));
+        if let Some(toast) = self.toasts.view(palette) {
+            floating_bits = floating_bits.push(toast);
         }
         layers = layers.push(
             container(floating_bits)
@@ -357,9 +338,14 @@ impl Editor {
                         .size(12)
                         .color(palette.muted),
                 ],
-                secondary_button("Whole image", palette, Message::Crop(CropEvent::Reset)),
-                secondary_button("Cancel", palette, Message::Crop(CropEvent::Cancel)),
-                primary_button(Icon::Crop, "Crop", palette, Message::Crop(CropEvent::Done)),
+                secondary_button("Whole image", palette, Message::Crop(crop::Event::Reset)),
+                secondary_button("Cancel", palette, Message::Crop(crop::Event::Cancel)),
+                primary_button(
+                    Icon::Crop,
+                    "Crop",
+                    palette,
+                    Message::Crop(crop::Event::Done)
+                ),
             ]
             .spacing(space::M)
             .align_y(Alignment::Center),
@@ -382,14 +368,14 @@ impl Editor {
                     Icon::Capture,
                     "Take a screenshot",
                     palette,
-                    Message::Window(WindowEvent::Capture)
+                    Message::Window(window::Event::Capture)
                 ),
                 icon_button(
                     Icon::Open,
                     "Open an image (Ctrl+O)",
                     palette,
                     false,
-                    Some(Message::File(FileEvent::Open))
+                    Some(Message::File(files::Event::Open))
                 ),
             ]
             .spacing(space::S)
@@ -408,14 +394,14 @@ impl Editor {
                 "Fit (Ctrl+0)",
                 palette,
                 self.viewport.is_fitted(),
-                Some(Message::Zoom(ZoomEvent::Fit))
+                Some(Message::Viewport(viewport::Event::Fit))
             ),
             icon_button(
                 Icon::Image,
                 "Actual size (Ctrl+1)",
                 palette,
                 false,
-                Some(Message::Zoom(ZoomEvent::Actual))
+                Some(Message::Viewport(viewport::Event::Actual))
             ),
             text("Ctrl+scroll to zoom").size(12).color(palette.muted),
         ]
@@ -564,17 +550,17 @@ impl Editor {
                 Icon::ZoomOut,
                 "Zoom out (Ctrl+-)",
                 palette,
-                Some(Message::Zoom(ZoomEvent::Out))
+                Some(Message::Viewport(viewport::Event::ZoomOut))
             ),
             // A fitted image is never enlarged, so "Fit 100%" is the longest label it shows.
             small_pick_list(levels, shown, "Fit 100%", palette, |choice| {
-                Message::Zoom(ZoomEvent::To(choice.zoom()))
+                Message::Viewport(viewport::Event::ZoomTo(choice.zoom()))
             }),
             small_icon_button(
                 Icon::ZoomIn,
                 "Zoom in (Ctrl++)",
                 palette,
-                Some(Message::Zoom(ZoomEvent::In))
+                Some(Message::Viewport(viewport::Event::ZoomIn))
             ),
         ]
         .spacing(2)

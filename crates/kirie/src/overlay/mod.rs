@@ -2,7 +2,8 @@
 //! region, marks it up, and copies or saves it.
 
 mod canvas;
-pub mod region;
+mod region;
+mod toolbar;
 mod view;
 
 use std::cell::RefCell;
@@ -23,7 +24,7 @@ use kirie_ui::Palette;
 use crate::annotate::annotator::{Annotator, Change, Effect};
 use crate::annotate::drawing::Drawing;
 use crate::annotate::picker;
-use crate::annotate::selection::{self, Release, Selection};
+use crate::annotate::selection::Hit;
 use crate::annotate::swatches::Swatches;
 
 pub const NAMESPACE: &str = "kirie-overlay";
@@ -73,33 +74,17 @@ pub enum Message {
     Finish(Action),
     /// Enter: the action the overlay was opened for.
     Accept,
-    SelectAll,
-    /// Selects the screen with this index.
-    SelectScreen(usize),
-    Nudge(Vector),
-    /// Keeps the selection for the next screenshot, or forgets it.
-    ToggleRemember,
+    Region(region::Event),
     /// Shows or hides the magnifier while a region is picked, for this and later screenshots.
     ToggleMagnifier,
     Finished(Result<Outcome, String>),
     Resized(window::Id, Size),
-    Toolbar(ToolbarEvent),
+    Toolbar(toolbar::Event),
     Layer(LayerShellCustomActionWithId),
     /// Time passes while the flash fades.
     Flash(std::time::Instant),
     /// The window's data device, for the clipboard.
     Dropped(crate::desktop::drops::Dropped),
-}
-
-/// Moving the toolbar by its grip.
-#[derive(Debug, Clone, Copy)]
-pub enum ToolbarEvent {
-    /// The pointer over the toolbar's grip, in the grip's coordinates.
-    Hover(Point),
-    Grab,
-    /// The pointer while the toolbar is dragged, in the coordinates of a surface.
-    Moved(window::Id, Point),
-    Dropped,
 }
 
 /// The flash over the screens as the overlay opens, like a camera's.
@@ -179,21 +164,14 @@ pub struct Overlay {
     screens: Vec<Screen>,
     surfaces: HashMap<window::Id, usize>,
     desktop: Rectangle,
-    selection: Selection,
-    /// The selection kept for the next screenshot, while it is unchanged.
-    remembered: Option<Rectangle>,
+    region: region::Region,
     pointer: Option<Point>,
     palette: Palette,
     tool: Option<Tool>,
     annotator: Annotator,
     /// The tool the current pointer gesture draws with, if it draws at all.
     drawing: Option<Tool>,
-    /// Where the toolbar was dragged to, in desktop coordinates.
-    toolbar_at: Option<Point>,
-    /// While the toolbar is dragged: where it is held, from its top left.
-    toolbar_drag: Option<Vector>,
-    /// The pointer over the grip, from the grip's top left.
-    grip_at: Point,
+    toolbar: toolbar::Drag,
     busy: bool,
     /// What Enter does.
     primary: Action,
@@ -252,6 +230,14 @@ fn screens(frames: &[Frame]) -> Vec<Screen> {
             scale: frame.scale(),
         })
         .collect()
+}
+
+/// The topmost of `windows` under `at`.
+fn window_at(windows: &[(Rectangle, String)], at: Point) -> Option<Rectangle> {
+    windows
+        .iter()
+        .find(|(area, _)| area.contains(at))
+        .map(|(area, _)| *area)
 }
 
 fn to_kurbo(point: Point) -> kurbo::Point {
@@ -317,24 +303,19 @@ impl Overlay {
             .collect();
         let swatches = Swatches::load();
         let paint = drawing.paint_for(None, &swatches);
-        let remembered = crate::overlay::region::load()
-            .and_then(|region| crate::overlay::region::within(region, desktop));
         let overlay = Self {
             windows,
             captures: frames,
             screens,
             surfaces,
             desktop,
-            selection: remembered.map(Selection::selected).unwrap_or_default(),
-            remembered,
+            region: region::Region::recalled(desktop),
             pointer: None,
             palette: Palette::DARK,
             tool: None,
             annotator: Annotator::new(document, paint, swatches),
             drawing: None,
-            toolbar_at: None,
-            toolbar_drag: None,
-            grip_at: Point::ORIGIN,
+            toolbar: toolbar::Drag::default(),
             busy: false,
             primary,
             host,
@@ -368,17 +349,16 @@ impl Overlay {
             return self;
         };
         let area = screen.area;
-        let region = Rectangle::new(
+        let selected = Rectangle::new(
             Point::new(area.x + area.width * 0.2, area.y + area.height * 0.15),
             Size::new(area.width * 0.6, area.height * 0.5),
         );
-        self.selection = Selection::selected(region);
-        self.remembered = None;
+        self.region = region::Region::of(selected);
         self.tool = Some(Tool::Select);
         let point = |x: f32, y: f32| {
             kurbo::Point::new(
-                f64::from(region.x + region.width * x),
-                f64::from(region.y + region.height * y),
+                f64::from(selected.x + selected.width * x),
+                f64::from(selected.y + selected.height * y),
             )
         };
         for kind in [
@@ -425,9 +405,9 @@ impl Overlay {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Pointer(pointer) if self.toolbar_drag.is_some() => {
+            Message::Pointer(pointer) if self.toolbar.dragging() => {
                 if let Pointer::Released(_) = pointer {
-                    self.drag_toolbar(ToolbarEvent::Dropped);
+                    self.drag_toolbar(toolbar::Event::Dropped);
                 }
                 Task::none()
             }
@@ -450,18 +430,8 @@ impl Overlay {
                 self.annotated(effect)
             }
             Message::Escape => self.escape(),
-            Message::Nudge(by) => {
-                self.selection = self.selection.nudge(by, self.desktop);
-                self.keep_remembered();
-                Task::none()
-            }
-            Message::SelectAll => self.select_area(self.desktop),
-            Message::SelectScreen(index) => match self.screens.get(index) {
-                Some(screen) => self.select_area(screen.area),
-                None => Task::none(),
-            },
-            Message::ToggleRemember => {
-                self.toggle_remember();
+            Message::Region(event) => {
+                self.region_event(event);
                 Task::none()
             }
             Message::ToggleMagnifier => self.toggle_magnifier(),
@@ -486,42 +456,42 @@ impl Overlay {
     }
 
     /// Moving the toolbar by its grip.
-    fn drag_toolbar(&mut self, event: ToolbarEvent) {
+    fn drag_toolbar(&mut self, event: toolbar::Event) {
         match event {
-            ToolbarEvent::Hover(at) => self.grip_at = at,
-            ToolbarEvent::Grab => {
-                if let Some((at, _)) = self.toolbar_place() {
-                    self.toolbar_at = Some(at);
-                    self.toolbar_drag = Some(Vector::new(
-                        self.grip_at.x + kirie_ui::space::S,
-                        self.grip_at.y + kirie_ui::space::S,
-                    ));
-                }
+            toolbar::Event::Hover(at) => self.toolbar.hover(at),
+            toolbar::Event::Grab => {
+                let placed = self.toolbar_place().map(|(at, _)| at);
+                self.toolbar.grab(placed);
             }
-            ToolbarEvent::Moved(id, at) => {
+            toolbar::Event::Moved(id, at) => {
                 let surface = self
                     .surfaces
                     .get(&id)
                     .and_then(|&index| self.screens.get(index))
                     .map(|screen| screen.area);
-                if let (Some(held), Some(surface)) = (self.toolbar_drag, surface) {
-                    let desktop = Point::new(at.x + surface.x, at.y + surface.y);
-                    self.toolbar_at = Some(desktop - held);
+                if let Some(surface) = surface {
+                    self.toolbar
+                        .follow(Point::new(at.x + surface.x, at.y + surface.y));
                 }
             }
-            ToolbarEvent::Dropped => {
-                self.toolbar_drag = None;
-                self.toolbar_at = self.toolbar_place().map(|(at, _)| at);
+            toolbar::Event::Dropped => {
+                let placed = self.toolbar_place().map(|(at, _)| at);
+                self.toolbar.release(placed);
             }
         }
     }
 
-    fn toggle_remember(&mut self) {
-        if self.remembered.take().is_some() {
-            crate::overlay::region::forget();
-        } else if let Some(region) = self.selection.rect() {
-            crate::overlay::region::remember(region);
-            self.remembered = Some(region);
+    /// Picking the region by keys and buttons.
+    fn region_event(&mut self, event: region::Event) {
+        match event {
+            region::Event::Nudge(by) => self.region.nudge(by, self.desktop),
+            region::Event::SelectAll => self.region.select(self.desktop),
+            region::Event::SelectScreen(index) => {
+                if let Some(screen) = self.screens.get(index) {
+                    self.region.select(screen.area);
+                }
+            }
+            region::Event::ToggleRemember => self.region.toggle_remember(),
         }
     }
 
@@ -536,23 +506,6 @@ impl Overlay {
             tracing::warn!(%error, "magnifier choice not kept");
         }
         Task::none()
-    }
-
-    /// Forgets the remembered region once the selection is changed.
-    fn select_area(&mut self, area: Rectangle) -> Task<Message> {
-        self.selection = Selection::selected(area);
-        self.keep_remembered();
-        Task::none()
-    }
-
-    fn keep_remembered(&mut self) {
-        if self
-            .remembered
-            .is_some_and(|region| self.selection.rect() != Some(region))
-        {
-            self.remembered = None;
-            crate::overlay::region::forget();
-        }
     }
 
     /// Shows the screen a fullscreen window landed on: the one with the window's size.
@@ -578,16 +531,14 @@ impl Overlay {
             if self.surfaces.len() == 1 {
                 self.desktop = area;
                 // A remembered region on another screen stays remembered for when it fits.
-                self.remembered = crate::overlay::region::load()
-                    .and_then(|region| crate::overlay::region::within(region, self.desktop));
-                self.selection = self.remembered.map(Selection::selected).unwrap_or_default();
+                self.region = region::Region::recalled(self.desktop);
             }
         }
     }
 
     fn escape(&mut self) -> Task<Message> {
-        if self.toolbar_drag.is_some() {
-            self.drag_toolbar(ToolbarEvent::Dropped);
+        if self.toolbar.dragging() {
+            self.drag_toolbar(toolbar::Event::Dropped);
             return Task::none();
         }
         // A save or copy on its way finishes first; leaving now would drop it half done.
@@ -620,7 +571,7 @@ impl Overlay {
         }
         // A gesture stays with what its press started, whatever happens on the way.
         if let Pointer::Pressed(at) = pointer {
-            let inside = self.selection.hit(at, HANDLE_REACH) == Some(selection::Hit::Inside)
+            let inside = self.region.hit(at, HANDLE_REACH) == Some(Hit::Inside)
                 || self.on_grip(to_kurbo(at));
             self.drawing = match self.tool {
                 Some(tool) if inside => Some(tool),
@@ -664,14 +615,6 @@ impl Overlay {
         let _ = self.annotated(effect);
     }
 
-    /// The topmost window under `at`.
-    fn window_at(&self, at: Point) -> Option<Rectangle> {
-        self.windows
-            .iter()
-            .find(|(area, _)| area.contains(at))
-            .map(|(area, _)| *area)
-    }
-
     /// Whether `at` is on a grip of the lone picked mark.
     fn on_grip(&self, at: kurbo::Point) -> bool {
         let [id] = self.annotator.picked[..] else {
@@ -683,30 +626,19 @@ impl Overlay {
             })
     }
 
+    /// Picks the region; a click takes the window under it, else its screen.
     fn select(&mut self, pointer: Pointer) {
-        match pointer {
-            Pointer::Pressed(at) => self.selection = self.selection.press(at, HANDLE_REACH),
-            Pointer::Moved(at) => self.selection = self.selection.drag_to(at, self.desktop),
-            Pointer::Released(at) => {
-                let (selection, release) = self.selection.release(at);
-                self.selection = selection;
-                if let Release::Click(at) = release {
-                    let picked = self
-                        .window_at(at)
-                        .and_then(|window| window.intersection(&self.desktop))
-                        .or_else(|| {
-                            self.screens
-                                .iter()
-                                .find(|screen| screen.area.contains(at))
-                                .map(|screen| screen.area)
-                        });
-                    if let Some(area) = picked {
-                        self.selection = Selection::selected(area);
-                    }
-                }
-            }
-        }
-        self.keep_remembered();
+        let (windows, screens, desktop) = (&self.windows, &self.screens, self.desktop);
+        self.region.follow(pointer, HANDLE_REACH, desktop, |at| {
+            window_at(windows, at)
+                .and_then(|window| window.intersection(&desktop))
+                .or_else(|| {
+                    screens
+                        .iter()
+                        .find(|screen| screen.area.contains(at))
+                        .map(|screen| screen.area)
+                })
+        });
     }
 
     fn annotate(&mut self, tool: Tool, pointer: Pointer) -> Task<Message> {
@@ -742,7 +674,7 @@ impl Overlay {
     /// The selection's pixels at the highest scale of the screens it covers, and the marks
     /// moved onto them.
     fn project(&self) -> Result<kirie_annotate::project::Project, String> {
-        let region = self.selection.rect().ok_or("nothing is selected")?;
+        let region = self.region.rect().ok_or("nothing is selected")?;
         let region = whole(region);
         let image = geometry::crop(&self.captures, region).ok_or("the selection is empty")?;
         let scale = f64::from(image.width()) / f64::from(region.width.max(1));
@@ -767,7 +699,7 @@ impl Overlay {
 
     fn finish(&mut self, action: Action) -> Task<Message> {
         self.annotator.commit_text();
-        if self.busy || self.selection.rect().is_none() {
+        if self.busy || self.region.rect().is_none() {
             return Task::none();
         }
         self.busy = true;
@@ -837,8 +769,8 @@ impl Overlay {
         } else {
             event::listen_with(key)
         };
-        let toolbar = if self.toolbar_drag.is_some() {
-            event::listen_with(dragging_toolbar)
+        let toolbar = if self.toolbar.dragging() {
+            event::listen_with(toolbar::dragging)
         } else {
             Subscription::none()
         };
@@ -918,19 +850,6 @@ fn surface_settings(output: &str) -> NewLayerShellSettings {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn dragging_toolbar(event: Event, _: event::Status, id: window::Id) -> Option<Message> {
-    match event {
-        Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
-            Some(Message::Toolbar(ToolbarEvent::Moved(id, position)))
-        }
-        Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
-            Some(Message::Toolbar(ToolbarEvent::Dropped))
-        }
-        _ => None,
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
 fn typing_key(event: Event, _: event::Status, _: window::Id) -> Option<Message> {
     match event {
         Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
@@ -973,16 +892,16 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Named(Named::Delete | Named::Backspace) => {
             Some(Message::Annotate(Change::Delete))
         }
-        keyboard::Key::Named(Named::ArrowLeft) => Some(Message::Nudge(Vector::new(-step, 0.0))),
-        keyboard::Key::Named(Named::ArrowRight) => Some(Message::Nudge(Vector::new(step, 0.0))),
-        keyboard::Key::Named(Named::ArrowUp) => Some(Message::Nudge(Vector::new(0.0, -step))),
-        keyboard::Key::Named(Named::ArrowDown) => Some(Message::Nudge(Vector::new(0.0, step))),
+        keyboard::Key::Named(Named::ArrowLeft) => Some(nudge(-step, 0.0)),
+        keyboard::Key::Named(Named::ArrowRight) => Some(nudge(step, 0.0)),
+        keyboard::Key::Named(Named::ArrowUp) => Some(nudge(0.0, -step)),
+        keyboard::Key::Named(Named::ArrowDown) => Some(nudge(0.0, step)),
         keyboard::Key::Character("z") if command && modifiers.shift() => {
             Some(Message::Annotate(Change::Redo))
         }
         keyboard::Key::Character("z") if command => Some(Message::Annotate(Change::Undo)),
         keyboard::Key::Character("y") if command => Some(Message::Annotate(Change::Redo)),
-        keyboard::Key::Character("a") if command => Some(Message::SelectAll),
+        keyboard::Key::Character("a") if command => Some(Message::Region(region::Event::SelectAll)),
         keyboard::Key::Character("s") if command && modifiers.shift() => {
             Some(Message::Finish(Action::SaveAs))
         }
@@ -998,6 +917,10 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
             .map(|tool| Message::PickTool(Some(tool))),
         _ => None,
     }
+}
+
+fn nudge(x: f32, y: f32) -> Message {
+    Message::Region(region::Event::Nudge(Vector::new(x, y)))
 }
 
 /// Shows the overlay until the user is done: layer-shell surfaces on every screen where the
@@ -1083,7 +1006,7 @@ mod tests {
             Overlay::boot(Vec::new(), Vec::new(), Action::Copy, Host::Window, outcome);
         for id in overlay.surfaces.keys().copied().collect::<Vec<_>>() {
             let _ = overlay.view(id);
-            let _ = overlay.update(Message::Toolbar(ToolbarEvent::Moved(id, Point::ORIGIN)));
+            let _ = overlay.update(Message::Toolbar(toolbar::Event::Moved(id, Point::ORIGIN)));
         }
     }
 
