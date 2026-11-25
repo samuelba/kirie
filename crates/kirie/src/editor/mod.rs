@@ -6,6 +6,7 @@ mod closing;
 mod crop;
 mod demo;
 mod drop_zone;
+mod files;
 mod frame;
 mod mark_list;
 mod release_card;
@@ -21,11 +22,11 @@ use std::time::Duration;
 use ::image::RgbaImage;
 use iced::widget::image;
 use iced::{Event, Point, Size, Subscription, Task, event, keyboard, window};
-use kirie_annotate::project::{self, Project};
 use kirie_annotate::{Document, Draft, History, Op, Rgba, Shape, Tool, Typesetter};
 use kirie_ui::{Palette, Scheme};
 
 use self::closing::{Answer, Closing, Then};
+pub use self::files::{Loaded, load};
 use self::viewport::Viewport;
 use crate::annotate::annotator::{Annotator, Change, Effect};
 use crate::annotate::drawing::Drawing;
@@ -34,60 +35,6 @@ use crate::annotate::swatches::Swatches;
 
 /// How close to a mark a click picks it, in screen pixels.
 const MARK_REACH: f64 = 6.0;
-
-/// An image open for editing.
-#[derive(Debug, Clone)]
-pub struct Loaded {
-    pub image: RgbaImage,
-    pub document: Document,
-    pub path: Option<PathBuf>,
-    /// A new document, not a project: it takes the drawing options last used.
-    pub fresh: bool,
-}
-
-impl Loaded {
-    pub fn image(image: RgbaImage, path: Option<PathBuf>) -> Self {
-        let document = Document::new(image.width(), image.height(), 1.0);
-        Self {
-            image,
-            document,
-            path,
-            fresh: true,
-        }
-    }
-}
-
-/// Files larger than this are not opened.
-const MAX_FILE: u64 = 512 * 1024 * 1024;
-
-/// Reads an image or a `.kirie` project.
-pub fn load(path: &Path) -> Result<Loaded, String> {
-    let fail = |error: &dyn std::fmt::Display| format!("cannot open {}: {error}", path.display());
-    let meta = std::fs::metadata(path).map_err(|error| fail(&error))?;
-    if !meta.is_file() {
-        return Err(fail(&"it is not a file"));
-    }
-    if meta.len() > MAX_FILE {
-        return Err(fail(&"it is too large"));
-    }
-    let is_project = path
-        .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case(project::EXTENSION));
-    if is_project {
-        let file = std::fs::File::open(path).map_err(|error| fail(&error))?;
-        let project = project::load(std::io::BufReader::new(file)).map_err(|error| fail(&error))?;
-        return Ok(Loaded {
-            image: project.image,
-            document: project.document,
-            path: Some(path.to_path_buf()),
-            fresh: false,
-        });
-    }
-    let image = ::image::open(path)
-        .map_err(|error| fail(&error))?
-        .to_rgba8();
-    Ok(Loaded::image(image, Some(path.to_path_buf())))
-}
 
 /// The image pixel `at` falls in.
 #[allow(clippy::cast_possible_truncation)]
@@ -123,7 +70,7 @@ pub enum Message {
     /// Pastes the clipboard's text into the text being typed.
     PasteText,
     Escape,
-    File(FileEvent),
+    File(files::Event),
     Finish(FinishEvent),
     Outside(OutsideEvent),
     Settings(settings::Event),
@@ -151,26 +98,9 @@ pub enum MarksEvent {
     Pasted(Result<Pasted, String>),
 }
 
-/// Copying, saving, opening and pasting pictures, and what is dropped on the window.
-#[derive(Debug, Clone)]
-pub enum FileEvent {
-    Copy,
-    Open,
-    Paste,
-    Save,
-    SaveProject,
-    /// Asks where to save, and as what.
-    SaveAs,
-    SaveTo(PathBuf, crate::storage::save::Format),
-    Dropped(crate::desktop::drops::Dropped),
-}
-
-/// What became of an export, and closing the window.
-#[derive(Debug, Clone)]
+/// Closing the window, or putting the image away.
+#[derive(Debug, Clone, Copy)]
 pub enum FinishEvent {
-    Done(Result<String, String>),
-    /// The image left the editor, saved (to the file) or copied, as this document had it.
-    Exported(String, Option<PathBuf>, Box<Document>),
     CloseRequested,
     Close(Answer),
     /// Puts the image away, asking first about unsaved changes.
@@ -234,17 +164,6 @@ impl Default for Placement {
     }
 }
 
-/// The window's data device, for drops and the clipboard.
-#[derive(Debug, Default)]
-struct Drops {
-    /// The device, once it is ready.
-    device: Option<crate::desktop::drops::Device>,
-    /// The window the device was last made anew for.
-    renewed_for: Option<window::Id>,
-    /// Something that can be opened is dragged over the window.
-    hovered: bool,
-}
-
 #[derive(Debug, Clone)]
 struct Toast {
     id: u64,
@@ -292,7 +211,7 @@ pub struct Editor {
     typesetter: RefCell<Typesetter>,
     patches: RefCell<HashMap<crate::annotate::paint::PatchKey, image::Handle>>,
     pictures: RefCell<HashMap<u64, image::Handle>>,
-    drops: Drops,
+    drops: files::Drops,
 }
 
 impl std::fmt::Debug for Editor {
@@ -344,7 +263,7 @@ impl Editor {
             typesetter: RefCell::new(Typesetter::new()),
             patches: RefCell::new(HashMap::new()),
             pictures: RefCell::new(HashMap::new()),
-            drops: Drops::default(),
+            drops: files::Drops::default(),
         };
         if let Some(loaded) = loaded {
             editor.open(loaded);
@@ -353,7 +272,7 @@ impl Editor {
             let raised = token
                 .clone()
                 .map_or_else(Task::none, |token| activate(id, token).discard());
-            Task::batch([raised, take_drops(id)])
+            Task::batch([raised, files::take_drops(id)])
         });
         (editor, opened)
     }
@@ -620,7 +539,7 @@ impl Editor {
     fn edit_marks(&mut self, event: MarksEvent) -> Task<Message> {
         match event {
             MarksEvent::CopyKey if self.annotator.picked.is_empty() => {
-                return self.export(Export::Copy);
+                return self.export(files::Export::Copy);
             }
             MarksEvent::CopyKey => return self.copy_marks(),
             MarksEvent::Cut if !self.annotator.picked.is_empty() => {
@@ -718,7 +637,7 @@ impl Editor {
         match event {
             WindowEvent::Ipc(crate::desktop::ipc::Request::Open(path, token)) => self
                 .raise(token)
-                .chain(Task::perform(load_async(path), Message::Opened)),
+                .chain(Task::perform(files::load_async(path), Message::Opened)),
             WindowEvent::Ipc(crate::desktop::ipc::Request::Present(token)) => self.raise(token),
             WindowEvent::Ipc(crate::desktop::ipc::Request::About(token)) => {
                 self.about = true;
@@ -770,25 +689,9 @@ impl Editor {
         }
     }
 
-    /// What became of an export, and closing the window.
+    /// Closing the window, or putting the image away.
     fn finish(&mut self, event: FinishEvent) -> Task<Message> {
         match event {
-            FinishEvent::Done(Ok(text)) if text.is_empty() => Task::none(),
-            FinishEvent::Done(result) => {
-                if result.is_err() {
-                    self.closing = Closing::No;
-                    self.then = Then::Exit;
-                }
-                self.toast(result)
-            }
-            FinishEvent::Exported(text, file, kept) => {
-                self.kept = *kept;
-                if self.closing == Closing::Saving {
-                    let then = self.carry_on();
-                    return then.chain(self.toast_file(text, file));
-                }
-                self.toast_file(text, file)
-            }
             FinishEvent::CloseRequested => self.close_requested(),
             FinishEvent::Discard => self.discard(),
             FinishEvent::Close(answer) => self.answer(answer),
@@ -802,67 +705,6 @@ impl Editor {
             drawing.with_frame(self.document()).save();
         } else {
             drawing.save();
-        }
-    }
-
-    /// Copying, saving, opening and pasting.
-    fn files(&mut self, event: FileEvent) -> Task<Message> {
-        match event {
-            FileEvent::Copy => self.export(Export::Copy),
-            // The window is in front already, so the image opens in it as it is.
-            FileEvent::Open => Task::perform(crate::desktop::dialog::open_image(), |picked| picked)
-                .then(|picked| match picked {
-                    Ok(Some(path)) => Task::perform(load_async(path), Message::Opened),
-                    Ok(None) => Task::none(),
-                    Err(error) => Task::done(Message::Finish(FinishEvent::Done(Err(error)))),
-                }),
-            FileEvent::Paste => Task::perform(
-                paste(self.drops.device.clone(), self.clip.clone()),
-                |value| Message::Marks(MarksEvent::Pasted(value)),
-            ),
-            FileEvent::Save => self.export(Export::Save),
-            FileEvent::SaveProject => self.export(Export::Project),
-            FileEvent::SaveAs if self.image.is_some() => {
-                let name = self.suggested_name();
-                Task::perform(
-                    async move {
-                        let folder = crate::storage::save::screenshots_dir();
-                        let _ = std::fs::create_dir_all(&folder);
-                        crate::desktop::dialog::save_as(
-                            &name,
-                            &folder,
-                            &crate::storage::save::Format::ALL,
-                        )
-                        .await
-                    },
-                    |picked| match picked {
-                        Ok(Some((path, format))) => Message::File(FileEvent::SaveTo(path, format)),
-                        Ok(None) => Message::Finish(FinishEvent::Done(Ok(String::new()))),
-                        Err(error) => Message::Finish(FinishEvent::Done(Err(error))),
-                    },
-                )
-            }
-            FileEvent::SaveTo(path, format) => self.export(Export::To(path, format)),
-            FileEvent::Dropped(crate::desktop::drops::Dropped::Ready(device)) => {
-                self.drops.device = Some(device);
-                Task::none()
-            }
-            FileEvent::Dropped(crate::desktop::drops::Dropped::Hovering(hovering)) => {
-                self.drops.hovered = hovering;
-                Task::none()
-            }
-            FileEvent::Dropped(crate::desktop::drops::Dropped::Files(paths)) => {
-                paths.into_iter().next().map_or_else(Task::none, |path| {
-                    Task::perform(load_async(path), Message::Opened)
-                })
-            }
-            FileEvent::Dropped(crate::desktop::drops::Dropped::Png(bytes)) => {
-                let decoded = ::image::load_from_memory(&bytes)
-                    .map(|image| Loaded::image(image.to_rgba8(), None))
-                    .map_err(|error| format!("cannot open the dropped image: {error}"));
-                self.update(Message::Opened(decoded))
-            }
-            FileEvent::SaveAs => Task::none(),
         }
     }
 
@@ -959,7 +801,7 @@ impl Editor {
                 iced::widget::text_editor::Edit::Paste(std::sync::Arc::new(text)),
             )))
         };
-        let nothing = || Message::Finish(FinishEvent::Done(Ok(String::new())));
+        let nothing = || Message::File(files::Event::Done(Ok(String::new())));
         Task::perform(
             crate::desktop::drops::clipboard(
                 self.drops.device.clone(),
@@ -971,91 +813,6 @@ impl Editor {
             Some(text) => Task::done(paste(text)),
             None => iced::clipboard::read().map(move |text| text.map_or_else(nothing, paste)),
         })
-    }
-
-    /// The name the save dialog suggests: the open file's, else one with the time.
-    fn suggested_name(&self) -> String {
-        let stem = self
-            .path
-            .as_deref()
-            .filter(|path| !crate::storage::save::is_handoff(path))
-            .and_then(Path::file_stem)
-            .map_or_else(
-                || crate::storage::save::stem(&jiff::Zoned::now()),
-                |stem| stem.to_string_lossy().into_owned(),
-            );
-        format!("{stem}.png")
-    }
-
-    fn export(&mut self, export: Export) -> Task<Message> {
-        self.keep_crop();
-        self.annotator.commit_text();
-        let Some((image, _)) = &self.image else {
-            return Task::none();
-        };
-        let kept = Box::new(self.document().clone());
-        let exported = move |done: Result<(String, Option<PathBuf>), String>| match done {
-            Ok((text, file)) => Message::Finish(FinishEvent::Exported(text, file, kept)),
-            Err(error) => Message::Finish(FinishEvent::Done(Err(error))),
-        };
-        let saved = |path: PathBuf| {
-            (
-                format!("Saved {}", crate::storage::save::pretty(&path)),
-                Some(path),
-            )
-        };
-        let project = || Project {
-            image: image.clone(),
-            document: self.document().clone(),
-        };
-        match export {
-            Export::Project => {
-                return Task::perform(crate::storage::save::save_project(project()), move |done| {
-                    exported(done.map(saved))
-                });
-            }
-            Export::To(path, format) => {
-                return Task::perform(
-                    crate::storage::save::save_as(project(), path, format),
-                    move |done| exported(done.map(saved)),
-                );
-            }
-            Export::Copy | Export::Save => {}
-        }
-        let rendered = kirie_annotate::render::render(
-            self.document(),
-            image,
-            &mut self.typesetter.borrow_mut(),
-        );
-        let picture = match rendered {
-            Ok(picture) => picture,
-            Err(error) => {
-                self.closing = Closing::No;
-                return self.toast(Err(error.to_string()));
-            }
-        };
-        match export {
-            Export::Copy => {
-                let copied =
-                    crate::desktop::clipboard::copy_from(picture, self.drops.device.clone());
-                Task::perform(copied, move |copied| {
-                    exported(copied.map(|()| ("Copied to the clipboard".to_owned(), None)))
-                })
-            }
-            Export::Save | Export::Project | Export::To(..) => {
-                let saved = crate::storage::save::save_and_copy(picture, self.drops.device.clone());
-                Task::perform(saved, move |done| {
-                    exported(done.map(|(path, copied)| {
-                        let text = if copied {
-                            format!("Saved {} and copied", crate::storage::save::pretty(&path))
-                        } else {
-                            format!("Saved {}", crate::storage::save::pretty(&path))
-                        };
-                        (text, Some(path))
-                    }))
-                })
-            }
-        }
     }
 
     fn toast(&mut self, result: Result<String, String>) -> Task<Message> {
@@ -1122,56 +879,6 @@ impl Editor {
             Scheme::Light => iced::Theme::Light,
         }
     }
-}
-
-/// What Ctrl+V pastes: `clip`, marks still on their way to the clipboard; else marks or an
-/// image on the clipboard, read through the window's data device, else through the clipboard
-/// protocol of wlroots compositors; else `clip`, marks that never got there.
-async fn paste(
-    device: Option<crate::desktop::drops::Device>,
-    clip: Option<(Vec<Shape>, Offer)>,
-) -> Result<Pasted, String> {
-    const KINDS: &[&str] = &[kirie_annotate::marks::MIME, crate::desktop::drops::PNG];
-    let unsent = match clip {
-        Some((marks, Offer::Pending)) => return Ok(Pasted::Marks(marks)),
-        Some((marks, Offer::Failed)) => Some(marks),
-        None => None,
-    };
-    let found = match crate::desktop::drops::clipboard_kind(device, KINDS).await {
-        Some(found) => Ok(found),
-        None => crate::desktop::clipboard::paste(KINDS).await,
-    };
-    let (kind, bytes) = match found {
-        Ok(found) => found,
-        Err(error) => return unsent.map(Pasted::Marks).ok_or(error),
-    };
-    tokio::task::spawn_blocking(move || {
-        if kind == kirie_annotate::marks::MIME {
-            return kirie_annotate::marks::decode(&bytes).map(Pasted::Marks);
-        }
-        ::image::load_from_memory_with_format(&bytes, ::image::ImageFormat::Png)
-            .map(|image| Pasted::Image(image.to_rgba8()))
-            .map_err(|error| format!("the clipboard image cannot be read: {error}"))
-    })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
-async fn load_async(path: PathBuf) -> Result<Loaded, String> {
-    tokio::task::spawn_blocking(move || load(&path))
-        .await
-        .map_err(|error| error.to_string())?
-}
-
-/// Opens what is dropped on the editor's windows, from when window `id` is open.
-fn take_drops(id: window::Id) -> Task<Message> {
-    window::run(id, crate::desktop::drops::display).then(|display| {
-        display.map_or_else(Task::none, |display| {
-            Task::run(crate::desktop::drops::drops(display), |value| {
-                Message::File(FileEvent::Dropped(value))
-            })
-        })
-    })
 }
 
 impl Editor {
@@ -1282,15 +989,6 @@ fn last_error(said: &std::sync::mpsc::Receiver<String>) -> Option<String> {
         .last()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Export {
-    Copy,
-    Save,
-    Project,
-    /// To a file the user chose.
-    To(PathBuf, crate::storage::save::Format),
-}
-
 #[allow(clippy::needless_pass_by_value)]
 fn typing_key(event: Event, _: event::Status, _: window::Id) -> Option<Message> {
     match event {
@@ -1360,7 +1058,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
     match key.as_ref() {
         keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
         keyboard::Key::Named(Named::Enter) if modifiers.shift() || command => {
-            Some(Message::File(FileEvent::Save))
+            Some(Message::File(files::Event::Save))
         }
         keyboard::Key::Named(Named::Delete | Named::Backspace) => {
             Some(Message::Annotate(Change::Delete))
@@ -1373,18 +1071,18 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("c") if command => Some(Message::Marks(MarksEvent::CopyKey)),
         keyboard::Key::Character("x") if command => Some(Message::Marks(MarksEvent::Cut)),
         keyboard::Key::Character("d") if command => Some(Message::Annotate(Change::Duplicate)),
-        keyboard::Key::Character("v") if command => Some(Message::File(FileEvent::Paste)),
+        keyboard::Key::Character("v") if command => Some(Message::File(files::Event::Paste)),
         keyboard::Key::Character("w") if command => Some(Message::Finish(FinishEvent::Discard)),
         keyboard::Key::Character("a") if command => Some(Message::Marks(MarksEvent::SelectAll)),
         keyboard::Key::Character(",") if command => Some(Message::Settings(settings::Event::Open)),
-        keyboard::Key::Character("o") if command => Some(Message::File(FileEvent::Open)),
+        keyboard::Key::Character("o") if command => Some(Message::File(files::Event::Open)),
         keyboard::Key::Character("s") if command && modifiers.shift() => {
-            Some(Message::File(FileEvent::SaveAs))
+            Some(Message::File(files::Event::SaveAs))
         }
         keyboard::Key::Character("s") if command && modifiers.alt() => {
-            Some(Message::File(FileEvent::SaveProject))
+            Some(Message::File(files::Event::SaveProject))
         }
-        keyboard::Key::Character("s") if command => Some(Message::File(FileEvent::Save)),
+        keyboard::Key::Character("s") if command => Some(Message::File(files::Event::Save)),
         keyboard::Key::Character("0") if command => Some(Message::Viewport(viewport::Event::Fit)),
         keyboard::Key::Character("1") if command => {
             Some(Message::Viewport(viewport::Event::Actual))

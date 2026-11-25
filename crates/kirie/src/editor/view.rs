@@ -12,9 +12,9 @@ use kirie_ui::{Palette, Scheme, space};
 
 use super::annotate;
 use super::canvas::{Backdrop, Board};
-use super::crop;
 use super::viewport::{self, Zoom};
-use super::{Editor, FileEvent, FinishEvent, Message, OutsideEvent, WindowEvent};
+use super::{Editor, FinishEvent, Message, OutsideEvent, WindowEvent};
+use super::{crop, files};
 use crate::annotate::annotator::Change;
 use crate::annotate::controls;
 use crate::annotate::paint::Part;
@@ -105,7 +105,7 @@ impl Editor {
             "Open an image (Ctrl+O)",
             palette,
             false,
-            Some(Message::File(FileEvent::Open)),
+            Some(Message::File(files::Event::Open)),
         );
         let mut actions = row![open, capture, divider(palette), history]
             .spacing(space::S)
@@ -155,27 +155,27 @@ impl Editor {
                      (Ctrl+Alt+S)",
                 palette,
                 false,
-                Some(Message::File(FileEvent::SaveProject)),
+                Some(Message::File(files::Event::SaveProject)),
             ))
             .push(icon_button(
                 Icon::SaveAs,
                 "Save as… (Ctrl+Shift+S)",
                 palette,
                 false,
-                Some(Message::File(FileEvent::SaveAs)),
+                Some(Message::File(files::Event::SaveAs)),
             ))
             .push(icon_button(
                 Icon::Save,
                 "Save to Pictures and copy (Ctrl+S or Shift+Enter)",
                 palette,
                 false,
-                Some(Message::File(FileEvent::Save)),
+                Some(Message::File(files::Event::Save)),
             ))
             .push(primary_button(
                 Icon::Copy,
                 "Copy",
                 palette,
-                Message::File(FileEvent::Copy),
+                Message::File(files::Event::Copy),
             ))
             .spacing(space::S)
             .align_y(Alignment::Center)
@@ -393,7 +393,7 @@ impl Editor {
                     "Open an image (Ctrl+O)",
                     palette,
                     false,
-                    Some(Message::File(FileEvent::Open))
+                    Some(Message::File(files::Event::Open))
                 ),
             ]
             .spacing(space::S)
