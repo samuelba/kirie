@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.1](https://github.com/samuelba/kirie/compare/v0.5.0...v0.5.1) (2026-11-25)
+
+
+### Bug Fixes
+
+* **editor:** show why a capture from the editor failed (@samuelba) ([4355958](https://github.com/samuelba/kirie/commit/4355958ab2457f96eb3a6e02451f4a4e2d225f7b))
+* **gnome-extension:** fill the screen with the overlay on GNOME 51 (@samuelba) ([ccf64eb](https://github.com/samuelba/kirie/commit/ccf64ebf8acaba691cad0a97707598692223fb1e))
+* **gnome-extension:** support GNOME 51 (@samuelba) ([2ab8796](https://github.com/samuelba/kirie/commit/2ab8796769ab90bbfb9691a9f17e89e7d031b43e))
+* **overlay:** copy to the clipboard on GNOME without the extension (@samuelba) ([947b7b2](https://github.com/samuelba/kirie/commit/947b7b22192de9b9c243739fa8721a0376406f0b))
+
 ## [0.5.0](https://github.com/samuelba/kirie/compare/v0.4.0...v0.5.0) (2026-11-24)
 
 
