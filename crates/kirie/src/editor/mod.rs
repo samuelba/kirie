@@ -3,6 +3,7 @@
 mod about;
 mod canvas;
 mod closing;
+mod crop;
 mod demo;
 mod drop_zone;
 mod frame;
@@ -29,13 +30,10 @@ use self::viewport::{Viewport, Zoom};
 use crate::annotate::annotator::{Annotator, Change, Effect};
 use crate::annotate::drawing::Drawing;
 use crate::annotate::picker;
-use crate::annotate::selection::{Release, Selection};
 use crate::annotate::swatches::Swatches;
 
 /// How close to a mark a click picks it, in screen pixels.
 const MARK_REACH: f64 = 6.0;
-/// How close to a crop handle a press grabs it, in screen pixels.
-const HANDLE_REACH: f32 = 8.0;
 
 /// An image open for editing.
 #[derive(Debug, Clone)]
@@ -110,7 +108,7 @@ pub enum Message {
     Pointer(Pointer, f32),
     Pan(Vector),
     Zoom(ZoomEvent),
-    Crop(CropEvent),
+    Crop(crop::Event),
     /// The image point under the pointer, if it is over the canvas.
     Hover(Option<kurbo::Point>),
     /// The canvas has a new size.
@@ -154,17 +152,6 @@ pub enum ZoomEvent {
     In,
     Out,
     To(Zoom),
-}
-
-/// Cropping the image.
-#[derive(Debug, Clone, Copy)]
-pub enum CropEvent {
-    /// Starts cropping, or keeps the crop when already cropping.
-    Start,
-    Done,
-    /// Keeps the whole image.
-    Reset,
-    Cancel,
 }
 
 /// Picking, copying and pasting marks.
@@ -265,14 +252,6 @@ impl Default for Placement {
     }
 }
 
-/// The crop being drawn, in image coordinates.
-#[derive(Debug, Clone, Copy)]
-struct Cropping {
-    selection: Selection,
-    /// The crop before the last press, kept when that press turns out to be a click.
-    before: Selection,
-}
-
 /// The window's data device, for drops and the clipboard.
 #[derive(Debug, Default)]
 struct Drops {
@@ -313,7 +292,7 @@ pub struct Editor {
     /// What to do once the question about unsaved changes is answered.
     then: Then,
     viewport: Viewport,
-    cropping: Option<Cropping>,
+    cropping: Option<crop::Cropping>,
     /// The canvas's size, for the zoom level when the image is fitted.
     canvas: Size,
     /// The image point under the pointer.
@@ -537,11 +516,6 @@ impl Editor {
         drafts
     }
 
-    /// The crop being drawn, while cropping.
-    fn crop(&self) -> Option<iced::Rectangle> {
-        self.cropping.and_then(|cropping| cropping.selection.rect())
-    }
-
     pub fn title(&self, _: window::Id) -> String {
         match self.path.as_deref().and_then(Path::file_name) {
             Some(name) => format!("{} — Kirie", name.to_string_lossy()),
@@ -579,7 +553,7 @@ impl Editor {
             Message::Settings(event) => return self.edit_settings(event),
             Message::Release(event) => return self.release_event(event),
             Message::Outside(event) => return self.outside(event),
-            Message::Crop(event) => self.crop_message(event),
+            Message::Crop(event) => self.crop_event(event),
             Message::File(event) => return self.files(event),
             Message::Finish(event) => return self.finish(event),
             Message::Opened(Ok(loaded)) => return self.replace(loaded),
@@ -946,76 +920,6 @@ impl Editor {
         }
     }
 
-    fn crop_message(&mut self, event: CropEvent) {
-        match event {
-            CropEvent::Cancel if self.cropping.is_some() => {
-                self.cropping = None;
-                self.viewport = Viewport::fitted();
-            }
-            CropEvent::Start if self.cropping.is_some() => self.keep_crop(),
-            CropEvent::Start if self.image.is_some() => {
-                self.annotator.commit_text();
-                self.annotator.draft = None;
-                self.annotator.picked.clear();
-                let selection = Selection::selected(to_rectangle(self.document().visible()));
-                self.cropping = Some(Cropping {
-                    selection,
-                    before: selection,
-                });
-                self.viewport = Viewport::fitted();
-            }
-            CropEvent::Done => self.keep_crop(),
-            CropEvent::Reset => {
-                let whole = iced::Rectangle::new(Point::ORIGIN, self.image_size());
-                if let Some(cropping) = &mut self.cropping {
-                    cropping.selection = Selection::selected(whole);
-                }
-            }
-            CropEvent::Start | CropEvent::Cancel => {}
-        }
-    }
-
-    /// Ends cropping, keeping the crop drawn, in whole pixels; all of the image is no crop.
-    fn keep_crop(&mut self) {
-        let Some(cropping) = self.cropping.take() else {
-            return;
-        };
-        self.viewport = Viewport::fitted();
-        let Some(rect) = cropping.selection.rect() else {
-            return;
-        };
-        let crop = kept(rect, self.image_size());
-        if crop != self.document().crop {
-            self.annotator.history.apply(Op::Crop(crop));
-        }
-    }
-
-    /// Follows the pointer while cropping.
-    fn crop_pointer(&mut self, pointer: Pointer, scale: f32) {
-        let bounds = iced::Rectangle::new(Point::ORIGIN, self.image_size());
-        let Some(cropping) = &mut self.cropping else {
-            return;
-        };
-        let reach = HANDLE_REACH / scale.max(0.01);
-        match pointer {
-            Pointer::Pressed(at) => {
-                cropping.before = cropping.selection;
-                cropping.selection = cropping.selection.press(to_point(at), reach);
-            }
-            Pointer::Moved(at) => {
-                cropping.selection = cropping.selection.drag_to(to_point(at), bounds);
-            }
-            Pointer::Released(at) => {
-                let (selection, release) = cropping.selection.release(to_point(at));
-                cropping.selection = match release {
-                    Release::Click(_) => cropping.before,
-                    _ if selection.rect().is_none() => cropping.before,
-                    _ => selection,
-                };
-            }
-        }
-    }
-
     fn pointer(&mut self, pointer: Pointer, scale: f32) -> Task<Message> {
         if self.image.is_none() {
             return Task::none();
@@ -1230,7 +1134,7 @@ impl Editor {
         let keys = if quiet {
             event::listen_with(typing_key)
         } else if self.cropping.is_some() {
-            event::listen_with(crop_key)
+            event::listen_with(crop::key)
         } else {
             event::listen_with(key)
         };
@@ -1459,31 +1363,6 @@ fn focus(event: Event, _: event::Status, _: window::Id) -> Option<Message> {
     }
 }
 
-/// The crop that keeps `rect` of an image of `size`, in whole pixels: none for all of it.
-fn kept(rect: iced::Rectangle, size: Size) -> Option<kurbo::Rect> {
-    let rect = kurbo::Rect::new(
-        f64::from(rect.x),
-        f64::from(rect.y),
-        f64::from(rect.x + rect.width),
-        f64::from(rect.y + rect.height),
-    )
-    .round();
-    let whole = kurbo::Rect::new(0.0, 0.0, f64::from(size.width), f64::from(size.height));
-    (rect != whole && rect.area() >= 1.0).then_some(rect)
-}
-
-/// Enter keeps the crop; every other key works as usual.
-fn crop_key(event: Event, status: event::Status, id: window::Id) -> Option<Message> {
-    if let Event::Keyboard(keyboard::Event::KeyPressed {
-        key: keyboard::Key::Named(keyboard::key::Named::Enter),
-        ..
-    }) = event
-    {
-        return Some(Message::Crop(CropEvent::Done));
-    }
-    key(event, status, id)
-}
-
 #[allow(clippy::cast_possible_truncation)]
 fn to_point(at: kurbo::Point) -> Point {
     Point::new(at.x as f32, at.y as f32)
@@ -1493,14 +1372,6 @@ fn to_point(at: kurbo::Point) -> Point {
 /// double click allows the same slip at every zoom.
 fn on_screen(at: kurbo::Point, scale: f32) -> Point {
     to_point((at.to_vec2() * f64::from(scale)).to_point())
-}
-
-#[allow(clippy::cast_possible_truncation)]
-fn to_rectangle(rect: kurbo::Rect) -> iced::Rectangle {
-    iced::Rectangle::new(
-        Point::new(rect.x0 as f32, rect.y0 as f32),
-        Size::new(rect.width() as f32, rect.height() as f32),
-    )
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -1558,7 +1429,7 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
         keyboard::Key::Character("=" | "+") if command => Some(Message::Zoom(ZoomEvent::In)),
         keyboard::Key::Character("-") if command => Some(Message::Zoom(ZoomEvent::Out)),
         keyboard::Key::Character("c" | "C") if !command && modifiers.shift() => {
-            Some(Message::Crop(CropEvent::Start))
+            Some(Message::Crop(crop::Event::Start))
         }
         keyboard::Key::Character("m") if !command => {
             Some(Message::MarkList(mark_list::Event::Toggle))
@@ -1656,7 +1527,7 @@ mod tests {
     fn ctrl_q_closes_the_editor_even_while_typing() {
         let id = window::Id::unique();
         let ctrl_q = || press("q", keyboard::Modifiers::CTRL);
-        for listen in [key, typing_key, crop_key] {
+        for listen in [key, typing_key, crop::key] {
             assert!(matches!(
                 listen(ctrl_q(), event::Status::Ignored, id),
                 Some(Message::Finish(FinishEvent::CloseRequested))
@@ -1696,7 +1567,7 @@ mod tests {
                     event::Status::Ignored,
                     id
                 ),
-                Some(Message::Crop(CropEvent::Start))
+                Some(Message::Crop(crop::Event::Start))
             ));
         }
     }
@@ -1731,19 +1602,5 @@ mod tests {
                 "8 image px apart at {scale}x"
             );
         }
-    }
-
-    #[test]
-    fn crops_keep_whole_pixels_and_all_of_the_image_is_no_crop() {
-        let size = Size::new(200.0, 100.0);
-        let part = iced::Rectangle::new(Point::new(10.4, 20.6), Size::new(50.2, 30.0));
-        assert_eq!(
-            kept(part, size),
-            Some(kurbo::Rect::new(10.0, 21.0, 61.0, 51.0))
-        );
-        let all = iced::Rectangle::new(Point::new(0.2, -0.3), Size::new(199.9, 100.1));
-        assert_eq!(kept(all, size), None);
-        let sliver = iced::Rectangle::new(Point::new(5.0, 5.0), Size::new(0.3, 40.0));
-        assert_eq!(kept(sliver, size), None);
     }
 }

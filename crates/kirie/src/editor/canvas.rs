@@ -43,7 +43,7 @@ impl Board<'_> {
             || self
                 .editor
                 .cropping
-                .is_some_and(|cropping| cropping.selection.dragging())
+                .is_some_and(|cropping| cropping.dragging())
     }
 }
 
@@ -253,10 +253,8 @@ impl Board<'_> {
             return Interaction::Crosshair;
         }
         if let Some(cropping) = &self.editor.cropping {
-            let reach = super::HANDLE_REACH / scale(self.editor, bounds.size());
-            return crate::annotate::selection::interaction(
-                cropping.selection.hit(super::to_point(at), reach),
-            );
+            let reach = super::crop::HANDLE_REACH / scale(self.editor, bounds.size());
+            return crate::annotate::selection::interaction(cropping.hit(at, reach));
         }
         match self.editor.tool {
             Tool::Select => {
@@ -467,9 +465,7 @@ fn draw_crop(
         &Path::rectangle(crop.position(), crop.size()),
         Stroke::default().with_color(accent).with_width(1.5),
     );
-    let dragging = editor
-        .cropping
-        .is_some_and(|cropping| cropping.selection.dragging());
+    let dragging = editor.cropping.is_some_and(|cropping| cropping.dragging());
     if !dragging {
         for handle in Handle::ALL {
             let dot = Path::circle(handle.position(crop), CROP_HANDLE);
@@ -480,7 +476,7 @@ fn draw_crop(
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn to_rectangle(rect: kurbo::Rect) -> Rectangle {
+pub(super) fn to_rectangle(rect: kurbo::Rect) -> Rectangle {
     Rectangle::new(
         Point::new(rect.x0 as f32, rect.y0 as f32),
         Size::new(rect.width() as f32, rect.height() as f32),

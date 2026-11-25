@@ -12,10 +12,9 @@ use kirie_ui::{Palette, Scheme, space};
 
 use super::annotate;
 use super::canvas::{Backdrop, Board};
+use super::crop;
 use super::viewport::Zoom;
-use super::{
-    CropEvent, Editor, FileEvent, FinishEvent, Message, OutsideEvent, WindowEvent, ZoomEvent,
-};
+use super::{Editor, FileEvent, FinishEvent, Message, OutsideEvent, WindowEvent, ZoomEvent};
 use crate::annotate::annotator::Change;
 use crate::annotate::controls;
 use crate::annotate::paint::Part;
@@ -230,7 +229,7 @@ impl Editor {
             self.cropping.is_some(),
             self.image
                 .is_some()
-                .then_some(Message::Crop(CropEvent::Start)),
+                .then_some(Message::Crop(crop::Event::Start)),
         );
         container(
             column(tools)
@@ -357,9 +356,14 @@ impl Editor {
                         .size(12)
                         .color(palette.muted),
                 ],
-                secondary_button("Whole image", palette, Message::Crop(CropEvent::Reset)),
-                secondary_button("Cancel", palette, Message::Crop(CropEvent::Cancel)),
-                primary_button(Icon::Crop, "Crop", palette, Message::Crop(CropEvent::Done)),
+                secondary_button("Whole image", palette, Message::Crop(crop::Event::Reset)),
+                secondary_button("Cancel", palette, Message::Crop(crop::Event::Cancel)),
+                primary_button(
+                    Icon::Crop,
+                    "Crop",
+                    palette,
+                    Message::Crop(crop::Event::Done)
+                ),
             ]
             .spacing(space::M)
             .align_y(Alignment::Center),
