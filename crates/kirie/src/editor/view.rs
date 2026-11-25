@@ -297,26 +297,8 @@ impl Editor {
                 .style(floating(palette)),
             );
         }
-        if let Some(toast) = &self.toast {
-            let color = if toast.error {
-                palette.danger
-            } else {
-                palette.text
-            };
-            let mut content = row![text(toast.text.clone()).size(13).color(color)]
-                .spacing(space::M)
-                .align_y(Alignment::Center);
-            let mut padding = Padding::from([space::S, space::L]);
-            if let Some(file) = &toast.file {
-                content = content.push(secondary_button(
-                    "Show in Files",
-                    palette,
-                    Message::Outside(OutsideEvent::ShowInFiles(file.clone())),
-                ));
-                padding = Padding::from(space::S).left(space::L);
-            }
-            floating_bits =
-                floating_bits.push(container(content).padding(padding).style(floating(palette)));
+        if let Some(toast) = self.toasts.view(palette) {
+            floating_bits = floating_bits.push(toast);
         }
         layers = layers.push(
             container(floating_bits)

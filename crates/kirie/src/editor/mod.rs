@@ -11,6 +11,7 @@ mod frame;
 mod mark_list;
 mod release_card;
 mod settings;
+mod toast;
 mod view;
 mod viewport;
 mod window;
@@ -18,7 +19,6 @@ mod window;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use ::image::RgbaImage;
 use iced::widget::image;
@@ -132,15 +132,6 @@ pub enum Pasted {
     Image(RgbaImage),
 }
 
-#[derive(Debug, Clone)]
-struct Toast {
-    id: u64,
-    text: String,
-    error: bool,
-    /// The file just saved, to show in the file manager.
-    file: Option<PathBuf>,
-}
-
 pub struct Editor {
     /// The window, unless it is closed while a screenshot is taken.
     window: Option<iced::window::Id>,
@@ -172,8 +163,7 @@ pub struct Editor {
     /// while they are on their way there, or, should they never get there, when it holds
     /// neither marks nor an image.
     clip: Option<(Vec<Shape>, Offer)>,
-    toast: Option<Toast>,
-    toasts: u64,
+    toasts: toast::Toasts,
     /// Set once the user picks light or dark; until then the editor follows the desktop.
     scheme_chosen: bool,
     typesetter: RefCell<Typesetter>,
@@ -225,8 +215,7 @@ impl Editor {
             tool: Tool::Arrow,
             mark_list: mark_list::Shown::Closed,
             clip: None,
-            toast: None,
-            toasts: 0,
+            toasts: toast::Toasts::default(),
             scheme_chosen: false,
             typesetter: RefCell::new(Typesetter::new()),
             patches: RefCell::new(HashMap::new()),
@@ -431,11 +420,7 @@ impl Editor {
             Message::Opened(Ok(loaded)) => return self.replace(loaded),
             Message::Opened(Err(error)) => return self.toast(Err(error)),
             Message::Window(event) => return self.window_event(event),
-            Message::ToastExpired(id) => {
-                if self.toast.as_ref().is_some_and(|toast| toast.id == id) {
-                    self.toast = None;
-                }
-            }
+            Message::ToastExpired(id) => self.toasts.expire(id),
         }
         Task::none()
     }
@@ -723,34 +708,6 @@ impl Editor {
         .then(move |text| match text {
             Some(text) => Task::done(paste(text)),
             None => iced::clipboard::read().map(move |text| text.map_or_else(nothing, paste)),
-        })
-    }
-
-    fn toast(&mut self, result: Result<String, String>) -> Task<Message> {
-        match result {
-            Ok(text) => self.show_toast(text, false, None),
-            Err(text) => self.show_toast(text, true, None),
-        }
-    }
-
-    /// Tells that the image was saved to `file`, or copied without one.
-    fn toast_file(&mut self, text: String, file: Option<PathBuf>) -> Task<Message> {
-        self.show_toast(text, false, file)
-    }
-
-    fn show_toast(&mut self, text: String, error: bool, file: Option<PathBuf>) -> Task<Message> {
-        self.toasts += 1;
-        let id = self.toasts;
-        // A toast with a button stays a little longer, to reach the button.
-        let shown = Duration::from_secs(if file.is_some() { 8 } else { 4 });
-        self.toast = Some(Toast {
-            id,
-            text,
-            error,
-            file,
-        });
-        Task::perform(tokio::time::sleep(shown), move |()| {
-            Message::ToastExpired(id)
         })
     }
 
