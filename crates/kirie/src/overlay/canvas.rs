@@ -217,7 +217,7 @@ impl Surface<'_> {
         overlay.annotator.sampling()
             || overlay.magnifier
                 && overlay.tool.is_none()
-                && overlay.toolbar_drag.is_none()
+                && !overlay.toolbar.dragging()
                 && (overlay.selection.rect().is_none() || overlay.selection.dragging())
     }
 
