@@ -42,8 +42,31 @@ impl std::fmt::Display for Zoom {
     }
 }
 
+/// Panning and zooming the canvas.
+#[derive(Debug, Clone, Copy)]
+pub enum Event {
+    /// Moves the image by this many canvas pixels.
+    Pan(Vector),
+    /// Zooms by `factor` around `anchor`, a point on a canvas of size `canvas`.
+    ZoomBy {
+        factor: f32,
+        anchor: Point,
+        canvas: Size,
+    },
+    /// Zooms to the next level in, around the middle of the canvas.
+    ZoomIn,
+    /// Zooms to the next level out, around the middle of the canvas.
+    ZoomOut,
+    /// Zooms to a level picked from the list, around the middle of the canvas.
+    ZoomTo(Zoom),
+    /// Fits the content into the canvas.
+    Fit,
+    /// Shows image pixels one to one.
+    Actual,
+}
+
 /// The next zoom level after `scale`, closer in or further out.
-pub fn step(scale: f32, closer: bool) -> f32 {
+fn step(scale: f32, closer: bool) -> f32 {
     if closer {
         LEVELS
             .into_iter()
@@ -131,6 +154,31 @@ impl Viewport {
         Self {
             zoom: Some(1.0),
             pan: Vector::ZERO,
+        }
+    }
+
+    /// The viewport after `event`, showing `content` on a canvas of size `canvas`.
+    #[must_use]
+    pub fn update(self, event: Event, content: Rect, canvas: Size) -> Self {
+        let middle = Point::new(canvas.width / 2.0, canvas.height / 2.0);
+        match event {
+            Event::Pan(by) => self.panned(by),
+            Event::ZoomBy {
+                factor,
+                anchor,
+                canvas,
+            } => self.zoomed(factor, anchor, content, canvas),
+            Event::Fit | Event::ZoomTo(Zoom::Fit) => Self::fitted(),
+            Event::Actual => Self::actual_size(),
+            Event::ZoomIn | Event::ZoomOut => {
+                let scale = self.scale(content, canvas);
+                let level = step(scale, matches!(event, Event::ZoomIn));
+                self.zoomed_to(level, middle, content, canvas)
+            }
+            #[allow(clippy::cast_precision_loss)]
+            Event::ZoomTo(Zoom::Percent(percent)) => {
+                self.zoomed_to(percent as f32 / 100.0, middle, content, canvas)
+            }
         }
     }
 }
@@ -245,6 +293,44 @@ mod tests {
     fn zooms_read_as_percentages() {
         assert_eq!(Zoom::Fit.to_string(), "Fit");
         assert_eq!(Zoom::Percent(200).to_string(), "200%");
+    }
+
+    #[test]
+    fn events_pan_and_zoom_around_the_middle() {
+        let panned = Viewport::fitted().update(Event::Pan(Vector::new(10.0, 0.0)), IMAGE, CANVAS);
+        assert_eq!(panned, Viewport::fitted().panned(Vector::new(10.0, 0.0)));
+        let middle = Point::new(CANVAS.width / 2.0, CANVAS.height / 2.0);
+        let before = Viewport::fitted().image_point(middle, IMAGE, CANVAS);
+        let closer = Viewport::fitted().update(Event::ZoomIn, IMAGE, CANVAS);
+        assert!((closer.scale(IMAGE, CANVAS) - 0.67).abs() < 1e-6);
+        let after = closer.image_point(middle, IMAGE, CANVAS);
+        assert!((before.x - after.x).abs() < 1e-2 && (before.y - after.y).abs() < 1e-2);
+        let further = closer.update(Event::ZoomOut, IMAGE, CANVAS);
+        assert!((further.scale(IMAGE, CANVAS) - 0.5).abs() < 1e-6);
+        let doubled = closer.update(Event::ZoomTo(Zoom::Percent(200)), IMAGE, CANVAS);
+        assert!((doubled.scale(IMAGE, CANVAS) - 2.0).abs() < 1e-6);
+        for fit in [Event::Fit, Event::ZoomTo(Zoom::Fit)] {
+            assert!(doubled.update(fit, IMAGE, CANVAS).is_fitted());
+        }
+        assert_eq!(
+            doubled.update(Event::Actual, IMAGE, CANVAS),
+            Viewport::actual_size()
+        );
+    }
+
+    #[test]
+    fn a_wheel_zoom_keeps_to_the_canvas_it_came_from() {
+        let anchor = Point::new(100.0, 80.0);
+        let smaller = Size::new(800.0, 600.0);
+        let event = Event::ZoomBy {
+            factor: 2.0,
+            anchor,
+            canvas: smaller,
+        };
+        assert_eq!(
+            Viewport::fitted().update(event, IMAGE, CANVAS),
+            Viewport::fitted().zoomed(2.0, anchor, IMAGE, smaller)
+        );
     }
 
     #[test]

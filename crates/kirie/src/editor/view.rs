@@ -13,8 +13,8 @@ use kirie_ui::{Palette, Scheme, space};
 use super::annotate;
 use super::canvas::{Backdrop, Board};
 use super::crop;
-use super::viewport::Zoom;
-use super::{Editor, FileEvent, FinishEvent, Message, OutsideEvent, WindowEvent, ZoomEvent};
+use super::viewport::{self, Zoom};
+use super::{Editor, FileEvent, FinishEvent, Message, OutsideEvent, WindowEvent};
 use crate::annotate::annotator::Change;
 use crate::annotate::controls;
 use crate::annotate::paint::Part;
@@ -412,14 +412,14 @@ impl Editor {
                 "Fit (Ctrl+0)",
                 palette,
                 self.viewport.is_fitted(),
-                Some(Message::Zoom(ZoomEvent::Fit))
+                Some(Message::Viewport(viewport::Event::Fit))
             ),
             icon_button(
                 Icon::Image,
                 "Actual size (Ctrl+1)",
                 palette,
                 false,
-                Some(Message::Zoom(ZoomEvent::Actual))
+                Some(Message::Viewport(viewport::Event::Actual))
             ),
             text("Ctrl+scroll to zoom").size(12).color(palette.muted),
         ]
@@ -568,17 +568,17 @@ impl Editor {
                 Icon::ZoomOut,
                 "Zoom out (Ctrl+-)",
                 palette,
-                Some(Message::Zoom(ZoomEvent::Out))
+                Some(Message::Viewport(viewport::Event::ZoomOut))
             ),
             // A fitted image is never enlarged, so "Fit 100%" is the longest label it shows.
             small_pick_list(levels, shown, "Fit 100%", palette, |choice| {
-                Message::Zoom(ZoomEvent::To(choice.zoom()))
+                Message::Viewport(viewport::Event::ZoomTo(choice.zoom()))
             }),
             small_icon_button(
                 Icon::ZoomIn,
                 "Zoom in (Ctrl++)",
                 palette,
-                Some(Message::Zoom(ZoomEvent::In))
+                Some(Message::Viewport(viewport::Event::ZoomIn))
             ),
         ]
         .spacing(2)

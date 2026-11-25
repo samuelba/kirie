@@ -6,7 +6,7 @@ use iced::widget::canvas::{self, Action, Event, Frame, Geometry, Path, Stroke};
 use iced::{Color, Point, Rectangle, Renderer, Size, Theme, Vector};
 use kirie_annotate::{Draft, Shape, Tool};
 
-use super::{Editor, MARK_REACH, Message, Pointer, ZoomEvent, pixel};
+use super::{Editor, MARK_REACH, Message, Pointer, pixel, viewport};
 use crate::annotate::paint::{
     ImageSource, Marks, Painter, Part, color_of, draw_listed, draw_marquee, draw_picked,
 };
@@ -75,15 +75,15 @@ impl canvas::Program<Message> for Board<'_> {
                     ScrollDelta::Pixels { x, y } => (x, y),
                 };
                 if self.editor.annotator.modifiers.command() {
-                    publish(Message::Zoom(ZoomEvent::By {
+                    publish(Message::Viewport(viewport::Event::ZoomBy {
                         factor: 2f32.powf(y / LINE / WHEEL_STEPS),
                         anchor: at,
                         canvas,
                     }))
                 } else if self.editor.annotator.modifiers.shift() {
-                    publish(Message::Pan(Vector::new(y, x)))
+                    publish(Message::Viewport(viewport::Event::Pan(Vector::new(y, x))))
                 } else {
-                    publish(Message::Pan(Vector::new(x, y)))
+                    publish(Message::Viewport(viewport::Event::Pan(Vector::new(x, y))))
                 }
             }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Middle)) => {
@@ -97,7 +97,7 @@ impl canvas::Program<Message> for Board<'_> {
             Event::Mouse(mouse::Event::CursorMoved { .. }) if state.panning.is_some() => {
                 let at = cursor.position_from(bounds.position())?;
                 let from = state.panning.replace(at)?;
-                publish(Message::Pan(at - from))
+                publish(Message::Viewport(viewport::Event::Pan(at - from)))
             }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 publish(Message::Pointer(

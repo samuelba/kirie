@@ -20,13 +20,13 @@ use std::time::Duration;
 
 use ::image::RgbaImage;
 use iced::widget::image;
-use iced::{Event, Point, Size, Subscription, Task, Vector, event, keyboard, window};
+use iced::{Event, Point, Size, Subscription, Task, event, keyboard, window};
 use kirie_annotate::project::{self, Project};
 use kirie_annotate::{Document, Draft, History, Op, Rgba, Shape, Tool, Typesetter};
 use kirie_ui::{Palette, Scheme};
 
 use self::closing::{Answer, Closing, Then};
-use self::viewport::{Viewport, Zoom};
+use self::viewport::Viewport;
 use crate::annotate::annotator::{Annotator, Change, Effect};
 use crate::annotate::drawing::Drawing;
 use crate::annotate::picker;
@@ -106,8 +106,7 @@ pub enum Pointer {
 pub enum Message {
     /// A pointer event in image coordinates, with the current canvas pixels per image pixel.
     Pointer(Pointer, f32),
-    Pan(Vector),
-    Zoom(ZoomEvent),
+    Viewport(viewport::Event),
     Crop(crop::Event),
     /// The image point under the pointer, if it is over the canvas.
     Hover(Option<kurbo::Point>),
@@ -135,23 +134,6 @@ pub enum Message {
     Window(WindowEvent),
     /// The desktop switched between light and dark.
     SystemScheme(Scheme),
-}
-
-/// Zooming the canvas.
-#[derive(Debug, Clone, Copy)]
-pub enum ZoomEvent {
-    /// Zooms by `factor` around `anchor`, a point on a canvas of size `canvas`.
-    By {
-        factor: f32,
-        anchor: Point,
-        canvas: Size,
-    },
-    Fit,
-    Actual,
-    /// Zooms to the next level in, or out, around the middle of the canvas.
-    In,
-    Out,
-    To(Zoom),
 }
 
 /// Picking, copying and pasting marks.
@@ -526,8 +508,11 @@ impl Editor {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Pointer(pointer, scale) => return self.pointer(pointer, scale),
-            Message::Pan(by) => self.viewport = self.viewport.panned(by),
-            Message::Zoom(event) => self.zoom(event),
+            // Pans come with every pointer move, and need no content worked out.
+            Message::Viewport(viewport::Event::Pan(by)) => self.viewport = self.viewport.panned(by),
+            Message::Viewport(event) => {
+                self.viewport = self.viewport.update(event, self.content(), self.canvas);
+            }
             Message::Hover(at) => self.hover = at,
             Message::Canvas(size) => self.canvas = size,
             Message::Modifiers(modifiers) => self.annotator.modifiers = modifiers,
@@ -726,30 +711,6 @@ impl Editor {
                 Err(error) => Err(format!("{copied} here; other apps cannot ({error})")),
             }))
         })
-    }
-
-    fn zoom(&mut self, event: ZoomEvent) {
-        let content = self.content();
-        let middle = Point::new(self.canvas.width / 2.0, self.canvas.height / 2.0);
-        let scale = self.viewport.scale(content, self.canvas);
-        self.viewport = match event {
-            ZoomEvent::By {
-                factor,
-                anchor,
-                canvas,
-            } => self.viewport.zoomed(factor, anchor, content, canvas),
-            ZoomEvent::Fit | ZoomEvent::To(Zoom::Fit) => Viewport::fitted(),
-            ZoomEvent::Actual => Viewport::actual_size(),
-            ZoomEvent::In | ZoomEvent::Out => {
-                let level = viewport::step(scale, matches!(event, ZoomEvent::In));
-                self.viewport.zoomed_to(level, middle, content, self.canvas)
-            }
-            #[allow(clippy::cast_precision_loss)]
-            ZoomEvent::To(Zoom::Percent(percent)) => {
-                self.viewport
-                    .zoomed_to(percent as f32 / 100.0, middle, content, self.canvas)
-            }
-        };
     }
 
     /// Taking a screenshot from the editor, bringing its window to the front, and its keyboard.
@@ -1424,10 +1385,16 @@ fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
             Some(Message::File(FileEvent::SaveProject))
         }
         keyboard::Key::Character("s") if command => Some(Message::File(FileEvent::Save)),
-        keyboard::Key::Character("0") if command => Some(Message::Zoom(ZoomEvent::Fit)),
-        keyboard::Key::Character("1") if command => Some(Message::Zoom(ZoomEvent::Actual)),
-        keyboard::Key::Character("=" | "+") if command => Some(Message::Zoom(ZoomEvent::In)),
-        keyboard::Key::Character("-") if command => Some(Message::Zoom(ZoomEvent::Out)),
+        keyboard::Key::Character("0") if command => Some(Message::Viewport(viewport::Event::Fit)),
+        keyboard::Key::Character("1") if command => {
+            Some(Message::Viewport(viewport::Event::Actual))
+        }
+        keyboard::Key::Character("=" | "+") if command => {
+            Some(Message::Viewport(viewport::Event::ZoomIn))
+        }
+        keyboard::Key::Character("-") if command => {
+            Some(Message::Viewport(viewport::Event::ZoomOut))
+        }
         keyboard::Key::Character("c" | "C") if !command && modifiers.shift() => {
             Some(Message::Crop(crop::Event::Start))
         }
