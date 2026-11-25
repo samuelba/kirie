@@ -13,6 +13,7 @@ mod release_card;
 mod settings;
 mod view;
 mod viewport;
+mod window;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -21,7 +22,7 @@ use std::time::Duration;
 
 use ::image::RgbaImage;
 use iced::widget::image;
-use iced::{Event, Point, Size, Subscription, Task, event, keyboard, window};
+use iced::{Event, Point, Size, Subscription, Task, event, keyboard};
 use kirie_annotate::{Document, Draft, History, Op, Rgba, Shape, Tool, Typesetter};
 use kirie_ui::{Palette, Scheme};
 
@@ -78,7 +79,7 @@ pub enum Message {
     Release(release_card::Event),
     Opened(Result<Loaded, String>),
     ToastExpired(u64),
-    Window(WindowEvent),
+    Window(window::Event),
     /// The desktop switched between light and dark.
     SystemScheme(Scheme),
 }
@@ -117,23 +118,6 @@ pub enum OutsideEvent {
     ShowInFiles(PathBuf),
 }
 
-/// The window: taking a screenshot from it, bringing it to the front, and its keyboard.
-#[derive(Debug, Clone)]
-pub enum WindowEvent {
-    Ipc(crate::desktop::ipc::Request),
-    /// Hides the window and opens the overlay; the capture comes back over D-Bus.
-    Capture,
-    /// The window's size and state, taken just before it closes for a capture.
-    Hide(Placement),
-    /// Window `id`, placed so, is to be opened anew to come to the front.
-    Remap(window::Id, Placement),
-    CaptureEnded(Result<(), String>),
-    /// The window lost the keyboard.
-    Unfocused,
-    /// The window got the keyboard back, perhaps after the overlay ran in a process of its own.
-    Focused,
-}
-
 /// How far copied marks got to the clipboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Offer {
@@ -148,22 +132,6 @@ pub enum Pasted {
     Image(RgbaImage),
 }
 
-/// How big the window is, to open it again the same way.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Placement {
-    size: Size,
-    maximized: bool,
-}
-
-impl Default for Placement {
-    fn default() -> Self {
-        Self {
-            size: Size::new(1280.0, 840.0),
-            maximized: false,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 struct Toast {
     id: u64,
@@ -175,8 +143,8 @@ struct Toast {
 
 pub struct Editor {
     /// The window, unless it is closed while a screenshot is taken.
-    window: Option<window::Id>,
-    placement: Placement,
+    window: Option<iced::window::Id>,
+    placement: window::Placement,
     palette: Palette,
     image: Option<(RgbaImage, image::Handle)>,
     path: Option<PathBuf>,
@@ -235,8 +203,8 @@ impl Editor {
         let drawing = Drawing::load();
         let paint = drawing.paint_for(Some(Tool::Arrow), &swatches);
         let blank = drawing.styled(Document::new(1, 1, 1.0));
-        let placement = Placement::default();
-        let (id, opened) = window::open(settings(placement));
+        let placement = window::Placement::default();
+        let (id, opened) = iced::window::open(window::settings(placement));
         let mut editor = Self {
             window: Some(id),
             placement,
@@ -271,7 +239,7 @@ impl Editor {
         let opened = opened.then(move |id| {
             let raised = token
                 .clone()
-                .map_or_else(Task::none, |token| activate(id, token).discard());
+                .map_or_else(Task::none, |token| window::activate(id, token).discard());
             Task::batch([raised, files::take_drops(id)])
         });
         (editor, opened)
@@ -417,7 +385,7 @@ impl Editor {
         drafts
     }
 
-    pub fn title(&self, _: window::Id) -> String {
+    pub fn title(&self, _: iced::window::Id) -> String {
         match self.path.as_deref().and_then(Path::file_name) {
             Some(name) => format!("{} — Kirie", name.to_string_lossy()),
             None => "Kirie".to_owned(),
@@ -462,7 +430,7 @@ impl Editor {
             Message::Finish(event) => return self.finish(event),
             Message::Opened(Ok(loaded)) => return self.replace(loaded),
             Message::Opened(Err(error)) => return self.toast(Err(error)),
-            Message::Window(event) => return self.windowing(event),
+            Message::Window(event) => return self.window_event(event),
             Message::ToastExpired(id) => {
                 if self.toast.as_ref().is_some_and(|toast| toast.id == id) {
                     self.toast = None;
@@ -630,63 +598,6 @@ impl Editor {
                 Err(error) => Err(format!("{copied} here; other apps cannot ({error})")),
             }))
         })
-    }
-
-    /// Taking a screenshot from the editor, bringing its window to the front, and its keyboard.
-    fn windowing(&mut self, event: WindowEvent) -> Task<Message> {
-        match event {
-            WindowEvent::Ipc(crate::desktop::ipc::Request::Open(path, token)) => self
-                .raise(token)
-                .chain(Task::perform(files::load_async(path), Message::Opened)),
-            WindowEvent::Ipc(crate::desktop::ipc::Request::Present(token)) => self.raise(token),
-            WindowEvent::Ipc(crate::desktop::ipc::Request::About(token)) => {
-                self.about = true;
-                Task::batch([self.raise(token), self.check_on_about()])
-            }
-            WindowEvent::Ipc(crate::desktop::ipc::Request::Settings(token)) => {
-                let _ = self.edit_settings(settings::Event::Open);
-                self.raise(token)
-            }
-            WindowEvent::Ipc(crate::desktop::ipc::Request::Resume) if self.window.is_none() => {
-                self.raise(None)
-            }
-            WindowEvent::Capture => self.window.map_or_else(Task::none, |id| {
-                placement(id).map(|value| Message::Window(WindowEvent::Hide(value)))
-            }),
-            WindowEvent::Remap(id, placement) if self.window == Some(id) => {
-                self.placement = placement;
-                self.reopen(Some(id), None)
-            }
-            WindowEvent::Hide(placement) => {
-                let Some(id) = self.window.take() else {
-                    return Task::none();
-                };
-                self.placement = placement;
-                window::close(id).chain(Task::perform(capture(), |value| {
-                    Message::Window(WindowEvent::CaptureEnded(value))
-                }))
-            }
-            WindowEvent::CaptureEnded(Err(error)) => self.raise(None).chain(self.toast(Err(error))),
-            WindowEvent::Focused => {
-                self.reload_shared();
-                Task::none()
-            }
-            // Made anew before anything can be dragged from another window onto this one.
-            // Once per window: iced's clipboard makes a device of its own when a window opens.
-            WindowEvent::Unfocused => {
-                if self.drops.renewed_for != self.window
-                    && let Some(device) = &self.drops.device
-                {
-                    device.renew();
-                    self.drops.renewed_for = self.window;
-                }
-                Task::none()
-            }
-            // The overlay asks for the window back when it is done, through `Resume` or `Open`.
-            WindowEvent::Ipc(crate::desktop::ipc::Request::Resume)
-            | WindowEvent::Remap(..)
-            | WindowEvent::CaptureEnded(Ok(())) => Task::none(),
-        }
     }
 
     /// Closing the window, or putting the image away.
@@ -865,15 +776,15 @@ impl Editor {
         Subscription::batch([
             keys,
             releases,
-            event::listen_with(focus),
+            event::listen_with(window::focus),
             Subscription::run(crate::desktop::ipc::requests)
-                .map(|value| Message::Window(WindowEvent::Ipc(value))),
+                .map(|value| Message::Window(window::Event::Ipc(value))),
             Subscription::run(crate::desktop::appearance::changes).map(Message::SystemScheme),
-            window::close_requests().map(|_| Message::Finish(FinishEvent::CloseRequested)),
+            iced::window::close_requests().map(|_| Message::Finish(FinishEvent::CloseRequested)),
         ])
     }
 
-    pub fn theme(&self, _: window::Id) -> iced::Theme {
+    pub fn theme(&self, _: iced::window::Id) -> iced::Theme {
         match self.palette.scheme {
             Scheme::Dark => iced::Theme::Dark,
             Scheme::Light => iced::Theme::Light,
@@ -881,116 +792,8 @@ impl Editor {
     }
 }
 
-impl Editor {
-    /// Brings the window to the front. On Wayland a window cannot raise itself: it takes an
-    /// activation `token` from whatever the user clicked. Without one, the window is opened
-    /// anew, which most compositors put in front.
-    fn raise(&mut self, token: Option<String>) -> Task<Message> {
-        let remap = |id| {
-            placement(id).map(move |placement| Message::Window(WindowEvent::Remap(id, placement)))
-        };
-        match (self.window, token) {
-            (Some(id), Some(token)) => {
-                activate(id, token).then(move |done| if done { Task::none() } else { remap(id) })
-            }
-            (Some(id), None) => remap(id),
-            (None, token) => self.reopen(None, token),
-        }
-    }
-
-    /// Opens the window as it was placed, closing `old` first, and brings it to the front with
-    /// `token` if given.
-    fn reopen(&mut self, old: Option<window::Id>, token: Option<String>) -> Task<Message> {
-        let closed = old.map_or_else(Task::none, window::close);
-        let (id, opened) = window::open(settings(self.placement));
-        self.window = Some(id);
-        let opened = match token {
-            Some(token) => opened.then(move |id| activate(id, token.clone())).discard(),
-            None => opened.discard(),
-        };
-        closed.chain(opened)
-    }
-}
-
-/// Brings window `id` to the front with an activation `token`; true when the compositor was
-/// asked.
-fn activate(id: window::Id, token: String) -> Task<bool> {
-    window::run(id, move |window| {
-        crate::desktop::activation::activate(window, &token)
-    })
-}
-
-/// The size and state of window `id`.
-fn placement(id: window::Id) -> Task<Placement> {
-    window::is_maximized(id)
-        .then(move |maximized| window::size(id).map(move |size| Placement { size, maximized }))
-}
-
-fn settings(placement: Placement) -> window::Settings {
-    window::Settings {
-        size: placement.size,
-        maximized: placement.maximized,
-        min_size: Some(Size::new(760.0, 520.0)),
-        exit_on_close_request: false,
-        platform_specific: window::settings::PlatformSpecific {
-            application_id: crate::APP_ID.to_owned(),
-            ..window::settings::PlatformSpecific::default()
-        },
-        ..window::Settings::default()
-    }
-}
-
-/// Runs the overlay in its own process, after the window has had time to hide.
-async fn capture() -> Result<(), String> {
-    tokio::time::sleep(Duration::from_millis(350)).await;
-    let exe = crate::desktop::launch::exe().map_err(|error| error.to_string())?;
-    tokio::task::spawn_blocking(move || {
-        let mut child = std::process::Command::new(exe)
-            .args(["capture", "--edit"])
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|error| format!("cannot take a screenshot: {error}"))?;
-        let said = child.stderr.take().map(pass_on);
-        let status = child
-            .wait()
-            .map_err(|error| format!("cannot take a screenshot: {error}"))?;
-        if status.success() {
-            return Ok(());
-        }
-        Err(said
-            .and_then(|said| last_error(&said))
-            .unwrap_or_else(|| "the screenshot failed".to_owned()))
-    })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
-/// Passes what `stderr` says on to the editor's own, line by line, as they come.
-fn pass_on(stderr: impl std::io::Read + Send + 'static) -> std::sync::mpsc::Receiver<String> {
-    use std::io::BufRead as _;
-    let (sender, said) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        for line in std::io::BufReader::new(stderr)
-            .lines()
-            .map_while(Result::ok)
-        {
-            eprintln!("{line}");
-            let _ = sender.send(line);
-        }
-    });
-    said
-}
-
-/// The error the capture ended with. Programs it started may keep its stderr open, so this
-/// stops once it has been quiet for a moment rather than at its end.
-fn last_error(said: &std::sync::mpsc::Receiver<String>) -> Option<String> {
-    std::iter::from_fn(|| said.recv_timeout(Duration::from_millis(200)).ok())
-        .filter_map(|line| line.strip_prefix("Error: ").map(str::to_owned))
-        .last()
-}
-
 #[allow(clippy::needless_pass_by_value)]
-fn typing_key(event: Event, _: event::Status, _: window::Id) -> Option<Message> {
+fn typing_key(event: Event, _: event::Status, _: iced::window::Id) -> Option<Message> {
     match event {
         Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
             Some(Message::Modifiers(modifiers))
@@ -1012,16 +815,6 @@ fn quit_key(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<Messa
         .then_some(Message::Finish(FinishEvent::CloseRequested))
 }
 
-/// The window losing the keyboard, when the data device is made anew to take drops.
-#[allow(clippy::needless_pass_by_value)]
-fn focus(event: Event, _: event::Status, _: window::Id) -> Option<Message> {
-    match event {
-        Event::Window(window::Event::Unfocused) => Some(Message::Window(WindowEvent::Unfocused)),
-        Event::Window(window::Event::Focused) => Some(Message::Window(WindowEvent::Focused)),
-        _ => None,
-    }
-}
-
 #[allow(clippy::cast_possible_truncation)]
 fn to_point(at: kurbo::Point) -> Point {
     Point::new(at.x as f32, at.y as f32)
@@ -1034,7 +827,7 @@ fn on_screen(at: kurbo::Point, scale: f32) -> Point {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn key(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
+fn key(event: Event, status: event::Status, _: iced::window::Id) -> Option<Message> {
     use keyboard::key::Named;
     if let Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) = event {
         return Some(Message::Modifiers(modifiers));
@@ -1159,21 +952,6 @@ fn annotate<T>(change: impl Fn(T) -> Change + Clone) -> impl Fn(T) -> Message + 
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_failed_capture_tells_its_error() {
-        let said = pass_on(std::io::Cursor::new(
-            "MESA: warning\nError: the clipboard cannot be reached here\n",
-        ));
-        assert_eq!(
-            last_error(&said).as_deref(),
-            Some("the clipboard cannot be reached here")
-        );
-        assert_eq!(
-            last_error(&pass_on(std::io::Cursor::new("MESA: warning\n"))),
-            None
-        );
-    }
-
     fn press(key: &str, modifiers: keyboard::Modifiers) -> Event {
         Event::Keyboard(keyboard::Event::KeyPressed {
             key: keyboard::Key::Character(key.into()),
@@ -1190,7 +968,7 @@ mod tests {
 
     #[test]
     fn ctrl_q_closes_the_editor_even_while_typing() {
-        let id = window::Id::unique();
+        let id = iced::window::Id::unique();
         let ctrl_q = || press("q", keyboard::Modifiers::CTRL);
         for listen in [key, typing_key, crop::key] {
             assert!(matches!(
@@ -1214,7 +992,7 @@ mod tests {
 
     #[test]
     fn every_tool_key_picks_its_tool_and_shift_c_crops() {
-        let id = window::Id::unique();
+        let id = iced::window::Id::unique();
         for tool in Tool::ALL {
             let letter = tool.key().to_string();
             assert!(
@@ -1235,20 +1013,6 @@ mod tests {
                 Some(Message::Crop(crop::Event::Start))
             ));
         }
-    }
-
-    #[test]
-    fn getting_the_keyboard_back_reads_what_the_overlay_saved() {
-        let id = window::Id::unique();
-        let focused = focus(
-            Event::Window(window::Event::Focused),
-            event::Status::Ignored,
-            id,
-        );
-        assert!(matches!(
-            focused,
-            Some(Message::Window(WindowEvent::Focused))
-        ));
     }
 
     #[test]

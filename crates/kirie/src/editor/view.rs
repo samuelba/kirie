@@ -13,7 +13,7 @@ use kirie_ui::{Palette, Scheme, space};
 use super::annotate;
 use super::canvas::{Backdrop, Board};
 use super::viewport::{self, Zoom};
-use super::{Editor, FinishEvent, Message, OutsideEvent, WindowEvent};
+use super::{Editor, FinishEvent, Message, OutsideEvent, window};
 use super::{crop, files};
 use crate::annotate::annotator::Change;
 use crate::annotate::controls;
@@ -98,7 +98,7 @@ impl Editor {
             "Take a screenshot",
             palette,
             false,
-            Some(Message::Window(WindowEvent::Capture)),
+            Some(Message::Window(window::Event::Capture)),
         );
         let open = icon_button(
             Icon::Open,
@@ -386,7 +386,7 @@ impl Editor {
                     Icon::Capture,
                     "Take a screenshot",
                     palette,
-                    Message::Window(WindowEvent::Capture)
+                    Message::Window(window::Event::Capture)
                 ),
                 icon_button(
                     Icon::Open,
